@@ -1,0 +1,13 @@
+services:
+  rescuarr:
+    build: .
+    container_name: rescuarr
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "127.0.0.1:8787:8787"
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp

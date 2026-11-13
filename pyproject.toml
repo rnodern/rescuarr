@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rescuarr"
+version = "0.0.1"
+description = "A self-hosted recovery manager for Sonarr, Radarr, and SABnzbd"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.110,<1",
+  "uvicorn>=0.27,<1",
+  "httpx>=0.27,<1",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8,<10", "ruff>=0.7"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
