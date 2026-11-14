@@ -24,11 +24,12 @@ type Authorize func(*http.Request) Session
 
 type Options struct {
 	// BasePath is a previously validated, canonical path or the empty string.
-	BasePath  string
-	Read      app.ConsoleReader
-	Commands  app.ConsoleCommands
-	Authorize Authorize
-	Clock     app.Clock
+	BasePath    string
+	Read        app.ConsoleReader
+	Commands    app.ConsoleCommands
+	Connections ConnectionService
+	Authorize   Authorize
+	Clock       app.Clock
 }
 
 type console struct {
@@ -43,6 +44,7 @@ var views = template.Must(template.New("").Funcs(template.FuncMap{
 	"state": stateLabel, "mode": modeLabel, "reason": reasonLabel,
 	"target": targetLabel, "effect": effectLabel, "verification": verificationLabel,
 	"action": actionLabel, "intent": intentLabel, "when": formatTime,
+	"connectionStatus": connectionStatus, "connectionProduct": connectionProduct, "connectionCoverage": connectionCoverage,
 }).ParseFS(files, "templates/*.tmpl"))
 
 func New(options Options) http.Handler {
@@ -60,6 +62,11 @@ func New(options Options) http.Handler {
 	mux.HandleFunc("POST "+base+"/cases/{caseID}/actions", c.approve)
 	mux.HandleFunc("GET "+base+"/actions/{intentID}", c.intent)
 	mux.HandleFunc("GET "+base+"/fragments/status", c.statusFragment)
+	if c.Connections != nil {
+		mux.HandleFunc("GET "+base+"/connections", c.connections)
+		mux.HandleFunc("POST "+base+"/connections", c.addConnection)
+		mux.HandleFunc("POST "+base+"/connections/{id}/check", c.checkConnection)
+	}
 	assets, err := fs.Sub(files, "assets")
 	if err != nil {
 		panic(err)
@@ -94,11 +101,13 @@ func currentSession(r *http.Request) Session {
 type page struct {
 	Base, Title, Active, CSRF string
 	Status                    app.Overview
+	HasConnections            bool
 	Body                      any
 }
 
 func (c console) render(w http.ResponseWriter, r *http.Request, code int, name string, p page) {
 	p.Base = c.BasePath
+	p.HasConnections = c.Connections != nil
 	session, _ := r.Context().Value(sessionKey{}).(Session)
 	p.CSRF = session.CSRF
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")

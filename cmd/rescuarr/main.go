@@ -17,6 +17,7 @@ import (
 	"github.com/rnodern/rescuarr/internal/access"
 	"github.com/rnodern/rescuarr/internal/app"
 	"github.com/rnodern/rescuarr/internal/config"
+	"github.com/rnodern/rescuarr/internal/observeservice"
 	"github.com/rnodern/rescuarr/internal/store"
 )
 
@@ -133,10 +134,10 @@ func serve(ctx context.Context, cfg config.Config, local *store.Store, auth *acc
 		return fmt.Errorf("open listener: %w", err)
 	}
 	server := &http.Server{
-		Handler:           browserHandler(cfg, auth, local),
+		Handler:           browserHandler(cfg, auth, local, observeservice.New(local, nil, nil)),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
-		WriteTimeout:      30 * time.Second,
+		WriteTimeout:      55 * time.Second, // Allows the bounded upstream queue scan to finish.
 		IdleTimeout:       time.Minute,
 		MaxHeaderBytes:    16 << 10,
 	}
