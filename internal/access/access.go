@@ -28,6 +28,7 @@ const (
 	tokenLifetime = 15 * time.Minute
 	sessionLimit  = 24 * time.Hour
 	idleLimit     = 30 * time.Minute
+	rememberLimit = 7 * 24 * time.Hour
 	passwordKind  = "argon2id-64m-3-2"
 )
 

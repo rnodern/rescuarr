@@ -34,6 +34,12 @@
           <label for="owner-password">Password</label>
           <input id="owner-password" name="password" type="password" autocomplete="{{if .Setup}}new-password{{else}}current-password{{end}}" maxlength="256" required>
         </div>
+        {{if not .Setup}}
+        <label class="access-remember">
+          <input type="checkbox" name="remember" value="on"{{if .Remember}} checked{{end}}>
+          Remember me on this browser
+        </label>
+        {{end}}
         <button class="access-submit" type="submit">{{.Title}}</button>
       </form>
     </section>

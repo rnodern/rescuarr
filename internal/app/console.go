@@ -123,21 +123,22 @@ func (c *console) showLogin(w http.ResponseWriter, r *http.Request) {
 
 func (c *console) renderAccess(w http.ResponseWriter, r *http.Request, setup bool, status int, message string) {
 	data := struct {
-		Base   string
-		Title  string
-		Action string
-		CSRF   string
-		Error  string
-		Setup  bool
+		Base     string
+		Title    string
+		Action   string
+		CSRF     string
+		Error    string
+		Setup    bool
+		Remember bool
 	}{
 		Base: c.cfg.BasePath, Title: "Sign in", Action: c.cfg.BasePath + "/login",
-		CSRF: access.BrowserToken(), Error: message, Setup: setup,
+		CSRF: access.BrowserToken(), Error: message, Setup: setup, Remember: r.PostForm.Get("remember") == "on",
 	}
 	if setup {
 		data.Title = "Set owner password"
 		data.Action = c.cfg.BasePath + "/setup"
 	}
-	c.setCookie(w, r, "rescuarr_form", data.CSRF, 900)
+	c.setCookie(w, r, http.Cookie{Name: "rescuarr_form", Value: data.CSRF, MaxAge: 900})
 	w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'self'; img-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
@@ -152,7 +153,7 @@ func (c *console) submitSetup(w http.ResponseWriter, r *http.Request) {
 	if c.authError(w, r, true, err) {
 		return
 	}
-	c.setCookie(w, r, "rescuarr_form", "", -1)
+	c.setCookie(w, r, http.Cookie{Name: "rescuarr_form", MaxAge: -1})
 	c.redirect(w, r, "/login")
 }
 
@@ -160,12 +161,13 @@ func (c *console) submitLogin(w http.ResponseWriter, r *http.Request) {
 	if !c.validatePost(w, r, readCookie(r, "rescuarr_form")) {
 		return
 	}
-	session, err := c.auth.Login(r.Context(), r.PostForm.Get("password"), readCookie(r, "rescuarr_owner"))
+	session, err := c.auth.Login(r.Context(), r.PostForm.Get("password"), readCookie(r, "rescuarr_owner"),
+		r.PostForm.Get("remember") == "on")
 	if c.authError(w, r, false, err) {
 		return
 	}
-	c.setCookie(w, r, "rescuarr_form", "", -1)
-	c.setCookie(w, r, "rescuarr_owner", session.Token, 86400)
+	c.setCookie(w, r, http.Cookie{Name: "rescuarr_form", MaxAge: -1})
+	c.setCookie(w, r, http.Cookie{Name: "rescuarr_owner", Value: session.Token, Expires: session.ExpiresAt})
 	c.redirect(w, r, "/")
 }
 
@@ -187,7 +189,7 @@ func (c *console) logout(w http.ResponseWriter, r *http.Request) {
 		unavailable(w)
 		return
 	}
-	c.setCookie(w, r, "rescuarr_owner", "", -1)
+	c.setCookie(w, r, http.Cookie{Name: "rescuarr_owner", MaxAge: -1})
 	c.redirect(w, r, "/login")
 }
 
@@ -254,12 +256,13 @@ func (c *console) origin(r *http.Request) (string, bool) {
 	return scheme + "://" + host, err == nil && port == configuredPort && config.LoopbackHost(name)
 }
 
-func (c *console) setCookie(w http.ResponseWriter, r *http.Request, name, value string, maxAge int) {
+func (c *console) setCookie(w http.ResponseWriter, r *http.Request, cookie http.Cookie) {
 	origin, _ := c.origin(r)
-	http.SetCookie(w, &http.Cookie{
-		Name: name, Value: value, Path: c.cfg.BasePath + "/", MaxAge: maxAge,
-		HttpOnly: true, Secure: strings.HasPrefix(origin, "https://"), SameSite: http.SameSiteStrictMode,
-	})
+	cookie.Path = c.cfg.BasePath + "/"
+	cookie.HttpOnly = true
+	cookie.Secure = strings.HasPrefix(origin, "https://")
+	cookie.SameSite = http.SameSiteStrictMode
+	http.SetCookie(w, &cookie)
 }
 
 func readCookie(r *http.Request, name string) string {
