@@ -2,6 +2,7 @@
 package config
 
 import (
+	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
@@ -19,16 +20,18 @@ import (
 const DefaultListen = "127.0.0.1:8787"
 
 type Config struct {
-	Listen           string
-	DataDir          string
-	BasePath         string
-	PublicURL        *url.URL
-	TrustedProxies   []netip.Prefix
-	Input            string
-	Output           string
-	ProwlDelivery    bool
-	SonarrConnection string
-	Sources          map[string]string
+	Listen               string
+	DataDir              string
+	BasePath             string
+	PublicURL            *url.URL
+	TrustedProxies       []netip.Prefix
+	Input                string
+	Output               string
+	ProwlDelivery        bool
+	SonarrConnection     string
+	ManualPackConnection string
+	ManualPackProfile    [32]byte
+	Sources              map[string]string
 }
 
 // Parse applies explicit flags over nonempty environment values and platform defaults.
@@ -74,6 +77,20 @@ func Parse(args []string, getenv func(string) string) (Config, error) {
 		return Config{}, errors.New("Prowl delivery must be true or false")
 	}
 	cfg.ProwlDelivery = *prowl == "true"
+	cfg.ManualPackConnection = getenv("RESCUARR_MANUAL_EMPTY_PACK_CONNECTION")
+	profile := getenv("RESCUARR_MANUAL_EMPTY_PACK_PROFILE")
+	sab := getenv("RESCUARR_MANUAL_EMPTY_PACK_SAB_VERSION")
+	if cfg.ManualPackConnection != "" || profile != "" || sab != "" {
+		fingerprint, err := hex.DecodeString(profile)
+		if !validManualConnectionID(cfg.ManualPackConnection) ||
+			err != nil || len(fingerprint) != len(cfg.ManualPackProfile) || sab != "5.1.3" {
+			return Config{}, errors.New("manual empty-pack recovery requires a connection ID, profile SHA-256 and verified SABnzbd 5.1.3")
+		}
+		copy(cfg.ManualPackProfile[:], fingerprint)
+		if cfg.ManualPackProfile == ([32]byte{}) {
+			return Config{}, errors.New("manual empty-pack profile SHA-256 is empty")
+		}
+	}
 
 	if cfg.DataDir == "" && cfg.Sources["RESCUARR_DATA_DIR"] == "default" {
 		var err error
@@ -129,6 +146,18 @@ func Parse(args []string, getenv func(string) string) (Config, error) {
 		}
 	}
 	return cfg, nil
+}
+
+func validManualConnectionID(value string) bool {
+	if len(value) == 0 || len(value) > 128 {
+		return false
+	}
+	for _, ch := range value {
+		if !strings.ContainsRune("0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_-", ch) {
+			return false
+		}
+	}
+	return true
 }
 
 func validateBasePath(path string) error {

@@ -51,7 +51,9 @@ The Go probe performs preflight, sends the one scoped removal, checks its readba
 
 The [Windows upstream workflow](../../.github/workflows/windows-upstream-lab.yml) runs the same empty-pack assertions with the native Windows x64 portable builds of Sonarr 5.0.0.2941 develop and SABnzbd 5.1.3. It launches both applications with fresh data directories on a disposable GitHub-hosted Windows Server 2025 runner. Sonarr and SABnzbd use separate loopback addresses and dedicated ports. The synthetic indexer, media and NNTP server stay on that runner. The workflow briefly directs Sonarr's metadata hostname to the synthetic fixture inside the runner and removes its generated trust certificate afterwards.
 
-The checkout-specific `sonarr-windows-v5-adapter-pack-evidence` artefact records the native queue and library results. A passing run contributes evidence for the native Windows adapter on a local drive. Windows service accounts, network library paths and the packaged Rescuarr background worker require additional evidence.
+The checkout-specific `sonarr-windows-v5-adapter-pack-evidence` artefact records the native queue and library results. A passing run contributes evidence for the native Windows adapter on a local drive. Windows service accounts and network library paths require additional evidence.
+
+The same runner accepts `--rescuarr` with the executable extracted from a native candidate archive for the checked-out SHA. It uses authenticated Manual Review forms in two fresh Rescuarr installations against the isolated Arr test queue. It exercises Decline and confirms the recorded decision has no upstream effect, checks that the pending review survives reload and restart, then approves the single-episode replacement. The artefact records the packaged version and looks up the native search command, queue and blocklist outcomes, preserved SABnzbd job, and verified import. This scenario covers Manual mode on the disposable Windows setup.
 
 ### Terminal replacement
 

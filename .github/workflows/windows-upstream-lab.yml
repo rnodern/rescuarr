@@ -7,6 +7,11 @@ on:
       - test/lab/**
       - internal/arradapter/**
       - internal/observe/**
+      - internal/observeservice/**
+      - internal/recoveryservice/**
+      - internal/webconsole/**
+      - internal/store/**
+      - cmd/rescuarr/**
       - .github/workflows/windows-upstream-lab.yml
 
 permissions:
@@ -19,7 +24,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        driver: [adapter, language]
+        driver: [adapter, manual, language]
     defaults:
       run:
         shell: pwsh
@@ -61,6 +66,13 @@ jobs:
         env:
           CGO_ENABLED: '0'
         run: go build -trimpath -o "$env:RUNNER_TEMP/rescuarr-windows-lab/go-pack-probe.exe" ./test/lab/go-pack-probe
+      - name: Build and verify the portable Rescuarr package
+        if: matrix.driver == 'manual'
+        run: |
+          $dir = Join-Path $env:RUNNER_TEMP 'rescuarr-windows-lab'
+          python -B scripts/packaging/native.py --os windows --arch amd64 --version candidate --output "$dir/package"
+          if ($LASTEXITCODE -ne 0) { throw 'Could not build the portable Rescuarr package.' }
+          Expand-Archive -LiteralPath "$dir/package/rescuarr-candidate-windows-amd64.zip" -DestinationPath "$dir/installed"
       - name: Seed the local synthetic indexer
         shell: bash
         run: |
@@ -102,13 +114,16 @@ jobs:
             Clear-DnsClientCache
             Write-Host 'Launching isolated Windows recovery scenario'
             $driverArgs = @(
-              if ($env:LAB_DRIVER -eq 'language') { '--language-pack' }
-              else { '--adapter'; "$dir/go-pack-probe.exe" }
+              switch ($env:LAB_DRIVER) {
+                'language' { '--language-pack' }
+                'manual' { '--rescuarr'; "$dir/installed/rescuarr.exe" }
+                'adapter' { '--adapter'; "$dir/go-pack-probe.exe" }
+              }
             )
             python -B test/lab/windows_empty_pack.py --sonarr $sonarr[0].FullName --sab $sab[0].FullName `
               @driverArgs --media "$dir/media/synthetic.mkv" `
               --certificate "$dir/tls/source.pem" --key "$dir/tls/source.key" `
-              --report "$env:RUNNER_TEMP/rescuarr-windows-pack.json"
+              --report "$env:RUNNER_TEMP/rescuarr-windows-empty-pack.json"
             if ($LASTEXITCODE -ne 0) { throw 'Windows upstream lab failed. See the sanitised evidence.' }
           } finally {
             [IO.File]::WriteAllBytes($hosts, $originalHosts)
@@ -120,5 +135,5 @@ jobs:
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: sonarr-windows-v5-${{ matrix.driver }}-pack-evidence
-          path: ${{ runner.temp }}/rescuarr-windows-pack.json
+          path: ${{ runner.temp }}/rescuarr-windows-empty-pack.json
           if-no-files-found: warn

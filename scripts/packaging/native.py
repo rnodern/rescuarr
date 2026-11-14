@@ -102,6 +102,7 @@ def build(args):
         package = scratch / "package"
         package.mkdir()
         binary = package / ("rescuarr.exe" if args.os == "windows" else "rescuarr")
+        print(f"Building native {args.os}/{args.arch} executable", flush=True)
         subprocess.run(
             ["go", "build", "-mod=readonly", "-trimpath", "-buildvcs=false",
              "-ldflags", f"-s -w -X main.version={args.version} -X main.commit={revision}",
@@ -127,6 +128,7 @@ def build(args):
         installed = extracted / binary.name
         if checksum(installed) != checksum(binary):
             raise RuntimeError("Archived executable differs from the build output")
+        print(f"Starting smoke tests on the extracted {args.os}/{args.arch} executable", flush=True)
         smoke(installed, scratch, args.version, revision)
         sbom(output / "sbom.cdx.json", installed, args.version, revision)
         write_json(output / "build.json", {
@@ -134,7 +136,7 @@ def build(args):
             "go": command("go", "version"), "archive": archive.name,
             "archive_sha256": checksum(archive), "binary_sha256": checksum(installed),
             "runtime": {"runner": os.environ.get("RUNNER_NAME", platform.platform()),
-                        "checks": ["version", "health", "readiness", "setup page", "restart", "backup", "restore", "owner setup and sign-in", "case and connection pages", "session logout"]},
+                        "checks": ["version", "health", "readiness", "setup page", "restart", "backup", "restore", "owner setup and sign-in", "case and connection pages", "connection key save", "session logout"]},
             "signing": "external hook completed" if args.sign_hook else "unsigned",
             "notarisation": (
                 "external hook completed" if args.notarise_hook else

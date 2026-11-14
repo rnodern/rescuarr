@@ -18,13 +18,7 @@ func makeDataDirectory(path string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
-	user, err := windows.GetCurrentProcessToken().GetTokenUser()
-	if err != nil {
-		return err
-	}
-	// An elevated token can default to an Administrators-owned directory.
-	// Install the current user's ownership and the private DACL at creation.
-	descriptor, err := windows.SecurityDescriptorFromString("O:" + user.User.Sid.String() + ownerDACL(user.User.Sid, true))
+	attributes, err := ownerAttributes(true)
 	if err != nil {
 		return err
 	}
@@ -32,14 +26,28 @@ func makeDataDirectory(path string) error {
 	if err != nil {
 		return err
 	}
-	attributes := windows.SecurityAttributes{SecurityDescriptor: descriptor}
-	attributes.Length = uint32(unsafe.Sizeof(attributes))
-	err = windows.CreateDirectory(name, &attributes)
+	err = windows.CreateDirectory(name, attributes)
 	if errors.Is(err, os.ErrExist) {
 		// A simultaneous startup may have created it. secureDirectory checks ownership.
 		return nil
 	}
 	return err
+}
+
+func ownerAttributes(directory bool) (*windows.SecurityAttributes, error) {
+	user, err := windows.GetCurrentProcessToken().GetTokenUser()
+	if err != nil {
+		return nil, err
+	}
+	// An elevated token can default to Administrators ownership. Explicitly
+	// assign the current user and a private DACL when creating private state.
+	descriptor, err := windows.SecurityDescriptorFromString("O:" + user.User.Sid.String() + ownerDACL(user.User.Sid, directory))
+	if err != nil {
+		return nil, err
+	}
+	attributes := &windows.SecurityAttributes{SecurityDescriptor: descriptor}
+	attributes.Length = uint32(unsafe.Sizeof(*attributes))
+	return attributes, nil
 }
 
 func secureDirectory(path string) error {
@@ -104,6 +112,23 @@ func lockFile(f *os.File) error {
 
 func checkSecretDirectory(path string) error {
 	return secureDirectory(path)
+}
+
+func createSecretFile(path string) (*os.File, error) {
+	name, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		return nil, err
+	}
+	attributes, err := ownerAttributes(false)
+	if err != nil {
+		return nil, err
+	}
+	handle, err := windows.CreateFile(name, windows.GENERIC_WRITE, windows.FILE_SHARE_READ,
+		attributes, windows.CREATE_NEW, windows.FILE_ATTRIBUTE_NORMAL, 0)
+	if err != nil {
+		return nil, err
+	}
+	return os.NewFile(uintptr(handle), path), nil
 }
 
 func checkSecretFile(path string, _ os.FileInfo) bool {

@@ -29,7 +29,7 @@ const (
 	packClientResponse = `{
 		"id":1,"enable":true,"name":"Rescuarr Fixture SABnzbd","implementation":"Sabnzbd","protocol":"usenet",
 		"removeCompletedDownloads":false,"removeFailedDownloads":false,
-		"fields":[{"name":"apiKey","value":"private-sab-key"},{"name":"host","value":"private.sab.invalid"}]
+		"fields":[{"name":"apiKey","value":"private-sab-key"},{"name":"host","value":"private.sab.invalid"},{"name":"urlBase"}]
 	}`
 )
 
@@ -99,6 +99,9 @@ func TestProbeEmptyPackProfilePinsObservedSettings(t *testing.T) {
 		{"retention drift", map[string]string{packClientsRoute: "[" + strings.Replace(packClientResponse, `"removeFailedDownloads":false`, `"removeFailedDownloads":true`, 1) + "]"}, true},
 		{"completed handling drift", map[string]string{packSettingsRoute: strings.Replace(packSettingsResponse, `"enableCompletedDownloadHandling":true`, `"enableCompletedDownloadHandling":false`, 1)}, true},
 		{"client label drift", map[string]string{packClientsRoute: "[" + strings.Replace(packClientResponse, "Rescuarr Fixture SABnzbd", "Renamed SABnzbd", 1) + "]"}, true},
+		{"client endpoint drift", map[string]string{packClientsRoute: "[" + strings.Replace(packClientResponse, "private.sab.invalid", "another.sab.invalid", 1) + "]"}, true},
+		{"unset url base", map[string]string{packClientsRoute: "[" + strings.Replace(packClientResponse, `"name":"urlBase"`, `"name":"urlBase","value":null`, 1) + "]"}, false},
+		{"configured url base", map[string]string{packClientsRoute: "[" + strings.Replace(packClientResponse, `"name":"urlBase"`, `"name":"urlBase","value":"/sab"`, 1) + "]"}, true},
 		{"package drift", map[string]string{packStatusRoute: strings.Replace(packStatusResponse, "ls208", "ls209", 1)}, true},
 		{"mapping drift", map[string]string{packMappingRoute: `[{"id":1,"host":"private.host","localPath":"/private/from","remotePath":"/private/to"}]`}, true},
 	} {
@@ -150,7 +153,7 @@ func TestProbeEmptyPackProfileKeepsTransportErrorPrivate(t *testing.T) {
 		func(*http.Request) (*http.Response, error) {
 			return nil, errors.New("private endpoint, key and provider details")
 		})
-	if got != (EmptyPackProfile{}) || err != ErrReadback {
+	if got != (EmptyPackProfile{}) || !errors.Is(err, ErrReadback) || strings.Contains(err.Error(), "private") {
 		t.Fatalf("transport error escaped redaction: %v", err)
 	}
 }

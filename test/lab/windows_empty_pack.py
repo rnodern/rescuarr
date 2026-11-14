@@ -19,6 +19,7 @@ import empty_pack
 import language_pack
 import scenarios
 from empty_pack import empty_pack_replacement, run_go_adapter
+from manual_browser import PackagedManualLab
 from probe import SAB_VERSION, SONARR_V5_VERSION, get_json
 from source import SEED, serve
 
@@ -27,6 +28,7 @@ SAB = "http://127.1.1.1:18080"
 SOURCE = "http://127.0.0.1:8081"
 CASE = "sonarr/windows-v5-adapter-pack"
 LANGUAGE_CASE = "sonarr/windows-v5-language-pack"
+MANUAL_CASE = "sonarr/windows-v5-manual-pack"
 
 
 def stage(result, name):
@@ -34,9 +36,9 @@ def stage(result, name):
     print("Windows Sonarr lab: " + name, flush=True)
 
 
-def start(stack, command, cwd):
+def start(stack, command, cwd, env=None):
     proc = subprocess.Popen(command, cwd=cwd, stdin=subprocess.DEVNULL,
-                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
     stack.callback(stop, proc)
     return proc
 
@@ -69,10 +71,10 @@ def sonarr_config(data, key):
     ET.ElementTree(root).write(data / "config.xml", encoding="utf-8")
 
 
-def exercise(args, result):
+def exercise(args, result, source_sha):
     scenarios.verify(os.name == "nt" and os.environ.get("GITHUB_ACTIONS") == "true", "requiresDisposableWindowsRunner")
     result["binaries"] = {}
-    for name in ("sonarr", "sab", "adapter"):
+    for name in ("sonarr", "sab", "adapter" if args.adapter else "rescuarr"):
         executable = getattr(args, name)
         if executable is None:
             continue
@@ -137,8 +139,13 @@ def exercise(args, result):
         if args.language_pack:
             language_pack.language_pack_replacement(arr, episodes[0], episodes[1], result)
         else:
-            adapter = partial(run_go_adapter, executable=args.adapter)
-            empty_pack_replacement(arr, episodes[0], episodes[1], result, adapter=adapter)
+            adapter = partial(run_go_adapter, executable=args.adapter) if args.adapter else None
+            manual_review = None
+            if args.rescuarr:
+                manual = PackagedManualLab(args.rescuarr, root, stack, start, require_ready, stop,
+                                           partial(stage, result), SOURCE, source_sha)
+                manual_review = partial(manual.run, arr)
+            empty_pack_replacement(arr, episodes[0], episodes[1], result, adapter=adapter, manual_review=manual_review)
         result["fixtureMetadata"] = get_json(SOURCE, "/lab/metadata")
         stage(result, "cleanup")
     result.update(status="observed", stage="complete", qualification="awaitingIndependentReview")
@@ -154,18 +161,21 @@ def main():
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--adapter", type=Path)
     mode.add_argument("--language-pack", action="store_true")
+    mode.add_argument("--rescuarr", type=Path)
     args = parser.parse_args()
     for attr, value in vars(args).items():
         if isinstance(value, Path):
             setattr(args, attr, value.resolve())
 
     result = {"status": "failed", "evidenceClass": "labObservation", "protocol": "usenet", "stage": "startup"}
-    report = {"sourceSHA": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
+    source_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+    scenario = LANGUAGE_CASE if args.language_pack else MANUAL_CASE if args.rescuarr else CASE
+    report = {"sourceSHA": source_sha,
               "measuredAt": datetime.now(timezone.utc).isoformat(), "fixtureSeed": SEED,
               "platform": {"system": platform.system(), "release": platform.release(), "arch": platform.machine()},
-              "scenarios": {LANGUAGE_CASE if args.language_pack else CASE: result}}
+              "scenarios": {scenario: result}}
     try:
-        exercise(args, result)
+        exercise(args, result, source_sha)
     except scenarios.LabFailure as failure:
         result["reason"] = str(failure)
     except (OSError, RuntimeError, ValueError, KeyError, TypeError) as failure:

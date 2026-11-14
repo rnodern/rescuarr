@@ -101,3 +101,28 @@ for (const form of document.querySelectorAll("form[data-approval]")) {
     window.addEventListener("pageshow", () => { button.disabled = false; });
   }
 }
+
+if (document.querySelector("[data-manual-processing]")) {
+  let checking = false;
+  const checkReview = async () => {
+    if (checking || document.hidden) return;
+    checking = true;
+    try {
+      const response = await fetch(window.location.href, { cache: "no-store", credentials: "same-origin" });
+      if (response.redirected && response.ok) {
+        window.location.reload();
+      } else if (response.ok) {
+        const page = new DOMParser().parseFromString(await response.text(), "text/html");
+        if (page.querySelector("[data-manual-review]") && !page.querySelector("[data-manual-processing]")) {
+          window.location.reload();
+        }
+      }
+    } catch {
+      // The last rendered review stays visible while the service is unavailable.
+    } finally {
+      checking = false;
+    }
+  };
+  window.setInterval(checkReview, 2500);
+  document.addEventListener("visibilitychange", checkReview);
+}

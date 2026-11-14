@@ -66,11 +66,11 @@ func checkEmptyPackProfile(ctx context.Context, local *store.Store, selected str
 		if errors.Is(err, arradapter.ErrQualification) {
 			return errors.New("Sonarr's current version differs from the tested build")
 		}
-		return errors.New("could not confirm the selected Sonarr build and one enabled SABnzbd client")
+		return fmt.Errorf("could not confirm the selected Sonarr build and one enabled SABnzbd client: %w", err)
 	}
 	reason := "Sonarr matches the lab's platform and download-handling settings. The installed package, SABnzbd version and storage setup still need verification."
 	switch {
-	case !((profile.OSFamily == "linux" && profile.Docker) || (profile.OSFamily == "windows" && !profile.Docker)):
+	case !manualPackPlatform(profile):
 		reason = "The lab tested Sonarr in a Linux container and as a native Windows app. This Sonarr reports a different deployment."
 	case profile.Branch != "develop":
 		reason = "This Sonarr branch differs from the one tested in the lab."
@@ -79,7 +79,7 @@ func checkEmptyPackProfile(ctx context.Context, local *store.Store, selected str
 	case profile.RemoteMappingCount != 0:
 		reason = "Sonarr has remote path mappings. The lab used one shared path."
 	}
-	_, err = fmt.Fprintf(out, "Sonarr %s (%s, %s) · %q\n%s\nObserve mode remains active. This check sends only GET requests.\n",
-		profile.Version, profile.Branch, profile.OSFamily, instance.DisplayName, reason)
+	_, err = fmt.Fprintf(out, "Sonarr %s (%s, %s) · %q\n%s\nProfile SHA-256: %x\nThis check sends only GET requests and preserves the current mode.\n",
+		profile.Version, profile.Branch, profile.OSFamily, instance.DisplayName, reason, profile.Fingerprint)
 	return err
 }

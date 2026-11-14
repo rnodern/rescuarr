@@ -33,6 +33,7 @@ type Options struct {
 	Learning         LearningService
 	Notifications    NotificationService
 	RecoveryPause    RecoveryPause
+	ManualReview     app.ManualReviewService
 	ProwlDelivery    bool
 	Authorize        Authorize
 	Clock            app.Clock
@@ -97,6 +98,11 @@ func New(options Options) http.Handler {
 		mux.HandleFunc("POST "+base+"/controls/pause", c.changeRecoveryPause(true))
 		mux.HandleFunc("POST "+base+"/controls/resume", c.changeRecoveryPause(false))
 	}
+	if c.ManualReview != nil {
+		mux.HandleFunc("GET "+base+"/manual-review", c.manualReview)
+		mux.HandleFunc("POST "+base+"/manual-review", c.decideManualReview)
+		mux.HandleFunc("POST "+base+"/manual-review/mode", c.setManualMode)
+	}
 	assets, err := fs.Sub(files, "assets")
 	if err != nil {
 		panic(err)
@@ -136,6 +142,7 @@ type page struct {
 	HasRecoveryActivity       bool
 	HasNotifications          bool
 	HasLearning               bool
+	HasManualReview           bool
 	Body                      any
 }
 
@@ -146,6 +153,7 @@ func (c console) render(w http.ResponseWriter, r *http.Request, code int, name s
 	p.HasRecoveryActivity = c.RecoveryActivity != nil
 	p.HasNotifications = c.Notifications != nil
 	p.HasLearning = c.Learning != nil
+	p.HasManualReview = c.ManualReview != nil
 	session, _ := r.Context().Value(sessionKey{}).(Session)
 	p.CSRF = session.CSRF
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")

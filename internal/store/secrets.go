@@ -58,15 +58,11 @@ func (s *Store) WriteSecret(name, value string) error {
 		return err
 	}
 	path := filepath.Join(directory, name)
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	// The platform-specific exclusive create installs the private permissions
+	// before the credential is written.
+	f, err := createSecretFile(path)
 	if err != nil {
 		return errors.New("could not create private credential file")
-	}
-	info, statErr := f.Stat()
-	if statErr != nil || !checkSecretFile(path, info) {
-		_ = f.Close()
-		_ = os.Remove(path)
-		return errors.New("could not secure private credential file")
 	}
 	_, writeErr := f.WriteString(value)
 	if err := errors.Join(writeErr, f.Sync(), f.Close(), syncDirectory(directory)); err != nil {
