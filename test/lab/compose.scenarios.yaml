@@ -1,0 +1,28 @@
+services:
+  sonarr:
+    environment:
+      SSL_CERT_FILE: /lab-ca/root.pem
+    volumes:
+      - ${RESCUARR_LAB_RUN_DIR:?run via test/lab/run.sh}/tls/root.pem:/lab-ca/root.pem:ro
+  radarr:
+    environment:
+      SSL_CERT_FILE: /lab-ca/root.pem
+    volumes:
+      - ${RESCUARR_LAB_RUN_DIR:?run via test/lab/run.sh}/tls/root.pem:/lab-ca/root.pem:ro
+  source:
+    platform: linux/amd64
+    image: docker.io/library/python:3.12.12-alpine3.22@sha256:848ba4413eb897e225159b8fc1b02094576cbae4aa73fc13142608ae2c8c0e32
+    user: "1000:1000"
+    sysctls:
+      net.ipv4.ip_unprivileged_port_start: "443"
+    read_only: true
+    command: ["python", "-B", "/lab/source.py"]
+    volumes:
+      - .:/lab:ro
+      - ${RESCUARR_LAB_RUN_DIR:?run via test/lab/run.sh}/tls:/tls:ro
+      - ${RESCUARR_LAB_RUN_DIR:?run via test/lab/run.sh}/media:/media:ro
+    networks:
+      default:
+        aliases:
+          - skyhook.sonarr.tv
+          - api.radarr.video

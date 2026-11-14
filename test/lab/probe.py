@@ -35,16 +35,27 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 HTTP = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
 
 
-def get_json(origin, path, query="", headers=None):
+def call_json(origin, path, query=None, headers=None, *, method="GET", body=None):
+    headers = dict(headers or {})
+    data = None
+    if body is not None:
+        data = json.dumps(body).encode("utf-8")
+        headers["Content-Type"] = "application/json"
     request = urllib.request.Request(
         origin + path + ("?" + urllib.parse.urlencode(query) if query else ""),
-        headers=headers or {},
+        headers=headers,
+        method=method,
+        data=data,
     )
     with HTTP.open(request, timeout=5) as response:
         contents = response.read(2_000_001)
         if len(contents) > 2_000_000:
             raise ValueError("Lab response exceeded the JSON budget")
-        return json.loads(contents)
+        return response.status, json.loads(contents) if contents else None
+
+
+def get_json(origin, path, query=None, headers=None):
+    return call_json(origin, path, query, headers)[1]
 
 
 def wait_for(observe, timeout=120):
@@ -60,13 +71,17 @@ def wait_for(observe, timeout=120):
             time.sleep(2)
 
 
-def arr_snapshot(product, port, version, unknown_flag):
-    origin = f"http://{product}:{port}"
+def arr_key(product):
     config = ET.parse(Path("/config", product, "config.xml"))
     api_key = config.getroot().findtext("ApiKey")
     if not api_key:
         raise ValueError("Lab API key is not available yet")
-    headers = {"X-Api-Key": api_key}
+    return api_key
+
+
+def arr_snapshot(product, port, version, unknown_flag):
+    origin = f"http://{product}:{port}"
+    headers = {"X-Api-Key": arr_key(product)}
     status = get_json(origin, "/api/v3/system/status", headers=headers)
     if status.get("appName", "").lower() != product or status.get("version") != version:
         raise ValueError("Unexpected installed Arr product or version")
@@ -135,7 +150,7 @@ def sab_snapshot():
 
 
 def main():
-    source_sha, images = sys.argv[1:]
+    source_sha, images, *scenario = sys.argv[1:]
     report = {
         "sourceSHA": source_sha,
         "measuredAt": datetime.now(timezone.utc).isoformat(),
@@ -158,6 +173,11 @@ def main():
             print(f"{product} probe failed: {json.dumps(error.details)}", file=sys.stderr)
             failed = True
         report["results"][product]["elapsedSeconds"] = round(time.monotonic() - started, 3)
+    if scenario and not failed:
+        from scenarios import run_scenarios
+
+        report["fixtureSeed"] = "rescuarr-lab-v1"
+        failed = not run_scenarios(report, scenario[0])
     print(json.dumps(report, indent=2))
     return int(failed)
 
