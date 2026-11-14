@@ -202,8 +202,8 @@ class Arr:
         ]
         self.configure(route, {**template, **settings, "name": name})
 
-    def setup(self, *, automatic_redownload=True):
-        self.settings(False, automatic_redownload=automatic_redownload)
+    def setup(self, *, automatic_redownload=True, completed_handling=False):
+        self.settings(completed_handling, automatic_redownload=automatic_redownload)
         self.configure("rootfolder", {"path": "/library"})
         profiles = self.read("qualityprofile")
         verify(bool(profiles), "missingQualityProfile")
@@ -811,10 +811,13 @@ def run_scenarios(report, scenario):
         arr = Arr(product)
         result["stage"] = "arrSetup"
         terminal_case = case == "replace-terminal"
-        profile = arr.setup(automatic_redownload=not terminal_case)
+        id_only_case = scenario == SONARR_V5_ID_IMPORT
+        # Sonarr 5 hides completed downloads from Activity when completed
+        # handling is off, including jobs that its checker already blocked.
+        profile = arr.setup(automatic_redownload=not terminal_case, completed_handling=id_only_case)
         result["settings"] = {
             "profile": PROFILE_NAME, "profileId": profile["id"], "cutoff": profile["cutoff"],
-            "root": "/library", "category": CATEGORY[product], "completedHandling": False,
+            "root": "/library", "category": CATEGORY[product], "completedHandling": id_only_case,
             "removeCompletedDownloads": False, "removeFailedDownloads": False, "rss": False,
             "automaticRedownloadFailed": not terminal_case,
         }

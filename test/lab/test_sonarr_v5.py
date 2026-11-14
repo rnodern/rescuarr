@@ -8,7 +8,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 import probe
-from scenarios import CATEGORY, ID_ONLY_WARNING, LabFailure, id_only_import
+from scenarios import CATEGORY, ID_ONLY_WARNING, LabFailure, id_only_import, run_scenarios
 from source import ID_ONLY_PHASE, ID_ONLY_TARGET, TVDB_ID, article_id, metadata_path_kind, nzb, releases, rss, series_metadata, valid_phase
 
 
@@ -46,6 +46,22 @@ class SonarrV5LabTest(unittest.TestCase):
                 snapshot.assert_any_call("sonarr", 8989, version, "includeUnknownSeriesItems")
                 self.assertEqual(run.call_args.args[1], scenario)
                 self.assertEqual(json.loads(output.getvalue())["sourceSHA"], "fixture-sha")
+
+    def test_v5_queue_keeps_completed_handling_enabled(self):
+        for scenario, expected in ((probe.SONARR_V5_ID_IMPORT, True), ("sonarr/import", False)):
+            with self.subTest(scenario=scenario), patch("scenarios.Arr") as arr, patch(
+                "scenarios.wait_for"
+            ), patch("scenarios.setup_fixture_dirs"), patch("scenarios.configure_sab"), patch(
+                "scenarios.get_json"
+            ), patch("scenarios.id_only_import") as id_only, patch("scenarios.original_import") as original:
+                arr.return_value.setup.return_value = {"id": 1, "cutoff": 1001}
+                arr.return_value.media.return_value = [{}, {}]
+                evidence = {}
+                self.assertTrue(run_scenarios(evidence, scenario))
+                arr.return_value.setup.assert_called_once_with(automatic_redownload=True, completed_handling=expected)
+                self.assertEqual(evidence["scenarios"][scenario]["settings"]["completedHandling"], expected)
+                self.assertEqual(id_only.called, expected)
+                self.assertEqual(original.called, not expected)
 
     def test_import_requires_real_block_then_exact_copy_and_independent_readback(self):
         for defect in (None, "wrong_reason", "wrong_file_id", "changed_source"):
