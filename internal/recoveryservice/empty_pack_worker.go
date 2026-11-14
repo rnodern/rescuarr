@@ -36,17 +36,18 @@ type emptyPackWorker struct {
 	clock      app.Clock
 	connection func(domain.Instance) (emptyPackEffects, emptyPackReader, error)
 	after      domain.CaseID
+	instance   domain.InstanceRef
 }
 
 // RunEmptyPackRecovery runs the background worker on an explicitly qualified
 // connection provider. It does not start when the caller has no verified route.
-func RunEmptyPackRecovery(ctx context.Context, cases *observeservice.Service, local *store.Store, clock app.Clock,
+func RunEmptyPackRecovery(ctx context.Context, cases *observeservice.Service, local *store.Store, clock app.Clock, instance domain.InstanceRef,
 	transport http.RoundTripper, qualified func(domain.Instance) (*arradapter.EmptyPackAdapter, error), onError func(error)) error {
-	if cases == nil || local == nil || clock == nil || transport == nil || qualified == nil {
+	if cases == nil || local == nil || clock == nil || !instance.Valid() || transport == nil || qualified == nil {
 		return arradapter.ErrQualification
 	}
 	worker := &emptyPackWorker{
-		cases: cases, journal: NewEmptyPackJournal(local), clock: clock,
+		cases: cases, journal: NewEmptyPackJournal(local), clock: clock, instance: instance,
 		connection: func(instance domain.Instance) (emptyPackEffects, emptyPackReader, error) {
 			effects, err := qualified(instance)
 			if err != nil {
@@ -100,12 +101,15 @@ func (w *emptyPackWorker) step(ctx context.Context) error {
 	}
 	var pendingErrors error
 	for _, checkpoint := range pending {
+		if w.instance.Valid() && w.instance != checkpoint.Key.Job.Instance {
+			continue
+		}
 		if ctx.Err() != nil {
 			return errors.Join(pendingErrors, ctx.Err())
 		}
 		pendingErrors = errors.Join(pendingErrors, w.resume(ctx, checkpoint))
 	}
-	cases, err := w.cases.AutomaticEmptyPackCases(ctx, w.after, 1)
+	cases, err := w.cases.AutomaticEmptyPackCasesFor(ctx, w.instance.ID, w.after, 1)
 	if err != nil {
 		return errors.Join(pendingErrors, err)
 	}

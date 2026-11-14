@@ -12,19 +12,23 @@ import (
 // AutomaticEmptyPackCases reads recent, fully mapped Sonarr cases for a worker
 // that separately qualifies the installation and revalidates the live queue.
 func (s *Service) AutomaticEmptyPackCases(ctx context.Context, after domain.CaseID, limit int) ([]domain.Case, error) {
-	if len(after) > 128 || limit <= 0 || limit > 25 {
+	return s.AutomaticEmptyPackCasesFor(ctx, "", after, limit)
+}
+
+func (s *Service) AutomaticEmptyPackCasesFor(ctx context.Context, id domain.InstanceID, after domain.CaseID, limit int) ([]domain.Case, error) {
+	if len(id) > 128 || len(after) > 128 || limit <= 0 || limit > 25 {
 		return nil, ErrInvalid
 	}
 	var cases []domain.Case
 	now := s.clock.Now()
 	err := s.store.Read(ctx, func(tx *sql.Tx) error {
-		const where = ` WHERE c.id > ? AND c.state = 'held' AND c.reason = 'no_eligible_files'
+		const where = ` WHERE c.id > ? AND (? = '' OR i.id = ?) AND c.state = 'held' AND c.reason = 'no_eligible_files'
 			AND c.observation_only = 0 AND c.missing_complete_scans = 0 AND i.product = 'sonarr'
 			AND i.version = '5.0.0.2941' AND i.health = 'available' AND i.coverage = 'known'
 			AND i.generation = c.last_seen_generation AND i.epoch = c.epoch
 			AND i.checked_at > ? AND i.checked_at <= ?
 			ORDER BY c.id LIMIT ?`
-		rows, err := tx.QueryContext(ctx, caseDisplayQuery+where, after, stamp(now.Add(-recoveryCaseAge)), stamp(now), limit)
+		rows, err := tx.QueryContext(ctx, caseDisplayQuery+where, after, id, id, stamp(now.Add(-recoveryCaseAge)), stamp(now), limit)
 		if err != nil {
 			return err
 		}
@@ -44,14 +48,28 @@ func (s *Service) AutomaticEmptyPackCases(ctx context.Context, after domain.Case
 // RecoveryInstance resolves the current private connection for an operation
 // whose queue item may already have disappeared.
 func (s *Service) RecoveryInstance(ctx context.Context, ref domain.InstanceRef, revision domain.Revision) (domain.Instance, error) {
-	instance := domain.Instance{Ref: ref, ConnectionRevision: revision}
 	if !ref.Valid() || revision == 0 {
 		return domain.Instance{}, app.ErrHeld
 	}
+	instance, err := s.CurrentRecoveryInstance(ctx, ref.ID)
+	if err == nil && (instance.Ref != ref || instance.ConnectionRevision != revision) {
+		return domain.Instance{}, app.ErrHeld
+	}
+	return instance, err
+}
+
+// CurrentRecoveryInstance resolves the selected connection without exposing
+// its private credentials to the browser.
+func (s *Service) CurrentRecoveryInstance(ctx context.Context, id domain.InstanceID) (domain.Instance, error) {
+	if id == "" || len(id) > 128 {
+		return domain.Instance{}, app.ErrHeld
+	}
+	instance := domain.Instance{Ref: domain.InstanceRef{ID: id}}
 	err := s.store.Read(ctx, func(tx *sql.Tx) error {
-		return tx.QueryRowContext(ctx, `SELECT product, display_name, base_url, secret_ref, version
-			FROM observe_instances WHERE id = ? AND epoch = ? AND connection_revision = ? AND health = 'available' AND coverage = 'known'`,
-			ref.ID, ref.Epoch, revision).Scan(&instance.Product, &instance.DisplayName, &instance.BaseURL, &instance.SecretRef, &instance.UpstreamVersion)
+		return tx.QueryRowContext(ctx, `SELECT epoch, connection_revision, product, display_name, base_url, secret_ref, version
+			FROM observe_instances WHERE id = ? AND health = 'available' AND coverage = 'known'`,
+			id).Scan(&instance.Ref.Epoch, &instance.ConnectionRevision, &instance.Product, &instance.DisplayName, &instance.BaseURL,
+			&instance.SecretRef, &instance.UpstreamVersion)
 	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return domain.Instance{}, app.ErrHeld
