@@ -1,0 +1,272 @@
+package observe
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/url"
+	"regexp"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/rnodern/rescuarr/internal/domain"
+)
+
+const (
+	AdapterRevision = "arr-v3-read-1"
+	queuePageSize   = 100
+	historyPageSize = 50
+	maximumPages    = 10
+	scanTimeout     = 25 * time.Second
+)
+
+var arrVersion = regexp.MustCompile(`^[0-9]{1,6}(\.[0-9]{1,6}){3}$`)
+
+type Arr struct{ reader *reader }
+
+func NewArr(cfg Config, transport http.RoundTripper) (*Arr, error) {
+	if (cfg.Instance.Product != domain.ProductSonarr && cfg.Instance.Product != domain.ProductRadarr) || cfg.APIKey == "" {
+		return nil, ErrConfiguration
+	}
+	r, err := newReader(cfg, transport)
+	if err != nil {
+		return nil, err
+	}
+	return &Arr{reader: r}, nil
+}
+
+type SystemStatus struct {
+	Product   domain.Product
+	Version   string
+	Branch    string
+	Package   string
+	OSFamily  string
+	URLBase   string
+	StartedAt time.Time
+}
+
+func (a *Arr) Status(ctx context.Context) (SystemStatus, error) {
+	var wire struct {
+		Name      string    `json:"appName"`
+		Version   string    `json:"version"`
+		Branch    string    `json:"branch"`
+		Package   string    `json:"packageVersion"`
+		OSName    string    `json:"osName"`
+		URLBase   string    `json:"urlBase"`
+		StartedAt time.Time `json:"startTime"`
+	}
+	if err := a.reader.get(ctx, "/api/v3/system/status", nil, true, &wire); err != nil {
+		return SystemStatus{}, err
+	}
+	if !strings.EqualFold(wire.Name, string(a.reader.product)) || !arrVersion.MatchString(wire.Version) {
+		return SystemStatus{}, ErrResponse
+	}
+	return SystemStatus{
+		Product: a.reader.product, Version: wire.Version, Branch: boundedText(wire.Branch, 64),
+		Package: boundedText(wire.Package, 128), OSFamily: boundedText(wire.OSName, 64),
+		URLBase: boundedText(wire.URLBase, 512), StartedAt: wire.StartedAt,
+	}, nil
+}
+
+type QueueFinding string
+
+const (
+	FindingNoEligibleFiles QueueFinding = "no_eligible_files"
+	FindingOtherMessage    QueueFinding = "unclassified_message"
+)
+
+type QueueRecord struct {
+	ID            int64
+	Target        domain.TargetRef
+	DownloadID    string
+	Protocol      domain.Protocol
+	ClientLabel   string
+	IndexerLabel  string
+	Status        string
+	TrackedState  string
+	TrackedStatus string
+	SizeBytes     *int64
+	AddedAt       time.Time
+	Findings      []QueueFinding
+	// OutputPath is Arr-visible server data. It must stay out of generic serialisation.
+	OutputPath string `json:"-"`
+}
+
+type QueueSnapshot struct {
+	Evidence domain.Observation
+	Records  []QueueRecord
+}
+
+type queueWire struct {
+	ID         int64     `json:"id"`
+	SeriesID   int64     `json:"seriesId"`
+	EpisodeID  int64     `json:"episodeId"`
+	MovieID    int64     `json:"movieId"`
+	DownloadID string    `json:"downloadId"`
+	Protocol   string    `json:"protocol"`
+	Client     string    `json:"downloadClient"`
+	Indexer    string    `json:"indexer"`
+	Status     string    `json:"status"`
+	State      string    `json:"trackedDownloadState"`
+	Tracked    string    `json:"trackedDownloadStatus"`
+	Size       *int64    `json:"size"`
+	AddedAt    time.Time `json:"added"`
+	OutputPath string    `json:"outputPath"`
+	Messages   []struct {
+		Messages []string `json:"messages"`
+	} `json:"statusMessages"`
+}
+
+func (a *Arr) Queue(ctx context.Context, generation domain.Revision, observedAt time.Time) (QueueSnapshot, error) {
+	if generation == 0 || observedAt.IsZero() {
+		return QueueSnapshot{}, ErrConfiguration
+	}
+	query := url.Values{"sortKey": {"added"}, "sortDirection": {"descending"}}
+	if a.reader.product == domain.ProductSonarr {
+		query.Set("includeUnknownSeriesItems", "true")
+	} else {
+		query.Set("includeUnknownMovieItems", "true")
+	}
+	rows, err := scanPages[queueWire](ctx, a.reader, "/api/v3/queue", query, queuePageSize, func(row queueWire) int64 { return row.ID })
+	out := QueueSnapshot{Records: make([]QueueRecord, 0, len(rows))}
+	for _, row := range rows {
+		out.Records = append(out.Records, a.queueRecord(row))
+	}
+	out.Evidence = a.observation("queue", "", generation, observedAt, out.Records, err)
+	return out, err
+}
+
+func (a *Arr) QueueDetails(ctx context.Context, target domain.TargetRef) ([]QueueRecord, error) {
+	if !target.Valid() || target.Instance != a.reader.instance {
+		return nil, ErrConfiguration
+	}
+	query := url.Values{}
+	switch {
+	case a.reader.product == domain.ProductSonarr && target.Kind == domain.TargetEpisode:
+		query.Set("episodeIds", strconv.FormatInt(target.ID, 10))
+	case a.reader.product == domain.ProductRadarr && target.Kind == domain.TargetMovie:
+		query.Set("movieId", strconv.FormatInt(target.ID, 10))
+	default:
+		return nil, ErrConfiguration
+	}
+	var rows []queueWire
+	if err := a.reader.get(ctx, "/api/v3/queue/details", query, true, &rows); err != nil {
+		return nil, err
+	}
+	if len(rows) > queuePageSize {
+		return nil, ErrPartial
+	}
+	out := make([]QueueRecord, 0, len(rows))
+	ids := make(map[int64]bool)
+	for _, row := range rows {
+		record := a.queueRecord(row)
+		if row.ID <= 0 || ids[row.ID] || record.Target != target {
+			return out, ErrPartial
+		}
+		ids[row.ID] = true
+		out = append(out, record)
+	}
+	return out, nil
+}
+
+func (a *Arr) queueRecord(row queueWire) QueueRecord {
+	var findings []QueueFinding
+	seen := make(map[QueueFinding]bool)
+	for _, message := range row.Messages {
+		for _, line := range message.Messages {
+			finding := FindingOtherMessage
+			if strings.EqualFold(strings.TrimSpace(line), "No files found are eligible for import") {
+				finding = FindingNoEligibleFiles
+			}
+			if !seen[finding] {
+				seen[finding] = true
+				findings = append(findings, finding)
+			}
+		}
+	}
+	return QueueRecord{
+		ID: row.ID, Target: a.target(row.SeriesID, row.EpisodeID, row.MovieID),
+		DownloadID: exactToken(row.DownloadID, 256), Protocol: protocol(row.Protocol),
+		ClientLabel: boundedText(row.Client, 128), IndexerLabel: boundedText(row.Indexer, 128),
+		Status:        state(row.Status, "queued", "paused", "downloading", "completed", "failed", "warning", "delay", "downloadClientUnavailable", "fallback"),
+		TrackedState:  state(row.State, "downloading", "downloadFailed", "downloadFailedPending", "importPending", "importing", "imported", "ignored"),
+		TrackedStatus: state(row.Tracked, "ok", "warning", "error"),
+		SizeBytes:     nonnegative(row.Size), AddedAt: row.AddedAt, Findings: findings,
+		OutputPath: exactToken(row.OutputPath, 4096),
+	}
+}
+
+func (a *Arr) target(seriesID, episodeID, movieID int64) domain.TargetRef {
+	var ref domain.TargetRef
+	switch {
+	case a.reader.product == domain.ProductSonarr && movieID == 0:
+		ref = domain.TargetRef{Instance: a.reader.instance, Kind: domain.TargetEpisode, ID: episodeID, SeriesID: seriesID}
+	case a.reader.product == domain.ProductRadarr && seriesID == 0 && episodeID == 0:
+		ref = domain.TargetRef{Instance: a.reader.instance, Kind: domain.TargetMovie, ID: movieID}
+	}
+	if !ref.Valid() {
+		return domain.TargetRef{}
+	}
+	return ref
+}
+
+func (a *Arr) observation(kind domain.ObservationKind, selector string, generation domain.Revision, at time.Time, records any, err error) domain.Observation {
+	value, ttl := domain.ObservationKnown, 2*time.Minute
+	if err != nil {
+		value, ttl = domain.ObservationUnknown, 0
+	}
+	content, _ := json.Marshal(records) // The typed projections contain JSON-compatible primitives.
+	fingerprint := sha256.Sum256(content)
+	contentHash := hex.EncodeToString(fingerprint[:])
+	ref := a.reader.instance
+	evidenceID := sha256.Sum256(fmt.Appendf(nil, "%q/%d/%s/%q/%d/%s/%s", ref.ID, ref.Epoch, kind, selector, generation, value, contentHash))
+	return domain.Observation{
+		ID: domain.EvidenceID(hex.EncodeToString(evidenceID[:])), ContentHash: contentHash,
+		Scope:  domain.Scope{Kind: domain.ScopeInstance, Instance: a.reader.instance},
+		Source: domain.Source(a.reader.product), Kind: kind, AdapterRevision: AdapterRevision,
+		SchemaRevision: 1, SnapshotGeneration: generation, ObservedAt: at.UTC(), ExpiresAt: at.UTC().Add(ttl),
+		State: value, Complete: err == nil,
+	}
+}
+
+func protocol(value string) domain.Protocol {
+	switch strings.ToLower(value) {
+	case "usenet":
+		return domain.ProtocolUsenet
+	case "torrent":
+		return domain.ProtocolTorrent
+	default:
+		return domain.ProtocolUnknown
+	}
+}
+
+func state(value string, known ...string) string {
+	for _, candidate := range known {
+		if strings.EqualFold(value, candidate) {
+			return candidate
+		}
+	}
+	return "unknown"
+}
+
+func exactToken(value string, maximum int) string {
+	if len(value) > maximum || strings.IndexFunc(value, func(c rune) bool { return c < ' ' || c == 127 }) >= 0 {
+		return ""
+	}
+	return value
+}
+
+func boundedText(value string, maximum int) string {
+	return strings.TrimSpace(exactToken(value, maximum))
+}
+
+func nonnegative(value *int64) *int64 {
+	if value != nil && *value < 0 {
+		return nil
+	}
+	return value
+}
