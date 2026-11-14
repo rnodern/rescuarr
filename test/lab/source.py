@@ -20,6 +20,10 @@ SEED = "rescuarr-lab-v1"
 TVDB_ID = 91000001
 TMDB_IDS = (92000001, 92000002)
 SONARR_TITLE = "Rescuarr Synthetic Series"
+ID_ONLY_PHASE = "series-id-original"
+ID_ONLY_TARGET = "episode1"
+EMPTY_PACK_TARGET = "season1"
+EMPTY_PACK_PHASE = "empty-pack-original"
 RADARR_TITLES = ("Rescuarr Synthetic Film", "Rescuarr Synthetic Sequel")
 NEWS_GROUP = "alt.binaries.rescuarr-lab"
 NEWS_DOMAIN = "rescuarr.invalid"
@@ -29,16 +33,19 @@ SEGMENT_BYTES = 262_144
 RELEASE_GROUPS = {
     "original": "LABORIGINAL",
     "terminal-original": "LABORIGINAL",
+    ID_ONLY_PHASE: "LABIDMATCH",
+    EMPTY_PACK_PHASE: "LABEMPTYPACK",
     "replacement": "LABREPLACEMENT",
 }
 ARTICLE_ID = re.compile(
-    rb"<" + re.escape(SEED.encode("ascii")) + rb"\.(episode[12]|movie[12])\."
-    rb"(original|terminal-original|replacement)\.(\d{1,5})@" + re.escape(NEWS_DOMAIN.encode("ascii")) + rb">"
+    rb"<" + re.escape(SEED.encode("ascii")) + rb"\.(episode[12]|movie[12]|season1)\."
+    rb"(original|terminal-original|replacement|series-id-original|empty-pack-original)\.(\d{1,5})@" + re.escape(NEWS_DOMAIN.encode("ascii")) + rb">"
 )
 
 # Each target can select its release fixture through the lab control route.
 TARGETS = {
     "episode1": ("sonarr", f"{SONARR_TITLE.replace(' ', '.')}.S01E01", 5040),
+    EMPTY_PACK_TARGET: ("sonarr", f"{SONARR_TITLE.replace(' ', '.')}.S01", 5040),
     "episode2": ("sonarr", f"{SONARR_TITLE.replace(' ', '.')}.S01E02", 5040),
     "movie1": ("radarr", f"{RADARR_TITLES[0].replace(' ', '.')}.2020", 2040),
     "movie2": ("radarr", f"{RADARR_TITLES[1].replace(' ', '.')}.2020", 2040),
@@ -68,6 +75,7 @@ def series_metadata():
         "malIds": [],
         "aniListIds": [],
         "seasons": [{"seasonNumber": 1, "images": []}],
+        "seasonTypes": [{"name": "Official", "type": "official", "seasonNumbers": [1], "episodeCount": 2}],
         "episodes": [
             {"tvdbId": TVDB_ID + number, "seasonNumber": 1, "episodeNumber": number, "title": f"Episode {number}",
              "airDate": "2020-01-01", "airDateUtc": "2020-01-01T00:00:00Z", "runtime": 15}
@@ -95,8 +103,18 @@ def movie_metadata(index):
     }
 
 
+def valid_phase(target, phase):
+    if target == EMPTY_PACK_TARGET or phase == EMPTY_PACK_PHASE:
+        return target == EMPTY_PACK_TARGET and phase == EMPTY_PACK_PHASE
+    return target in TARGETS and phase in RELEASE_GROUPS and (phase != ID_ONLY_PHASE or target == ID_ONLY_TARGET)
+
+
 def releases(target, phase):
-    prefix = TARGETS[target][1]
+    if not valid_phase(target, phase):
+        raise ValueError("Invalid synthetic release phase for target")
+    # Sonarr's title/alias mapping should miss the shortened name. The indexer's
+    # TVDB ID still identifies the series. The episode number stays the same.
+    prefix = "Rescuarr.Synthetic.S01E01" if phase == ID_ONLY_PHASE else TARGETS[target][1]
     group = RELEASE_GROUPS[phase]
     return f"{prefix}.720p.WEB-DL.x264-{group}"
 
@@ -109,8 +127,11 @@ def search_targets(product, query):
     if product == "sonarr" and kind == "tvsearch":
         if tvdb not in ("", str(TVDB_ID)) or (not tvdb and "rescuarrsyntheticseries" not in title):
             return []
-        if season in ("1", "01") and episode in ("1", "2"):
-            return [f"episode{episode}"]
+        if season in ("1", "01"):
+            if episode in ("1", "2"):
+                return [f"episode{episode}"]
+            if not episode:
+                return [EMPTY_PACK_TARGET]
     if product == "radarr" and kind in ("movie", "search"):
         for index, movie_id in enumerate(TMDB_IDS):
             if tmdb == str(movie_id) or (not tmdb and re.sub("[^a-z]", "", RADARR_TITLES[index].lower()) in title):
@@ -244,6 +265,9 @@ class News(socketserver.StreamRequestHandler):
             self.line(b"430 No such synthetic article")
             return
         target, phase, number = (value.decode("ascii") for value in match.groups())
+        if not valid_phase(target, phase):
+            self.line(b"430 No such synthetic article")
+            return
         number = int(number)
         article = news_article(target, phase, number, self.server.media)
         if article is None:
@@ -265,11 +289,11 @@ class News(socketserver.StreamRequestHandler):
 
 
 def metadata_path_kind(path):
-    if path == f"/v1/tvdb/shows/en/{TVDB_ID}":
+    if path in (f"/v1/tvdb/shows/en/{TVDB_ID}", f"/v2/tvdb/shows/eng/{TVDB_ID}/official"):
         return "sonarrSeries"
     if path in (f"/v1/movie/{movie_id}" for movie_id in TMDB_IDS):
         return "radarrMovie"
-    if path.startswith("/v1/"):
+    if path.startswith(("/v1/", "/v2/")):
         return "unmatchedMetadata"
     return None
 
@@ -290,8 +314,8 @@ class Source(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urlsplit(self.path).path
-        match = re.fullmatch(r"/lab/feed/(episode[12]|movie[12])/(original|terminal-original|replacement)", path)
-        if not match:
+        match = re.fullmatch(r"/lab/feed/(episode[12]|movie[12]|season1)/([a-z-]+)", path)
+        if not match or not valid_phase(*match.groups()):
             self.send_error(404)
             return
         target, phase = match.groups()
@@ -331,7 +355,7 @@ class Source(BaseHTTPRequestHandler):
             ])
         elif path == "/lab/media":
             self.write(self.server.media_fingerprint)
-        elif (match := re.fullmatch(r"/nzb/(episode[12]|movie[12])/(original|terminal-original|replacement)", path)):
+        elif (match := re.fullmatch(r"/nzb/(episode[12]|movie[12]|season1)/([a-z-]+)", path)) and valid_phase(*match.groups()):
             self.write(nzb(*match.groups(), self.server.media), ENCLOSURE_TYPE)
         else:
             self.send_error(404)
@@ -350,6 +374,8 @@ class Source(BaseHTTPRequestHandler):
                                              "episode": query.get("ep", [""])[0]})
                 for target in scope:
                     phase = self.server.phases.get(target, "original")
+                    if not valid_phase(target, phase):
+                        continue
                     stamp = self.server.started - (60 if phase == "replacement" else 3600)
                     items.append((target, phase, stamp))
             # Validation needs a parseable recent item. It remains outside the

@@ -6,11 +6,21 @@ import json
 import os
 import time
 import urllib.error
+from itertools import islice
 from pathlib import Path
 from urllib.parse import urlencode
 
-from probe import TARGETS as ARR_BUILDS, arr_key, call_json, get_json, sab_key, wait_for
-from source import SEED, SOURCE, SONARR_TITLE, TARGETS, TMDB_IDS, TVDB_ID, releases
+from probe import (
+    SONARR_V5_EMPTY_PACK,
+    SONARR_V5_ID_IMPORT,
+    TARGETS as ARR_BUILDS,
+    arr_key,
+    call_json,
+    get_json,
+    sab_key,
+    wait_for,
+)
+from source import ID_ONLY_PHASE, ID_ONLY_TARGET, SEED, SOURCE, SONARR_TITLE, TARGETS, TMDB_IDS, TVDB_ID, releases
 
 SAB = "http://sab:8080"
 DOWNLOADS = Path("/downloads")
@@ -26,6 +36,9 @@ SOURCE_KEYS = ("id", "status", "eventType", "sourceTitle", "episodeId", "seriesI
 BLOCKLIST_KEYS = ("id", "sourceTitle", "date", "protocol", "indexer", "quality", "seriesId", "episodeIds", "movieId")
 CLIENT_NAME = "LAB SAB"
 INDEXER_NAME = "LAB Newznab"
+ID_ONLY_WARNING = ("Found matching series via grab history, but release was matched to series by ID. "
+                   "Automatic import is not possible.")
+MANUAL_IMPORT_FIELDS = ("path", "quality", "languages", "releaseGroup", "indexerFlags", "releaseType")
 
 
 class LabFailure(Exception):
@@ -51,14 +64,16 @@ def projection(value, keys):
     return {key: value[key] for key in keys if key in value}
 
 
-def inventory(path):
+def inventory(path, *, all_files=False):
     if not path.exists():
         return []
-    files = [path] if path.is_file() else sorted(path.rglob("*.mkv"))
+    pattern = "*" if all_files else "*.mkv"
+    files = [path] if path.is_file() else sorted(item for item in path.rglob(pattern) if item.is_file())
     evidence = []
     for item in files:
+        name = str(item.relative_to(path)) if all_files and item != path else item.name
         with item.open("rb") as contents:
-            evidence.append({"name": item.name, "bytes": item.stat().st_size,
+            evidence.append({"name": name, "bytes": item.stat().st_size,
                              "sha256": hashlib.file_digest(contents, "sha256").hexdigest()})
     return evidence
 
@@ -72,6 +87,35 @@ def safe_path(path, root):
 
 def safe_download_path(path):
     return safe_path(path, DOWNLOADS / "complete")
+
+
+def completed_fixture_media(storage, title, expected, report, *, allow_sidecars=False):
+    """Bind SAB's exact completed job to its one verified disposable video."""
+    layout = report.setdefault("completedFixtureLayout", {})
+    reported = safe_download_path(storage)
+    # SAB can report the sole video as storage. Sonarr walks its ancestors to
+    # find the directory named for the job, then uses that as the output path.
+    folder = reported if reported.is_dir() else reported.parent
+    layout.update(storageKind="directory" if reported.is_dir() else "file" if reported.is_file() else "missing",
+                  namedFolder=folder.name == title)
+    verify(reported == Path(storage) and folder.is_dir() and folder.name == title,
+           "unexpectedSyntheticPackLayout")
+    # The Copy test may retain sidecars. The empty-pack case needs one file
+    # total so removing it produces a genuinely empty directory.
+    entry_limit = 32 if allow_sidecars else 1
+    entries = list(islice(folder.iterdir(), entry_limit + 1))
+    layout["entryCountBounded"] = len(entries)
+    layout["regularEntries"] = all(item.is_file() and not item.is_symlink() for item in entries)
+    verify(len(entries) <= entry_limit and layout["regularEntries"], "unexpectedSyntheticPackLayout")
+    videos = [item for item in entries if item.suffix.lower() == ".mkv"]
+    layout["videoCount"] = len(videos)
+    verify(len(videos) == 1 and reported in (videos[0], folder), "unexpectedSyntheticPackLayout")
+    video = videos[0]
+    layout["sizeMatch"] = video.stat().st_size == expected["bytes"]
+    verify(layout["sizeMatch"], "unexpectedSyntheticPackLayout")
+    layout["contentMatch"] = projection(inventory(video)[0], ("bytes", "sha256")) == expected
+    verify(layout["contentMatch"], "unexpectedSyntheticPackLayout")
+    return folder, video
 
 
 def linked_library_path(path, lab_library):
@@ -197,8 +241,8 @@ class Arr:
         ]
         self.configure(route, {**template, **settings, "name": name})
 
-    def setup(self, *, automatic_redownload=True):
-        self.settings(False, automatic_redownload=automatic_redownload)
+    def setup(self, *, automatic_redownload=True, completed_handling=False):
+        self.settings(completed_handling, automatic_redownload=automatic_redownload)
         self.configure("rootfolder", {"path": "/library"})
         profiles = self.read("qualityprofile")
         verify(bool(profiles), "missingQualityProfile")
@@ -404,8 +448,7 @@ def original_import(arr, media, report):
     candidates = arr.read("manualimport", **query)
     selected = candidate_for(arr, candidates, target_id, download_id)
     verify(safe_download_path(selected["path"]).is_relative_to(output), "candidateOutsideDownloadOutput")
-    file_fields = ("path", "quality", "languages", "releaseGroup", "indexerFlags", "releaseType")
-    reprocess = {**projection(selected, file_fields), "downloadId": download_id}
+    reprocess = {**projection(selected, MANUAL_IMPORT_FIELDS), "downloadId": download_id}
     if arr.product == "sonarr":
         reprocess.update(seriesId=selected["series"]["id"], seasonNumber=selected["seasonNumber"], episodeIds=[target_id])
     else:
@@ -422,7 +465,7 @@ def original_import(arr, media, report):
     )
     verify(report["reprocessUnchanged"], "reprocessChangedIndependentState")
 
-    file = {**projection(rescanned, file_fields), "downloadId": download_id, "folderName": selected["folderName"]}
+    file = {**projection(rescanned, MANUAL_IMPORT_FIELDS), "downloadId": download_id, "folderName": selected["folderName"]}
     if arr.product == "sonarr":
         file.update(seriesId=selected["series"]["id"], episodeIds=[target_id])
     else:
@@ -444,6 +487,135 @@ def original_import(arr, media, report):
     report["sourcePreserved"] = source_after == before["source"]
     verify(any(item["sha256"] == before["source"][0]["sha256"] for item in library_after),
            "libraryFileContentMismatch")
+
+
+def history_data(row, key):
+    # History's string dictionary may preserve the stored key or camel-case it.
+    return next((value for name, value in row.get("data", {}).items() if name.lower() == key.lower()), None)
+
+
+def id_only_queue_row(arr, download_id, episode_id, series_id):
+    rows = arr.queue(download_id)
+    if not rows:
+        return None
+    verify(len(rows) == 1 and rows[0]["episodeId"] == episode_id and rows[0]["seriesId"] == series_id,
+           "unexpectedBlockedDownloadScope")
+    row = rows[0]
+    if row.get("status") != "completed" or row.get("trackedDownloadState") != "importBlocked":
+        return None
+    messages = (line for message in row.get("statusMessages", []) for line in message.get("messages", []))
+    verify(any(line.startswith(ID_ONLY_WARNING) for line in messages), "blockedForAnotherReason")
+    return row
+
+
+def id_only_import_history(arr, download_id, episode_id, series_id, library, source, previous_ids):
+    rows = [row for row in arr.history(downloadId=download_id)
+            if row.get("eventType") == "downloadFolderImported" and row["id"] not in previous_ids]
+    if not rows:
+        return None
+    verify(len(rows) == 1, "unexpectedImportHistoryCount")
+    row = rows[0]
+    verify(row.get("episodeId") == episode_id and row.get("seriesId") == series_id
+           and row.get("downloadId") == download_id and str(history_data(row, "fileId")) == str(library["id"])
+           and history_data(row, "droppedPath") == str(source)
+           and history_data(row, "importedPath") == library["path"], "importHistoryScopeMismatch")
+    return row
+
+
+def id_only_import(arr, media, guard, report):
+    episode_id, series_id = media["id"], media["seriesId"]
+    guard_id = guard["id"]
+    verify(guard["seriesId"] == series_id and guard_id != episode_id
+           and arr.file_link(episode_id) == arr.file_link(guard_id) == 0 and not inventory(arr.library, all_files=True),
+           "unexpectedIDOnlyImportStartingState")
+
+    call_json(SOURCE, f"/lab/feed/{ID_ONLY_TARGET}/{ID_ONLY_PHASE}", method="POST")
+    start = len(search_events())
+    command, grabbed = arr.grab(ID_ONLY_TARGET, episode_id, ID_ONLY_PHASE)
+    match_type = history_data(grabbed, "seriesMatchType")
+    release_source = history_data(grabbed, "releaseSource")
+    verify(match_type == "Id" and release_source in ("Search", "UserInvokedSearch"), "grabWasNotIDOnly")
+    download_id = grabbed["downloadId"]
+    original_title = releases(ID_ONLY_TARGET, ID_ONLY_PHASE)
+    report["originalGrab"] = {**projection(grabbed, SOURCE_KEYS), "seriesMatchType": match_type,
+                              "releaseSource": release_source}
+    report["searchCommand"] = command
+    report["searches"] = arr.search_scope(start, ID_ONLY_TARGET)
+    job = poll(lambda: completed_job(download_id), "SABCompletionTimeout", timeout=150)
+    verify(job["category"] == CATEGORY["sonarr"] and job["name"] == original_title,
+           "IDOnlySABIdentityMismatch")
+    expected = get_json(SOURCE, "/lab/media")
+    output, verified_source = completed_fixture_media(job["storage"], original_title, expected, report, allow_sidecars=True)
+    arr.refresh()
+    row = poll(lambda: id_only_queue_row(arr, download_id, episode_id, series_id), "IDOnlyBlockNotObserved")
+    arr_output = safe_download_path(row["outputPath"])
+    report["completedFixtureLayout"]["arrOutputMatch"] = arr_output in (output, verified_source)
+    verify(report["completedFixtureLayout"]["arrOutputMatch"], "unexpectedArrOutputPath")
+    report["blocked"] = {**projection(row, SOURCE_KEYS), "trackedDownloadState": row["trackedDownloadState"],
+                         "reason": "seriesMatchedById"}
+
+    before = {"source": inventory(output, all_files=True), "library": inventory(arr.library, all_files=True),
+              "client": sab_job(download_id), "guardFileId": arr.file_link(guard_id),
+              "guardHistory": [projection(row, SOURCE_KEYS) for row in arr.history(episodeId=guard_id)]}
+    verify(arr.file_link(episode_id) == before["guardFileId"] == 0 and not before["library"],
+           "IDOnlyImportAlreadyHappened")
+    report["before"] = before
+    previous_ids = {row["id"] for row in arr.history(downloadId=download_id)}
+
+    query = {"downloadId": download_id, "filterExistingFiles": "false"}
+    candidates = arr.read("manualimport", **query)
+    verify(len(candidates) == 1, "expectedSingletonIDOnlyPreview")
+    candidate = candidates[0]
+    source = safe_download_path(candidate["path"])
+    verify(source == verified_source and Path(candidate["path"]) == verified_source
+           and candidate.get("downloadId") in (None, download_id), "unexpectedIDOnlyCandidatePath")
+    candidate_series = candidate.get("series") or {}
+    verify(candidate_series.get("id") in (None, series_id)
+           and all(episode["id"] == episode_id for episode in (candidate.get("episodes") or [])),
+           "conflictingIDOnlyCandidateIdentity")
+    reprocess = {**projection(candidate, MANUAL_IMPORT_FIELDS), "downloadId": download_id,
+                 "seriesId": series_id, "seasonNumber": media["seasonNumber"], "episodeIds": [episode_id]}
+    status, reprocessed = arr.api("manualimport", method="POST", body=[reprocess])
+    rescanned = candidate_for(arr, reprocessed, episode_id, download_id)
+    verify(rescanned["path"] == candidate["path"] and rescanned["seriesId"] == series_id
+           and rescanned["seasonNumber"] == media["seasonNumber"], "reprocessTargetOrPathChanged")
+    verify(set(MANUAL_IMPORT_FIELDS) <= rescanned.keys() and rescanned["quality"] and rescanned["languages"],
+           "reprocessMissingTypedCandidateMetadata")
+    report["preview"] = {"query": query, "candidateCount": 1, "rejectedBeforeReprocess": bool(candidate.get("rejections")),
+                         "reprocessRequest": reprocess, "reprocessStatus": status, "reprocessCount": 1}
+    verify(inventory(output, all_files=True) == before["source"] and sab_job(download_id) == before["client"]
+           and inventory(arr.library, all_files=True) == before["library"]
+           and arr.file_link(episode_id) == arr.file_link(guard_id) == 0
+           and {row["id"] for row in arr.history(downloadId=download_id)} == previous_ids,
+           "reprocessChangedIndependentState")
+    report["reprocessUnchanged"] = True
+
+    selected = {**projection(rescanned, MANUAL_IMPORT_FIELDS), "downloadId": download_id, "seriesId": series_id,
+                "episodeIds": [episode_id], "folderName": candidate.get("folderName")}
+    report["operation"] = {"method": "POST", "path": "/api/v3/command", "name": "ManualImport",
+                           "importMode": "copy", "files": [selected]}
+    report["response"] = arr.command_status("ManualImport", importMode="copy", files=[selected])
+    library = poll(lambda: arr.library_file(episode_id), "importFileLinkMissing")
+    history = poll(lambda: id_only_import_history(arr, download_id, episode_id, series_id, library, source, previous_ids),
+                   "importProvenanceMissing")
+    arr.refresh()
+    linked = linked_library_path(library["path"], arr.library)
+    expected_source = [item for item in before["source"] if item["name"] == source.name]
+    installed = inventory(linked)
+    report["after"] = {"source": inventory(output, all_files=True), "library": inventory(arr.library, all_files=True),
+                       "libraryLink": library, "history": {**projection(history, SOURCE_KEYS), "fileId": library["id"]},
+                       "client": sab_job(download_id), "guardFileId": arr.file_link(guard_id),
+                       "guardHistory": [projection(row, SOURCE_KEYS) for row in arr.history(episodeId=guard_id)],
+                       "arrQueue": [projection(row, SOURCE_KEYS) for row in arr.queue(download_id)]}
+    after = report["after"]
+    report["sourcePreserved"] = output.is_dir() and after["source"] == before["source"]
+    verify(report["sourcePreserved"], "IDOnlyImportChangedSource")
+    verify(after["client"] == before["client"], "IDOnlyImportChangedSABDisposition")
+    verify(after["guardFileId"] == before["guardFileId"] and after["guardHistory"] == before["guardHistory"]
+           and arr.file_link(episode_id) == library["id"], "IDOnlyImportChangedGuardOrFileLink")
+    verify(not after["arrQueue"], "IDOnlyImportStillQueued")
+    verify(len(installed) == len(expected_source) == len(after["library"]) == 1 and installed[0]["sha256"] == expected_source[0]["sha256"]
+           and installed[0]["bytes"] == expected_source[0]["bytes"], "libraryFileContentMismatch")
 
 
 def delete_queue(arr, row, flags, lose_response):
@@ -679,24 +851,33 @@ def run_scenarios(report, scenario):
         arr = Arr(product)
         result["stage"] = "arrSetup"
         terminal_case = case == "replace-terminal"
-        profile = arr.setup(automatic_redownload=not terminal_case)
+        id_only_case = scenario == SONARR_V5_ID_IMPORT
+        # Sonarr 5 hides completed downloads from Activity when completed
+        # handling is off, including jobs that its checker already blocked.
+        profile = arr.setup(automatic_redownload=not terminal_case, completed_handling=id_only_case)
         result["settings"] = {
             "profile": PROFILE_NAME, "profileId": profile["id"], "cutoff": profile["cutoff"],
-            "root": "/library", "category": CATEGORY[product], "completedHandling": False,
+            "root": "/library", "category": CATEGORY[product], "completedHandling": id_only_case,
             "removeCompletedDownloads": False, "removeFailedDownloads": False, "rss": False,
             "automaticRedownloadFailed": not terminal_case,
         }
         result["stage"] = "mediaSetup"
         targets = arr.media(profile["id"])
         result["stage"] = "exercise"
-        if case == "import":
+        if scenario == SONARR_V5_EMPTY_PACK:
+            # Import lazily to keep the specialised fixture out of other scenarios.
+            from empty_pack import empty_pack_replacement
+            empty_pack_replacement(arr, targets[0], targets[1], result)
+        elif scenario == SONARR_V5_ID_IMPORT:
+            id_only_import(arr, targets[0], targets[1], result)
+        elif case == "import":
             original_import(arr, targets[0], result)
         elif terminal_case:
             terminal_replacement(arr, targets[0], targets[1], result)
         else:
             reject_replace(arr, targets[0], targets[1], result, remove=case == "reject-remove",
                            lose_response=case == "reject-lost-response")
-        if case == "import" or terminal_case:
+        if case == "import" or terminal_case or scenario in (SONARR_V5_ID_IMPORT, SONARR_V5_EMPTY_PACK):
             result.update(status="observed", stage="complete", qualification="awaitingIndependentReview")
         else:
             result.update(status="observed", stage="complete", qualification="terminalOriginalUnproven")
