@@ -30,7 +30,7 @@ cleanup() {
   exit "$status"
 }
 trap cleanup EXIT
-git archive HEAD go.mod go.sum cmd internal deploy/container |
+git archive HEAD go.mod go.sum cmd internal deploy/container deploy/licenses |
   docker buildx build --platform "linux/$architecture" --file deploy/container/Dockerfile \
     --tag "$RESCUARR_IMAGE" --provenance=false --sbom=false \
     --build-arg "RESCUARR_VERSION=$version" --build-arg "RESCUARR_REVISION=$revision" \
