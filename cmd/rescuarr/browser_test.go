@@ -73,9 +73,13 @@ func TestBrowserUsesOwnerSessionAndLocalState(t *testing.T) {
 			t.Fatal("overview did not render the current owner shell")
 		}
 	}
-	for _, route := range []string{"/cases", "/assets/console.css", "/fragments/status"} {
-		if status := perform(base+route, session.Token).Code; status != http.StatusOK {
-			t.Errorf("authenticated %s returned %d", route, status)
+	for route, media := range map[string]string{
+		"/cases": "text/html", "/assets/console.css": "text/css",
+		"/assets/console.js": "javascript", "/fragments/status": "text/html",
+	} {
+		response := perform(base+route, session.Token)
+		if response.Code != http.StatusOK || !strings.Contains(response.Header().Get("Content-Type"), media) {
+			t.Errorf("authenticated %s returned %d with type %q", route, response.Code, response.Header().Get("Content-Type"))
 		}
 	}
 }

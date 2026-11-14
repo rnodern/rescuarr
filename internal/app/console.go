@@ -126,6 +126,7 @@ func (c *console) renderAccess(w http.ResponseWriter, r *http.Request, setup boo
 		data.Action = c.cfg.BasePath + "/setup"
 	}
 	c.setCookie(w, r, "rescuarr_form", data.CSRF, 900)
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
 	_ = consoleTemplates.ExecuteTemplate(w, "access", data)
 }
@@ -261,7 +262,6 @@ func (c *console) redirect(w http.ResponseWriter, r *http.Request, path string) 
 }
 
 func headers(w http.ResponseWriter) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Referrer-Policy", "same-origin")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
