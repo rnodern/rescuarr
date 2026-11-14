@@ -1,4 +1,4 @@
-// The isolated Compose lab invokes this probe against its synthetic Sonarr.
+// The isolated labs invoke this probe against their disposable Sonarr.
 // Production startup does not import this command or its fixture qualification.
 package main
 
@@ -11,14 +11,13 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"runtime"
 	"time"
 
 	"github.com/rnodern/rescuarr/internal/arradapter"
 	"github.com/rnodern/rescuarr/internal/arrwire"
 	"github.com/rnodern/rescuarr/internal/domain"
 )
-
-const origin = "http://sonarr:8989"
 
 type input struct {
 	Operation  string                    `json:"operation"`
@@ -55,12 +54,16 @@ func run(in input) output {
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 	defer cancel()
 
+	address := "sonarr:8989"
+	if runtime.GOOS == "windows" {
+		address = "127.0.0.1:18989"
+	}
 	dialer := &net.Dialer{Timeout: 3 * time.Second}
 	transport := &http.Transport{
 		DisableKeepAlives:  true,
 		DisableCompression: true,
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			if addr != "sonarr:8989" {
+			if addr != address {
 				return nil, arradapter.ErrConfiguration
 			}
 			return dialer.DialContext(ctx, network, addr)
@@ -72,12 +75,12 @@ func run(in input) output {
 		Instance: domain.Instance{
 			Ref:                domain.InstanceRef{ID: "sealed-lab-sonarr", Epoch: 1},
 			Product:            domain.ProductSonarr,
-			BaseURL:            origin,
+			BaseURL:            "http://" + address,
 			UpstreamVersion:    arrwire.SonarrIDOnlyImportVersion,
 			ConnectionRevision: 1,
 		},
 		AdapterRevision:     "sealed-lab-empty-pack",
-		SettingsFingerprint: sha256.Sum256([]byte("pinned Sonarr and SABnzbd Compose volumes")),
+		SettingsFingerprint: sha256.Sum256([]byte("disposable Sonarr and SABnzbd lab storage")),
 		APIKey:              in.APIKey,
 	}, transport.RoundTrip, labQualification, time.Now)
 	if err != nil {
@@ -117,7 +120,7 @@ func labQualification(_ context.Context, binding arradapter.Binding) (arradapter
 	}
 	now := time.Now().UTC()
 	return arradapter.Qualification{
-		Binding: binding, Verified: true, Evidence: "sealed-compose-lab-test",
+		Binding: binding, Verified: true, Evidence: "disposable-upstream-lab-test",
 		ObservedAt: now.Add(-time.Second), ExpiresAt: now.Add(time.Minute),
 	}, nil
 }

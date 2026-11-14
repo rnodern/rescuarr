@@ -138,11 +138,11 @@ def grab_episode(arr, media, target, phase):
     return {"command": command, "searches": arr.search_scope(start, target), "grab": grab}
 
 
-def run_go_adapter(arr, operation, scope, **fields):
+def run_go_adapter(arr, operation, scope, *, executable="/lab-tools/go-pack-probe", **fields):
     request = {"operation": operation, "apiKey": arr.headers["X-Api-Key"], "scope": scope, **fields}
     try:
         result = subprocess.run(
-            ["/lab-tools/go-pack-probe"], input=json.dumps(request),
+            [str(executable)], input=json.dumps(request),
             capture_output=True, text=True, timeout=30, check=False,
         )
         proof = json.loads(result.stdout)
@@ -158,7 +158,7 @@ def run_go_adapter(arr, operation, scope, **fields):
     return proof
 
 
-def empty_pack_replacement(arr, missing, covered, report, *, go_adapter=False):
+def empty_pack_replacement(arr, missing, covered, report, *, adapter=None):
     series_id = missing["seriesId"]
     targets = sorted([missing["id"], covered["id"]])
     verify(covered["seriesId"] == series_id and missing["seasonNumber"] == covered["seasonNumber"] == 1
@@ -189,9 +189,10 @@ def empty_pack_replacement(arr, missing, covered, report, *, go_adapter=False):
     library_series = linked_library_path(series["path"], arr.library)
     season = library_series / "Season 01"
     season.mkdir(parents=True, exist_ok=True)
-    for path in (library_series, season):
-        os.chown(path, 1000, 1000)
-        path.chmod(0o775)
+    if os.name != "nt":
+        for path in (library_series, season):
+            os.chown(path, 1000, 1000)
+            path.chmod(0o775)
     staged = season / f"{SONARR_TITLE} - S01E02 - Episode 2 WEBDL-720p.mkv"
     with staged.open("xb") as destination, original_file.open("rb") as source:
         shutil.copyfileobj(source, destination)
@@ -227,12 +228,12 @@ def empty_pack_replacement(arr, missing, covered, report, *, go_adapter=False):
         "episodeFileIDs": before_links,
     }
     start = len(search_events())
-    queue_id = min(row["id"] for row in rows) if go_adapter else rows[0]["id"]
+    queue_id = min(row["id"] for row in rows) if adapter else rows[0]["id"]
     report["operation"] = {"method": "DELETE", "queueId": queue_id, "query": RETAIN_FLAGS}
-    if go_adapter:
+    if adapter:
         scope = {"QueueIDs": [row["id"] for row in rows], "DownloadID": download_id,
                  "Release": title, "SeriesID": series_id, "EpisodeIDs": targets}
-        removal = run_go_adapter(arr, "reject", scope)
+        removal = adapter(arr, "reject", scope)
         verify(isinstance(removal.get("sentAt"), str), "goPackMissingSendTimestamp")
         report["response"] = {"acknowledged": True}
         report["goAdapter"] = {"preflight": True, "reject": True}
@@ -248,17 +249,17 @@ def empty_pack_replacement(arr, missing, covered, report, *, go_adapter=False):
     verify(sab_job(download_id) == client and output.is_dir() and not inventory(output, all_files=True)
            and inventory(arr.library, all_files=True) == before_library, "packRejectChangedIndependentState")
     report["afterReject"] = {**rejected, "client": client, "sourceInventory": [], "searchRequests": []}
-    if go_adapter:
-        proof = run_go_adapter(arr, "verify", scope, sentAt=removal["sentAt"])
+    if adapter:
+        proof = adapter(arr, "verify", scope, sentAt=removal["sentAt"])
         verify(proof.get("verified") is True, "goPackRejectReadbackMissing")
         report["goAdapter"]["verifiedRejection"] = True
 
     # The existing episode must remain covered and the requested episode still missing.
     verify(episode_disposition(arr, series_id, targets) == before_links, "packEpisodeDispositionChanged")
-    if go_adapter:
+    if adapter:
         call_json(SOURCE, "/lab/feed/episode1/replacement", method="POST")
         search_start = len(search_events())
-        proof = run_go_adapter(arr, "search", scope, episodeIds=[missing["id"]])
+        proof = adapter(arr, "search", scope, episodeIds=[missing["id"]])
         command_id = proof.get("commandId")
         verify(type(command_id) is int and command_id > 0, "goPackMissingSearchCommand")
         command = poll(lambda: arr.completed_command(command_id, "EpisodeSearch"), "goPackSearchCompletionMissing")

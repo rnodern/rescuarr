@@ -47,6 +47,12 @@ Run `test/lab/run.sh /tmp/rescuarr-sonarr-v5-adapter-pack.json sonarr/v5-adapter
 
 The Go probe performs preflight, sends the one scoped removal, checks its readback and submits the episode-only search. Python independently confirms the queue, blocklist, SAB history, source preservation, command completion and resulting library file. The report records the checkout SHA and pinned images. Fixture qualification is local to this lab process. A passing run provides Go adapter evidence for the pinned Linux environment. See the empty-pack scenario above for remaining Windows and product-runtime coverage.
 
+### Native Windows empty-pack lab
+
+The [Windows upstream workflow](../../.github/workflows/windows-upstream-lab.yml) runs the same empty-pack assertions with the native Windows x64 portable builds of Sonarr 5.0.0.2941 develop and SABnzbd 5.1.3. It launches both applications with fresh data directories on a disposable GitHub-hosted Windows Server 2025 runner. Sonarr and SABnzbd use separate loopback addresses and dedicated ports. The synthetic indexer, media and NNTP server stay on that runner. The workflow briefly directs Sonarr's metadata hostname to the synthetic fixture inside the runner and removes its generated trust certificate afterwards.
+
+The checkout-specific `sonarr-windows-v5-adapter-pack-evidence` artefact records the native queue and library results. A passing run contributes evidence for the native Windows adapter on a local drive. Windows service accounts, network library paths and the packaged Rescuarr background worker require additional evidence.
+
 ### Terminal replacement
 
 The terminal scenarios request an original release whose fixture articles return NNTP `430`. They join the original Arr grab to the exact SABnzbd `Failed` history entry and record queue absence and the media inventory of the reported output paths. Arr's download monitoring handles the failure, with automatic redownload and failed-job removal disabled. The report includes the new Arr failure history entry, matching blocklist entry and exact job absence from the Arr queue.
