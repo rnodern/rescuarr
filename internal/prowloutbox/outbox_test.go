@@ -19,7 +19,7 @@ import (
 	"github.com/rnodern/rescuarr/internal/store"
 )
 
-const testKey = "synthetic-notification-key"
+const testKey = "0123456789abcdef0123456789abcdef01234567"
 
 type stampClock struct{ at time.Time }
 
@@ -124,6 +124,101 @@ func TestOutboxSuppressesDuplicatesAndPreservesAuditAtomically(t *testing.T) {
 	}
 }
 
+func TestRouteRequiresOneKeyAtConfigurationAndDelivery(t *testing.T) {
+	db, dir, clock := outboxFixture(t)
+	client := fakeProwl(t, func(url.Values) (int, string, http.Header, error) {
+		t.Fatal("rotated multiple-key secret reached the provider")
+		return 0, "", nil, nil
+	})
+	s := New(db, clock, client, true)
+	secret := filepath.Join(dir, "secrets", "fixture")
+	multiKey := []byte(testKey + "," + strings.Repeat("a", 40) + "\n")
+	if err := os.WriteFile(secret, multiKey, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Configure(t.Context(), ConfigureRoute{Route: Route{Enabled: true}, KeyRef: "fixture", Actor: "owner"}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("multiple-key route configuration returned %v", err)
+	}
+	if err := os.WriteFile(secret, []byte(testKey+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	route := routeFixture(t, s, Route{})
+	if _, err := s.QueueTest(t.Context(), route.ID, route.Revision, "owner"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(secret, multiKey, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if handled, err := s.RunOne(t.Context()); !handled || err != nil {
+		t.Fatalf("invalid secret was not handled: %t, %v", handled, err)
+	}
+	statuses, err := s.Recent(t.Context(), route.ID, 10)
+	if err != nil || len(statuses) != 1 || statuses[0].State != domain.OutboxFailed || statuses[0].Reason != "notification_invalid_request" {
+		t.Fatalf("invalid rotated secret was not recorded: %+v, %v", statuses, err)
+	}
+}
+
+func TestAttentionQueuesLaterTransitionForSameCase(t *testing.T) {
+	db, _, clock := outboxFixture(t)
+	client := fakeProwl(t, func(form url.Values) (int, string, http.Header, error) {
+		if form.Get("event") != "Recovery needs attention" {
+			t.Fatal("unexpected attention notification")
+		}
+		return 200, `<prowl><success code="200" remaining="25"/></prowl>`, nil, nil
+	})
+	s := New(db, clock, client, true)
+	route := routeFixture(t, s, Route{Categories: Attention})
+	appendEvent(t, s, "requires-attention", "action_required", clock.Now())
+	if sent, err := s.RunOne(t.Context()); !sent || err != nil {
+		t.Fatalf("first attention transition was not sent: %t, %v", sent, err)
+	}
+	clock.at = clock.at.Add(minSendGap)
+	appendEvent(t, s, "unresolved-attempt", "action_unresolved", clock.Now())
+	statuses, err := s.Recent(t.Context(), route.ID, 10)
+	if err != nil || len(statuses) != 2 || statuses[0].State != domain.OutboxPending || statuses[1].State != domain.OutboxAccepted {
+		t.Fatalf("later attention transition was deduplicated: %+v, %v", statuses, err)
+	}
+	if sent, err := s.RunOne(t.Context()); !sent || err != nil {
+		t.Fatalf("later attention transition was not sent: %t, %v", sent, err)
+	}
+}
+
+func TestPendingCapRecordsCoalescedSuppression(t *testing.T) {
+	db, _, clock := outboxFixture(t)
+	s := New(db, clock, nil, false)
+	route := routeFixture(t, s, Route{Categories: Attention})
+	for i := range maxPending + 2 {
+		appendEvent(t, s, fmt.Sprintf("attention-%d", i), "action_required", clock.Now())
+	}
+	if delivery, err := s.QueueTest(t.Context(), route.ID, route.Revision, "owner"); delivery != "" || !errors.Is(err, ErrLimit) {
+		t.Fatalf("test reported success at capacity: %q, %v", delivery, err)
+	}
+	first, err := s.Recent(t.Context(), route.ID, 1)
+	if err != nil || len(first) != 1 || first[0].Category != "queue_overflow" || first[0].State != domain.OutboxSuppressed ||
+		first[0].Count != 2 || first[0].Attempts != 0 || first[0].Reason != "notification_queue_full" {
+		t.Fatalf("missing route overflow diagnostic: %+v, %v", first, err)
+	}
+	clock.at = clock.at.Add(time.Hour)
+	appendEvent(t, s, "next-hour", "action_unresolved", clock.Now())
+	latest, err := s.Recent(t.Context(), route.ID, 2)
+	if err != nil || len(latest) != 2 || latest[0].Count != 1 || latest[0].Reason != "notification_queue_full" || latest[1] != first[0] {
+		t.Fatalf("next hour did not create a new overflow record: %+v, %v", latest, err)
+	}
+	if err := db.Read(t.Context(), func(tx *sql.Tx) error {
+		var pending, suppressed, audit int
+		err := tx.QueryRow(`SELECT
+			(SELECT count(*) FROM notification_outbox WHERE state = 'pending'),
+			(SELECT count(*) FROM notification_outbox WHERE state = 'suppressed'),
+			(SELECT count(*) FROM audit_events)`).Scan(&pending, &suppressed, &audit)
+		if err == nil && (pending != maxPending || suppressed != 2 || audit != maxPending+4) {
+			return fmt.Errorf("unexpected pending, suppressed and audit counts: %d, %d, %d", pending, suppressed, audit)
+		}
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestOutboxProviderStatusAndRetries(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -137,7 +232,8 @@ func TestOutboxProviderStatusAndRetries(t *testing.T) {
 		{"accepted", 200, `<prowl><success code="200" remaining="20" resetdate="1893456000"/></prowl>`, nil, domain.OutboxAccepted, "notification_provider_accepted", false},
 		{"invalid key", 401, `<prowl><error code="401">arbitrary provider text</error></prowl>`, nil, domain.OutboxFailed, "notification_key_invalid", true},
 		{"rate limited", 429, ``, nil, domain.OutboxDelayed, "notification_quota", false},
-		{"transient", 503, `<prowl><error code="500">arbitrary provider text</error></prowl>`, nil, domain.OutboxDelayed, "notification_transient", false},
+		{"transient", 500, `<prowl><error code="500">arbitrary provider text</error></prowl>`, nil, domain.OutboxDelayed, "notification_transient", false},
+		{"conflicting failure", 503, `<prowl><error code="500">arbitrary provider text</error></prowl>`, nil, domain.OutboxUncertain, "notification_acknowledgement_unknown", false},
 		{"malformed", 200, `<not-prowl private="data"/>`, nil, domain.OutboxUncertain, "notification_acknowledgement_unknown", false},
 		{"lost response", 0, ``, io.ErrUnexpectedEOF, domain.OutboxUncertain, "notification_acknowledgement_unknown", false},
 	} {

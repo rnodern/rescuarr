@@ -15,7 +15,7 @@ CREATE TABLE prowl_routes (
 CREATE TABLE prowl_deliveries (
     outbox_id TEXT PRIMARY KEY REFERENCES notification_outbox(id) ON DELETE CASCADE,
     route_id TEXT NOT NULL REFERENCES prowl_routes(id),
-    category TEXT NOT NULL CHECK (category IN ('attention', 'recovery', 'incident', 'resolution', 'pause', 'test', 'digest')),
+    category TEXT NOT NULL CHECK (category IN ('attention', 'recovery', 'incident', 'resolution', 'pause', 'test', 'digest', 'queue_overflow')),
     collected INTEGER NOT NULL DEFAULT 1 CHECK (collected > 0),
     lease_until TEXT NOT NULL DEFAULT ''
 ) STRICT;

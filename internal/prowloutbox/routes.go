@@ -85,7 +85,8 @@ func (s *Service) Configure(ctx context.Context, input ConfigureRoute) (Route, e
 	if input.Actor == "" || !routeValid(route) || input.KeyRef == "" || len(input.KeyRef) > 128 {
 		return Route{}, ErrInvalid
 	}
-	if _, err := s.db.ReadSecret(input.KeyRef); err != nil {
+	key, err := s.db.ReadSecret(input.KeyRef)
+	if err != nil || !prowl.ValidAPIKey(key) {
 		return Route{}, ErrInvalid
 	}
 	if route.Categories == 0 {
@@ -95,7 +96,7 @@ func (s *Service) Configure(ctx context.Context, input ConfigureRoute) (Route, e
 		route.Timezone = "UTC"
 	}
 	now := s.clock.Now()
-	err := s.db.Write(ctx, func(tx *sql.Tx) error {
+	err = s.db.Write(ctx, func(tx *sql.Tx) error {
 		if route.ID == "" {
 			var count int
 			if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM prowl_routes`).Scan(&count); err != nil {

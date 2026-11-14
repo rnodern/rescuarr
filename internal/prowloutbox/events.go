@@ -70,7 +70,7 @@ func matchingRoutes(ctx context.Context, tx *sql.Tx, category Category) ([]Route
 func eventRoute(event domain.Event) (Category, string, string) {
 	switch event.Kind {
 	case "action_required", "action_unresolved":
-		return Attention, "attention", string(event.CaseID)
+		return Attention, "attention", string(event.ID)
 	case "recovery_verified":
 		return Recovery, "recovery", string(event.IntentID)
 	case "incident_opened", "incident_reopened":
@@ -140,7 +140,10 @@ func (s *Service) enqueue(ctx context.Context, tx *sql.Tx, route Route, event do
 		return "", err
 	}
 	if count >= maxPending {
-		return "", nil
+		if category == "test" {
+			return "", ErrLimit
+		}
+		return "", recordOverflow(ctx, tx, route, event)
 	}
 	id := domain.OutboxID(store.NewID())
 	if digest {
@@ -153,6 +156,32 @@ func (s *Service) enqueue(ctx context.Context, tx *sql.Tx, route Route, event do
 	}
 	_, err = tx.ExecContext(ctx, `INSERT INTO prowl_deliveries (outbox_id, route_id, category) VALUES (?, ?, ?)`, id, route.ID, category)
 	return id, err
+}
+
+// recordOverflow keeps one local suppression record per route revision and
+// hour of occurrence without adding another pending delivery.
+func recordOverflow(ctx context.Context, tx *sql.Tx, route Route, event domain.Event) error {
+	when := event.OccurredAt.UTC()
+	hash := sha256.Sum256([]byte("queue-overflow/" + stamp(when.Truncate(time.Hour))))
+	key := fmt.Sprintf("%x", hash)
+	var id domain.OutboxID
+	err := tx.QueryRowContext(ctx, `SELECT id FROM notification_outbox WHERE route_id = ? AND route_revision = ? AND dedupe_key = ?`,
+		route.ID, route.Revision, key).Scan(&id)
+	if err == nil {
+		_, err = tx.ExecContext(ctx, `UPDATE prowl_deliveries SET collected = min(collected + 1, 10000) WHERE outbox_id = ?`, id)
+		return err
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	id = domain.OutboxID(store.NewID())
+	if _, err := tx.ExecContext(ctx, `INSERT INTO notification_outbox (id, event_id, route_id, route_revision, dedupe_key,
+		state, scheduled_at, expires_at, attempts, reason) VALUES (?, ?, ?, ?, ?, 'suppressed', ?, ?, 0, 'notification_queue_full')`,
+		id, event.ID, route.ID, route.Revision, key, stamp(when), stamp(when.Add(72*time.Hour))); err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, `INSERT INTO prowl_deliveries (outbox_id, route_id, category) VALUES (?, ?, 'queue_overflow')`, id, route.ID)
+	return err
 }
 
 // QueueTest records a generic test for the explicitly selected current route.
@@ -190,9 +219,6 @@ func (s *Service) QueueTest(ctx context.Context, id domain.RouteID, revision dom
 			return err
 		}
 		delivery, err = s.enqueue(ctx, tx, route, event, "test", "test/"+string(event.ID), due, false)
-		if err == nil && delivery == "" {
-			return ErrLimit
-		}
 		return err
 	})
 	return delivery, err
