@@ -72,6 +72,18 @@ def validation_category(error):
         problems = json.loads(body) if len(body) <= 8192 else None
     except (OSError, ValueError):
         return "validationUnknown"
+    if isinstance(problems, dict):
+        messages = [problems.get("message", ""), problems.get("description", "")]
+        combined = " ".join(value.lower() for value in messages if isinstance(value, str))
+        if "not null constraint failed" in combined:
+            if "series.malids" in combined or "series.anilistids" in combined:
+                return "missingSeriesAnimeIDArrays"
+            return "databaseRequiredField"
+        if "unique constraint failed" in combined:
+            return "databaseDuplicateIdentity"
+        if "constraint failed" in combined:
+            return "databaseConstraint"
+        return "validationUnknown"
     if not isinstance(problems, list):
         return "validationUnknown"
     for problem in problems:
@@ -112,7 +124,9 @@ class Arr:
         except urllib.error.HTTPError as error:
             with error:
                 route = path.split("/")[0]
-                category = validation_category(error) if error.code == 400 and method == "POST" and route == "indexer" else ""
+                inspect_validation = method == "POST" and ((route == "indexer" and error.code == 400)
+                                                           or (route == "series" and error.code in (400, 409)))
+                category = validation_category(error) if inspect_validation else ""
             raise LabFailure(f"{method}:{route}:HTTP{error.code}" + (f":{category}" if category else "")) from None
 
     def read(self, path, **query):

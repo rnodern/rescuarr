@@ -55,6 +55,8 @@ def series_metadata():
         "status": "ended",
         "originalLanguage": "en",
         "runtime": 15,
+        "malIds": [],
+        "aniListIds": [],
         "seasons": [{"seasonNumber": 1, "images": []}],
         "episodes": [
             {"tvdbId": TVDB_ID + number, "seasonNumber": 1, "episodeNumber": number, "title": f"Episode {number}",
