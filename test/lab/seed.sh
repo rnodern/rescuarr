@@ -28,3 +28,9 @@ ffmpeg -nostdin -hide_banner -loglevel error \
 # The enclosing temporary directory remains inaccessible to other host users.
 chmod 755 "$1/tls" "$1/media"
 chmod 644 "$1/tls/root.pem" "$1/tls/source.key" "$1/tls/source.pem" "$1/media/synthetic.mkv"
+if [[ "${2:-}" == sonarr/v5-language-pack ]]; then
+  # The synthetic AAC track has no speech. Its stream tag is the test input.
+  ffmpeg -nostdin -hide_banner -loglevel error -i "$1/media/synthetic.mkv" \
+    -map 0 -c copy -metadata:s:a:0 language=heb -fflags +bitexact "$1/media/synthetic-hebrew.mkv"
+  chmod 644 "$1/media/synthetic-hebrew.mkv"
+fi

@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 from source import (
     CAPABILITIES,
+    LANGUAGE_PACK_PHASE,
     NEWS_DOMAIN,
     NEWS_GROUP,
     News,
@@ -108,6 +109,23 @@ class SyntheticSourceTest(unittest.TestCase):
                         self.assertIn(b"=ybegin", response)
                         self.assertTrue(response.endswith(b".\r\n"))
                 self.assertEqual(handler.server.missing_articles[target], {(1, "BODY")})
+
+    def test_language_pack_has_independent_episode_files_and_articles(self):
+        namespace = {"nzb": "http://www.newzbin.com/DTD/2003/nzb"}
+        english, hebrew = b"english bytes", b"hebrew bytes"
+        root = ET.fromstring(nzb("season1", LANGUAGE_PACK_PHASE, english, hebrew=hebrew))
+        files = root.findall("nzb:file", namespaces=namespace)
+        self.assertEqual(len(files), 2)
+        self.assertIn("S01E01", files[0].get("subject"))
+        self.assertIn("S01E02", files[1].get("subject"))
+        handler = News.__new__(News)
+        handler.server = SimpleNamespace(media=english, hebrew=hebrew)
+        for number, data, file in zip((1, 2), (hebrew, english), files, strict=True):
+            message = file.findtext("nzb:segments/nzb:segment", namespaces=namespace)
+            self.assertEqual(message, article_id(f"episode{number}", LANGUAGE_PACK_PHASE, 1))
+            handler.wfile = io.BytesIO()
+            handler.reply_article(b"BODY", f"<{message}>".encode("ascii"))
+            self.assertIn(f"crc32={binascii.crc32(data):08x}".encode("ascii"), handler.wfile.getvalue())
 
     def test_nzb_segments_match_exact_yenc_articles(self):
         data = bytes(range(256)) * (SEGMENT_BYTES // 256 + 1)

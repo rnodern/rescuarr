@@ -14,6 +14,8 @@ from probe import (
     SONARR_V5_EMPTY_PACK,
     SONARR_V5_ADAPTER_PACK,
     SONARR_V5_ID_IMPORT,
+    SONARR_V5_LANGUAGE_PACK,
+    SONARR_V5_SCENARIOS,
     TARGETS as ARR_BUILDS,
     arr_key,
     call_json,
@@ -876,19 +878,23 @@ def run_scenarios(report, scenario):
         result["stage"] = "arrSetup"
         terminal_case = case == "replace-terminal"
         id_only_case = scenario == SONARR_V5_ID_IMPORT
+        language_case = scenario == SONARR_V5_LANGUAGE_PACK
         # Sonarr 5 hides completed downloads from Activity when completed
         # handling is off, including jobs that its checker already blocked.
-        profile = arr.setup(automatic_redownload=not terminal_case, completed_handling=id_only_case)
+        profile = arr.setup(automatic_redownload=not terminal_case, completed_handling=id_only_case or language_case)
         result["settings"] = {
             "profile": PROFILE_NAME, "profileId": profile["id"], "cutoff": profile["cutoff"],
-            "root": "/library", "category": CATEGORY[product], "completedHandling": id_only_case,
+            "root": "/library", "category": CATEGORY[product], "completedHandling": id_only_case or language_case,
             "removeCompletedDownloads": False, "removeFailedDownloads": False, "rss": False,
             "automaticRedownloadFailed": not terminal_case,
         }
         result["stage"] = "mediaSetup"
         targets = arr.media(profile["id"])
         result["stage"] = "exercise"
-        if scenario in (SONARR_V5_EMPTY_PACK, SONARR_V5_ADAPTER_PACK):
+        if language_case:
+            from language_pack import language_pack_replacement
+            language_pack_replacement(arr, targets[0], targets[1], result)
+        elif scenario in (SONARR_V5_EMPTY_PACK, SONARR_V5_ADAPTER_PACK):
             # Import lazily to keep the specialised fixture out of other scenarios.
             from empty_pack import empty_pack_replacement, run_go_adapter
             if scenario == SONARR_V5_ADAPTER_PACK:
@@ -904,7 +910,7 @@ def run_scenarios(report, scenario):
         else:
             reject_replace(arr, targets[0], targets[1], result, remove=case == "reject-remove",
                            lose_response=case == "reject-lost-response")
-        if case == "import" or terminal_case or scenario in (SONARR_V5_ID_IMPORT, SONARR_V5_EMPTY_PACK, SONARR_V5_ADAPTER_PACK):
+        if case == "import" or terminal_case or scenario in SONARR_V5_SCENARIOS:
             result.update(status="observed", stage="complete", qualification="awaitingIndependentReview")
         else:
             result.update(status="observed", stage="complete", qualification="terminalOriginalUnproven")
