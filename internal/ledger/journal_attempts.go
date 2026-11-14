@@ -270,6 +270,22 @@ func (j *Journal) RecordOutcome(ctx context.Context, lease Reconciliation, outco
 		if err := actionEvent(ctx, tx, row.intent, "action_readback_recorded", reason, current.ObservedAt, slices.Compact(evidence)...); err != nil {
 			return err
 		}
+		var notify domain.EventKind
+		switch {
+		case current.Verification == domain.VerificationEffect && state == domain.IntentCompleted:
+			notify = "recovery_verified"
+		case state == domain.IntentReconciling && attempt.outcome.AttemptID == "":
+			notify = "action_unresolved"
+		}
+		if notify != "" && j.notify != nil {
+			if err := j.notify(ctx, tx, domain.Event{
+				ID: domain.EventID(store.NewID()), Actor: row.intent.Actor, Kind: notify,
+				Scope:  domain.Scope{Kind: domain.ScopeInstance, Instance: row.intent.Proposal.Operation.Job.Instance},
+				CaseID: row.intent.Proposal.CaseID, IntentID: row.intent.ID, Reason: reason, OccurredAt: current.ObservedAt,
+			}); err != nil {
+				return err
+			}
+		}
 		committed = current
 		return nil
 	})
