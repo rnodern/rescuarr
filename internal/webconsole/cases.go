@@ -36,7 +36,7 @@ func (c console) cases(w http.ResponseWriter, r *http.Request) {
 	if raw := params.Get("limit"); raw != "" {
 		limit, err := strconv.Atoi(raw)
 		if err != nil || limit < 1 || limit > 100 {
-			c.errorPage(w, http.StatusBadRequest, "cases", "Invalid page size", "Choose a page size from 1 to 100.")
+			c.errorPage(w, r, http.StatusBadRequest, "cases", "Invalid page size", "Choose a page size from 1 to 100.")
 			return
 		}
 		query.Limit = limit
@@ -45,7 +45,7 @@ func (c console) cases(w http.ResponseWriter, r *http.Request) {
 		(query.Reason != "" && !localID(string(query.Reason))) ||
 		(query.State != "" && !slicesState(query.State)) ||
 		len(query.Search) > 200 || len(query.After) > 512 {
-		c.errorPage(w, http.StatusBadRequest, "cases", "Invalid case filters", "Remove the filters or start again from Cases.")
+		c.errorPage(w, r, http.StatusBadRequest, "cases", "Invalid case filters", "Remove the filters or start again from Cases.")
 		return
 	}
 	status, ok := c.loadStatus(w, r)
@@ -54,7 +54,7 @@ func (c console) cases(w http.ResponseWriter, r *http.Request) {
 	}
 	cases, err := c.Read.Cases(r.Context(), query)
 	if err != nil {
-		c.readError(w, err)
+		c.readError(w, r, err)
 		return
 	}
 	content := casesView{Cases: cases.Cases, Query: query, States: caseStates}
@@ -68,7 +68,7 @@ func (c console) cases(w http.ResponseWriter, r *http.Request) {
 		next.Set("after", cases.After)
 		content.Next = c.BasePath + "/cases?" + next.Encode()
 	}
-	c.render(w, http.StatusOK, "cases", page{Title: "Cases", Active: "cases", Status: status, Body: content})
+	c.render(w, r, http.StatusOK, "cases", page{Title: "Cases", Active: "cases", Status: status, Body: content})
 }
 
 func slicesState(state domain.CaseState) bool {
@@ -83,7 +83,7 @@ func slicesState(state domain.CaseState) bool {
 func (c console) caseDetail(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("caseID")
 	if !localID(id) {
-		c.readError(w, app.ErrNotFound)
+		c.readError(w, r, app.ErrNotFound)
 		return
 	}
 	status, ok := c.loadStatus(w, r)
@@ -92,16 +92,16 @@ func (c console) caseDetail(w http.ResponseWriter, r *http.Request) {
 	}
 	detail, err := c.Read.Case(r.Context(), domain.CaseID(id))
 	if err != nil {
-		c.readError(w, err)
+		c.readError(w, r, err)
 		return
 	}
-	c.render(w, http.StatusOK, "case", page{Title: "Case " + id, Active: "cases", Status: status, Body: detail})
+	c.render(w, r, http.StatusOK, "case", page{Title: "Case " + id, Active: "cases", Status: status, Body: detail})
 }
 
 func (c console) intent(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("intentID")
 	if !localID(id) {
-		c.readError(w, app.ErrNotFound)
+		c.readError(w, r, app.ErrNotFound)
 		return
 	}
 	status, ok := c.loadStatus(w, r)
@@ -110,8 +110,8 @@ func (c console) intent(w http.ResponseWriter, r *http.Request) {
 	}
 	intent, err := c.Read.Intent(r.Context(), domain.IntentID(id))
 	if err != nil {
-		c.readError(w, err)
+		c.readError(w, r, err)
 		return
 	}
-	c.render(w, http.StatusOK, "intent", page{Title: "Action " + id, Active: "cases", Status: status, Body: intent})
+	c.render(w, r, http.StatusOK, "intent", page{Title: "Action " + id, Active: "cases", Status: status, Body: intent})
 }
