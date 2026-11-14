@@ -110,6 +110,75 @@ func TestArrStatusAndQueue(t *testing.T) {
 	}
 }
 
+func TestQueueNoEligibleFilesWithPrivatePath(t *testing.T) {
+	for _, tc := range []struct {
+		name, suffix string
+		want         QueueFinding
+	}{
+		{"windows", ` in C:\Synthetic\Private Transfer\Season Pack`, FindingNoEligibleFiles},
+		{"unc", ` in \\synthetic-host\private-transfer\season-pack`, FindingNoEligibleFiles},
+		{"unix", " in /synthetic/private-transfer/season-pack", FindingNoEligibleFiles},
+		{"bare", ".", FindingNoEligibleFiles},
+		{"empty-path", " in ", FindingOtherMessage},
+		{"similar-warning", " in this particular situation", FindingOtherMessage},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := arrFor(t, domain.ProductSonarr, func(r *http.Request) (*http.Response, error) {
+				body := fmt.Sprintf(`{"page":1,"pageSize":100,"totalRecords":1,"records":[
+					{"id":1001,"seriesId":12,"episodeId":41,"statusMessages":[{"messages":[%q]}]}]}`,
+					"No files found are eligible for import"+tc.suffix)
+				return response(http.StatusOK, body), nil
+			})
+			snapshot, err := a.Queue(t.Context(), 1, observedAt)
+			if err != nil || len(snapshot.Records) != 1 {
+				t.Fatalf("queue read yielded %d records: %v", len(snapshot.Records), err)
+			}
+			if got := snapshot.Records[0].Findings; !reflect.DeepEqual(got, []QueueFinding{tc.want}) {
+				t.Fatalf("findings %v, want %s", got, tc.want)
+			}
+			jsonSnapshot, err := json.Marshal(snapshot)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(strings.ToLower(string(jsonSnapshot)), "private") || strings.Contains(string(jsonSnapshot), "eligible for import") {
+				t.Fatal("raw queue warning or its private path appeared in the snapshot")
+			}
+		})
+	}
+}
+
+func TestSonarrQueueKeepsSeriesHintForUnmappedRows(t *testing.T) {
+	a := arrFor(t, domain.ProductSonarr, func(r *http.Request) (*http.Response, error) {
+		return response(http.StatusOK, `{"page":1,"pageSize":100,"totalRecords":5,"records":[
+			{"id":1,"seriesId":18,"episodeId":19,"series":{"id":18}},
+			{"id":2,"seriesId":18},
+			{"id":3,"episodeId":19,"series":{"id":18}},
+			{"id":4,"seriesId":18,"episodeId":19,"series":{"id":20}},
+			{"id":5,"seriesId":18,"episodeId":19,"episode":{"id":19,"seriesId":20}}
+		]}`), nil
+	})
+	queue, err := a.Queue(t.Context(), 1, observedAt)
+	if err != nil || len(queue.Records) != 5 {
+		t.Fatalf("queue read returned %d records: %v", len(queue.Records), err)
+	}
+	for i, want := range []struct {
+		series int64
+		exact  bool
+	}{{18, true}, {18, false}, {18, false}, {0, false}, {0, false}} {
+		row := queue.Records[i]
+		if row.SeriesID != want.series || row.Target.Valid() != want.exact {
+			t.Fatalf("row %d has unexpected series or target: %+v", i+1, row)
+		}
+	}
+	encoded, err := json.Marshal(queue.Records[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), `"SeriesID":18`) {
+		t.Fatal("unmapped series hint entered serialised queue evidence")
+	}
+}
+
 func TestQueuePagingHoldsInconsistentScans(t *testing.T) {
 	for _, test := range []struct {
 		name    string

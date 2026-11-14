@@ -61,12 +61,14 @@ func (c console) importPreview(w http.ResponseWriter, r *http.Request) {
 	title := "Import preview"
 	if result.Episode != nil {
 		title = "Episode filename check"
+	} else if result.Replacement != nil {
+		title = "Replacement preview"
 	}
 	switch {
 	case errors.Is(err, app.ErrConflict):
 		c.render(w, r, http.StatusConflict, "approval-error", page{Title: "The case changed", Active: "cases", Body: id, Status: status})
 	case errors.Is(err, app.ErrHeld):
-		if result.Episode == nil {
+		if result.Episode == nil && result.Replacement == nil {
 			title = "Import preview unavailable"
 			if result.Hold == "" {
 				result.Hold = "Check the current download in Arr, then return to this case for a fresh preview."

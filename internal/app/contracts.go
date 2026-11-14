@@ -54,12 +54,38 @@ type CaseDetail struct {
 }
 
 type ImportPreview struct {
-	Reason     domain.ReasonCode
-	Candidates int
-	Eligible   int
-	Hold       string
-	Episode    *domain.EpisodeNameReview
+	Reason      domain.ReasonCode
+	Candidates  int
+	Eligible    int
+	Hold        string
+	Episode     *domain.EpisodeNameReview
+	Replacement *ReplacementPreview
 }
+
+// ReplacementPreview describes a read-only plan for the exact Sonarr download.
+type ReplacementPreview struct {
+	Release      string
+	Episodes     []ReplacementEpisode
+	SearchCount  int
+	UnclearCount int
+}
+
+type ReplacementEpisode struct {
+	Target domain.TargetRef
+	Label  string
+	Status ReplacementStatus
+}
+
+type ReplacementStatus string
+
+const (
+	ReplacementSearch        ReplacementStatus = "search"
+	ReplacementInLibrary     ReplacementStatus = "in_library"
+	ReplacementOtherDownload ReplacementStatus = "other_download"
+	ReplacementUnmonitored   ReplacementStatus = "unmonitored"
+	ReplacementUnaired       ReplacementStatus = "unaired"
+	ReplacementUnclear       ReplacementStatus = "unclear"
+)
 
 type ImportPreviewReader interface {
 	ImportPreview(context.Context, domain.CaseID, domain.Revision) (ImportPreview, error)

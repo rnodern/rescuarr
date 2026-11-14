@@ -96,6 +96,8 @@ const (
 )
 
 type QueueRecord struct {
+	// SeriesID is an in-memory Sonarr hint, even when no exact episode is mapped.
+	SeriesID      int64 `json:"-"`
 	ID            int64
 	Target        domain.TargetRef
 	DownloadID    string
@@ -234,6 +236,12 @@ func (a *Arr) queueRecord(row queueWire) QueueRecord {
 		SizeBytes:     nonnegative(row.Size), AddedAt: row.AddedAt, Findings: findings,
 		OutputPath: exactToken(row.OutputPath, 4096),
 	}
+	if a.reader.product == domain.ProductSonarr {
+		record.SeriesID = queueSeriesHint(row)
+		if record.SeriesID == 0 {
+			record.Target = domain.TargetRef{}
+		}
+	}
 	record.Release = boundedText(row.Title, 300)
 	if strings.ContainsAny(record.Release, "/\\") {
 		record.Release = ""
@@ -260,10 +268,26 @@ func (a *Arr) queueRecord(row queueWire) QueueRecord {
 	return record
 }
 
+func queueSeriesHint(row queueWire) int64 {
+	var hint int64
+	for _, id := range [...]int64{row.SeriesID, row.Series.ID, row.Episode.Series} {
+		if id <= 0 {
+			continue
+		}
+		if hint != 0 && id != hint {
+			return 0
+		}
+		hint = id
+	}
+	return hint
+}
+
 func queueFinding(product domain.Product, message string) QueueFinding {
+	const noEligibleFiles = "no files found are eligible for import"
 	line := strings.ToLower(strings.TrimSpace(message))
+	path, hasPath := strings.CutPrefix(line, noEligibleFiles+" in ")
 	switch {
-	case strings.TrimSuffix(line, ".") == "no files found are eligible for import":
+	case strings.TrimSuffix(line, ".") == noEligibleFiles, hasPath && absoluteQueueMessagePath(path):
 		return FindingNoEligibleFiles
 	case product == domain.ProductSonarr &&
 		strings.HasPrefix(line, "found matching series via grab history, but release was matched to series by id. automatic import is not possible"):
@@ -271,6 +295,12 @@ func queueFinding(product domain.Product, message string) QueueFinding {
 	default:
 		return FindingOtherMessage
 	}
+}
+
+// Arr includes paths in its own filesystem format, which can differ from ours.
+func absoluteQueueMessagePath(path string) bool {
+	return strings.HasPrefix(path, "/") || strings.HasPrefix(path, `\\`) ||
+		len(path) >= 3 && path[0] >= 'a' && path[0] <= 'z' && path[1] == ':' && (path[2] == '\\' || path[2] == '/')
 }
 
 func (a *Arr) target(seriesID, episodeID, movieID int64) domain.TargetRef {

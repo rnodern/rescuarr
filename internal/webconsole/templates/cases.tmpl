@@ -64,6 +64,7 @@
     {{if eq .Body.Case.Reason "connection_removed"}}<p>The connection was removed. Rescuarr has stopped checking this download.</p>
     {{else}}
     {{if .Body.Proposals}}<ul class="links">{{range .Body.Proposals}}<li><a href="{{$base}}/cases/{{.CaseID}}/review/{{.ID}}">Review {{action .Operation.Action}}</a><span>Expires {{template "local-time" .ExpiresAt}}</span></li>{{end}}</ul>
+    {{else if .Body.ReviewReplacement}}<p>Check which episodes are already in the library, covered by another download, or still need a search.</p>
     {{else if and (eq .Status.Mode "observe") .Body.ReviewNames}}<p>Rescuarr checks the filenames during queue scans. Automatic import is unavailable for this connection.</p>
     {{else if eq .Status.Mode "observe"}}<p>Observe mode lets you inspect the download. Make any import or retry in Arr.</p>
     {{else}}<p>No recovery proposal is available.</p>{{end}}
@@ -76,7 +77,7 @@
     <form method="post" action="{{$base}}/cases/{{.Body.Case.ID}}/import-preview">
       <input type="hidden" name="csrf" value="{{.CSRF}}">
       <input type="hidden" name="revision" value="{{.Body.Case.Revision}}">
-      <button type="submit">{{if .Body.ReviewNames}}{{if .Body.Case.Display.EpisodeCheck}}Recheck episode filename{{else}}Check episode filename{{end}}{{else}}Check Arr import candidates{{end}}</button>
+      <button type="submit">{{if .Body.ReviewNames}}{{if .Body.Case.Display.EpisodeCheck}}Recheck episode filename{{else}}Check episode filename{{end}}{{else if .Body.ReviewReplacement}}Check which episodes still need a search{{else}}Check Arr import candidates{{end}}</button>
     </form>
     {{end}}
     {{end}}
@@ -104,6 +105,8 @@
 <p><a href="{{.Base}}/cases/{{.Body.CaseID}}">Back to download</a></p>
 <h1>{{.Title}}</h1>
 {{if .Body.Result.Hold}}<p class="notice">{{.Body.Result.Hold}}</p>
+{{else if .Body.Result.Replacement}}
+{{template "replacement-preview" .Body.Result.Replacement}}
 {{else if .Body.Result.Episode}}
 <section class="panel">{{template "episode-check-result" .Body.Result.Episode}}</section>
 {{else}}
@@ -129,4 +132,26 @@
     {{if .Filename}}<dt>Video file</dt><dd>{{.Filename}}</dd>{{end}}
   </dl>
   <p>In Sonarr, go to <strong>Activity → Queue → Manual Import</strong> for this download. Confirm the selected file, series and episode before importing.</p>
+{{end}}
+
+{{define "replacement-preview"}}
+<section class="panel">
+  {{if .Release}}<p><strong>Download release</strong> · {{.Release}}</p>{{end}}
+  {{if .UnclearCount}}
+  <p class="notice">Sonarr has queue entries whose episodes could not be identified. Confirm what they cover before starting a replacement search.</p>
+  {{end}}
+  {{if .SearchCount}}<p>{{.SearchCount}} {{if eq .SearchCount 1}}episode still needs{{else}}episodes still need{{end}} a search.</p>
+  {{else if not .UnclearCount}}<p>No episodes need a new search.</p>{{end}}
+  {{if not .UnclearCount}}
+  <p>If you’ve confirmed the pack has no usable files, remove this one download from the Sonarr queue and blocklist the release. Leave download-client removal and automatic search off.{{if .SearchCount}} Then check that each episode marked <strong>Search</strong> is still wanted in Sonarr before searching it.{{end}}</p>
+  {{end}}
+  <p>Preview only. Rescuarr has made no changes in Sonarr.</p>
+  <table>
+    <thead><tr><th scope="col">Episode</th><th scope="col">Recommendation</th></tr></thead>
+    <tbody>{{range .Episodes}}<tr>
+      <th scope="row">{{.Label}}</th>
+      <td data-label="Recommendation">{{if eq .Status "search"}}<strong>Search</strong>{{else if eq .Status "in_library"}}Already in library{{else if eq .Status "other_download"}}Another download in queue{{else if eq .Status "unmonitored"}}Unmonitored{{else if eq .Status "unaired"}}No confirmed past airing{{else}}Needs review{{end}}</td>
+    </tr>{{end}}</tbody>
+  </table>
+</section>
 {{end}}

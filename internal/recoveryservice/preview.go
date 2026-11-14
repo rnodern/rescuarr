@@ -45,6 +45,9 @@ func (s *PreviewService) ImportPreview(ctx context.Context, id domain.CaseID, re
 	if err != nil {
 		return app.ImportPreview{}, err
 	}
+	if proof.Instance.Product == domain.ProductSonarr && proof.Case.Reason == domain.ReasonCode(observe.FindingNoEligibleFiles) {
+		return s.previewMissingFiles(ctx, id, revision, proof)
+	}
 	if len(proof.Members) == 0 || len(proof.Members) > 8 {
 		return heldPreview("Import preview supports jobs with up to eight identified targets.")
 	}

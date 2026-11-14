@@ -22,8 +22,9 @@ type casesView struct {
 
 type caseView struct {
 	app.CaseDetail
-	PreviewHold string
-	ReviewNames bool
+	PreviewHold       string
+	ReviewNames       bool
+	ReviewReplacement bool
 }
 
 var caseStates = []domain.CaseState{
@@ -114,6 +115,13 @@ func (c console) caseDetail(w http.ResponseWriter, r *http.Request) {
 	}
 	display := detail.Case.Display
 	body := caseView{CaseDetail: detail, PreviewHold: previewVersionHold(display)}
+	if detail.Case.Reason == domain.ReasonCode(observe.FindingNoEligibleFiles) && display.Product == domain.ProductSonarr {
+		body.ReviewReplacement = true
+		body.PreviewHold = ""
+		if !detail.Case.Job.CompleteSet {
+			body.PreviewHold = "Sonarr has not identified every episode in this download. Check the release in Sonarr before removing it."
+		}
+	}
 	if detail.Case.Reason == domain.ReasonCode(observe.FindingSeriesIDOnly) {
 		body.ReviewNames = len(detail.Case.Targets) == 1 && importflow.SupportsEpisodeNameReview(display.Product, display.Version)
 		if body.ReviewNames {
