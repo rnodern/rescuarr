@@ -2,6 +2,7 @@ package observe
 
 import (
 	"context"
+	"encoding/json"
 	"net/url"
 	"strconv"
 	"time"
@@ -18,6 +19,8 @@ type HistoryRecord struct {
 	IndexerLabel string
 	ClientLabel  string
 	FileID       int64
+	SourceTitle  string                  `json:"-"`
+	Languages    []domain.ImportLanguage `json:"-"`
 }
 
 type HistorySnapshot struct {
@@ -32,14 +35,16 @@ func (a *Arr) History(ctx context.Context, downloadID string, generation domain.
 		return HistorySnapshot{}, ErrConfiguration
 	}
 	type record struct {
-		ID         int64     `json:"id"`
-		SeriesID   int64     `json:"seriesId"`
-		EpisodeID  int64     `json:"episodeId"`
-		MovieID    int64     `json:"movieId"`
-		DownloadID string    `json:"downloadId"`
-		Event      string    `json:"eventType"`
-		At         time.Time `json:"date"`
-		Data       struct {
+		ID          int64           `json:"id"`
+		SeriesID    int64           `json:"seriesId"`
+		EpisodeID   int64           `json:"episodeId"`
+		MovieID     int64           `json:"movieId"`
+		DownloadID  string          `json:"downloadId"`
+		Event       string          `json:"eventType"`
+		At          time.Time       `json:"date"`
+		SourceTitle json.RawMessage `json:"sourceTitle"`
+		Languages   json.RawMessage `json:"languages"`
+		Data        struct {
 			Indexer string `json:"indexer"`
 			Client  string `json:"downloadClientName"`
 		} `json:"data"`
@@ -52,10 +57,17 @@ func (a *Arr) History(ctx context.Context, downloadID string, generation domain.
 			err = ErrPartial
 			continue
 		}
+		var title string
+		_ = json.Unmarshal(row.SourceTitle, &title)
+		var languages []fileLanguageWire
+		if json.Unmarshal(row.Languages, &languages) != nil {
+			languages = nil
+		}
 		out.Records = append(out.Records, HistoryRecord{
 			ID: row.ID, Target: a.target(row.SeriesID, row.EpisodeID, row.MovieID), DownloadID: downloadID,
 			Event: state(row.Event, "grabbed", "downloadFolderImported", "downloadFailed", "downloadIgnored", "downloadImported", "episodeFileDeleted", "movieFileDeleted"), At: row.At,
 			IndexerLabel: boundedText(row.Data.Indexer, 128), ClientLabel: boundedText(row.Data.Client, 128),
+			SourceTitle: exactToken(title, 512), Languages: nativeFileLanguages(languages),
 		})
 	}
 	out.Evidence = a.observation("history", downloadID, generation, observedAt, out.Records, err)

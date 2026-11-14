@@ -58,7 +58,9 @@ func (s *PreviewService) previewMissingFiles(ctx context.Context, id domain.Case
 		current.Members[0].DownloadID != proof.Members[0].DownloadID || current.Members[0].Release != proof.Members[0].Release {
 		return app.ImportPreview{}, app.ErrConflict
 	}
-	return app.ImportPreview{Replacement: replacementPlan(current, needs)}, nil
+	plan := replacementPlan(current, needs)
+	plan.Language = reviewPackLanguage(ctx, arr, current, plan, s.clock.Now())
+	return app.ImportPreview{Replacement: plan}, nil
 }
 
 func missingFileTargets(proof observeservice.RecoveryQueue) (int64, []int64, bool) {
