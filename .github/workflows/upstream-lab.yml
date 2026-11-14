@@ -6,6 +6,21 @@ on:
       - test/lab/**
       - .github/workflows/upstream-lab.yml
   workflow_dispatch:
+    inputs:
+      scenario:
+        description: Disposable upstream scenario to run
+        type: choice
+        default: reads
+        options:
+          - reads
+          - sonarr/import
+          - radarr/import
+          - sonarr/reject-preserve
+          - radarr/reject-preserve
+          - sonarr/reject-remove
+          - radarr/reject-remove
+          - sonarr/reject-lost-response
+          - radarr/reject-lost-response
 
 permissions:
   contents: read
@@ -23,7 +38,22 @@ jobs:
       - name: Check offline fixtures
         run: python3 -B -m unittest discover -s test/lab -p 'test_*.py'
       - name: Run isolated upstream lab
-        run: test/lab/run.sh "$RUNNER_TEMP/rescuarr-upstream-lab.json"
+        env:
+          RESCUARR_SCENARIO: ${{ inputs.scenario || 'reads' }}
+        shell: bash
+        run: |
+          if [[ "$RESCUARR_SCENARIO" == reads ]]; then
+            test/lab/run.sh "$RUNNER_TEMP/rescuarr-upstream-lab.json"
+          else
+            test/lab/run.sh "$RUNNER_TEMP/rescuarr-upstream-lab.json" "$RESCUARR_SCENARIO"
+          fi
+      - name: Show sanitised evidence
+        if: always()
+        shell: bash
+        run: |
+          if [[ -s "$RUNNER_TEMP/rescuarr-upstream-lab.json" ]]; then
+            cat "$RUNNER_TEMP/rescuarr-upstream-lab.json"
+          fi
       - name: Attach lab evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
