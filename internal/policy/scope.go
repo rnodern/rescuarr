@@ -99,7 +99,7 @@ func priority(code domain.ReasonCode) int {
 	switch code {
 	case UpstreamUnavailable, AuthenticationFailed, ContractChanged:
 		return 10
-	case OwnershipConflict, TargetAmbiguous, UnknownProvenance:
+	case OwnershipConflict, TargetAmbiguous, UnknownProvenance, ConflictingCandidates:
 		return 20
 	case RootUnavailable, PathMappingMissing, PermissionDenied, LowCapacity:
 		return 30

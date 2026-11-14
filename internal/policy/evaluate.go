@@ -62,6 +62,7 @@ const (
 	CapacityUnknown            domain.ReasonCode = "capacity_unknown"
 	CapacityStale              domain.ReasonCode = "capacity_stale"
 	ClientRemovalUnsafe        domain.ReasonCode = "client_removal_unsafe"
+	ConflictingCandidates      domain.ReasonCode = "conflicting_import_assessment"
 	SourcePreservationUnknown  domain.ReasonCode = "source_preservation_unknown"
 	AwaitingRejectVerification domain.ReasonCode = "awaiting_reject_verification"
 	AwaitingArrSearch          domain.ReasonCode = "awaiting_arr_search"
@@ -116,7 +117,7 @@ func (a *assessment) evaluate() {
 	}
 
 	phase := i.JobPhase
-	if a.requireCurrent(phase.Observation, factAge) && phase.Observation.State == domain.ObservationKnown {
+	if a.requireArr(phase.Observation) && phase.Observation.State == domain.ObservationKnown {
 		switch phase.Value {
 		case PhaseDownload, PhaseProcess, PhaseImport:
 			a.find(domain.ReasonCode(phase.Value), phase.Observation)
@@ -144,7 +145,7 @@ func (a *assessment) evaluate() {
 		a.evaluateSearch(*i.PriorReject)
 		return
 	}
-	if !a.requireCurrent(i.Import.Assessment.Observation, factAge) || i.Import.Assessment.Observation.State != domain.ObservationKnown {
+	if !a.requireArr(i.Import.Assessment.Observation) || i.Import.Assessment.Observation.State != domain.ObservationKnown {
 		a.find(StalledUnknown)
 		return
 	}
@@ -152,6 +153,10 @@ func (a *assessment) evaluate() {
 	case ImportAll, ImportSubset:
 		a.evaluateImport()
 	case ImportNone:
+		if len(i.Import.Candidates) != 0 {
+			a.hold(ConflictingCandidates, i.Import.Assessment.Observation)
+			return
+		}
 		a.evaluateReject()
 	default:
 		a.hold(UnsupportedPayload, i.Import.Assessment.Observation)
@@ -214,11 +219,22 @@ func (a *assessment) evaluateTargets() {
 		listed[target.Ref] = target
 	}
 	members := make(map[domain.TargetRef]bool)
+	queueIDs := make(map[int64]bool)
+	var generation domain.Revision
 	for _, member := range i.Case.Job.Members {
-		if _, present := listed[member.Target]; !present || member.QueueID <= 0 || member.SnapshotGeneration == 0 {
+		if generation == 0 {
+			generation = member.SnapshotGeneration
+		}
+		if _, present := listed[member.Target]; !present || member.QueueID <= 0 || queueIDs[member.QueueID] ||
+			member.SnapshotGeneration == 0 || member.SnapshotGeneration != generation {
 			a.hold(TargetAmbiguous)
 		}
+		queueIDs[member.QueueID] = true
 		members[member.Target] = true
+	}
+	if phaseGeneration := i.JobPhase.Observation.SnapshotGeneration; i.PriorReject == nil &&
+		(phaseGeneration == 0 || generation != phaseGeneration) {
+		a.hold(TargetAmbiguous, i.JobPhase.Observation)
 	}
 	for _, target := range i.Targets {
 		t := target.Target
@@ -232,8 +248,8 @@ func (a *assessment) evaluateTargets() {
 			continue
 		}
 		a.targets[t.Ref] = target
-		if !a.requireCurrent(target.Intent.Observation, factAge) || !a.requireCurrent(t.Monitored.Observation, factAge) ||
-			!a.requireCurrent(t.FileID.Observation, factAge) {
+		if !a.requireArr(target.Intent.Observation) || !a.requireArr(t.Monitored.Observation) ||
+			!a.requireArr(t.FileID.Observation) {
 			continue
 		}
 		if target.Intent.Observation.State != domain.ObservationKnown || t.Monitored.Observation.State != domain.ObservationKnown {
@@ -266,7 +282,7 @@ func (a *assessment) evaluateTargets() {
 			a.hold(UnknownEvidence, target.Intent.Observation)
 			continue
 		}
-		if !a.requireCurrent(target.CompetingGrab.Observation, factAge) {
+		if !a.requireArr(target.CompetingGrab.Observation) {
 			continue
 		}
 		if target.CompetingGrab.Value {
@@ -296,6 +312,19 @@ func (a *assessment) requireCurrent(observation domain.Observation, maxAge time.
 		a.hold(UnknownEvidence, observation)
 	}
 	return false
+}
+
+func (a *assessment) requireArr(observation domain.Observation) bool {
+	if !a.fromArr(observation) {
+		a.hold(UnknownEvidence, observation)
+		return false
+	}
+	return a.requireCurrent(observation, factAge)
+}
+
+func (a *assessment) fromArr(observation domain.Observation) bool {
+	instance := domain.Scope{Kind: domain.ScopeInstance, Instance: a.input.Instance.Ref}
+	return observation.Scope == instance && observation.Source == domain.Source(a.input.Instance.Product)
 }
 
 func (a *assessment) remember(observation domain.Observation) {

@@ -132,7 +132,37 @@ type PriorReject struct {
 	OwnedSearch        SearchAuthority
 	Targets            []domain.TargetRef
 	Outcome            domain.Outcome
+	SentAt             time.Time
+	Readback           RejectReadback     // readback recorded with Outcome
+	CurrentRetirement  domain.Observation // fresh read of the same queue absence
 }
+
+// RejectReadback binds distinct observations to the original rejection and
+// exact release and durable outcome. Refresh the queue through CurrentRetirement.
+type RejectReadback struct {
+	AttemptID       domain.AttemptID
+	Job             domain.JobRef
+	DownloadID      string
+	Release         domain.ReleaseIdentity
+	QueueIDs        []int64
+	FailedHistoryID int64
+	Queue           domain.Observation
+	FailedHistory   domain.Observation
+	Blocklist       domain.Observation
+	SourceRetained  domain.Observation
+	ClientRemoval   domain.Observation
+	DataRemoval     domain.Observation
+}
+
+const (
+	RejectQueueReadback     domain.ObservationKind = "reject_queue_absence"
+	RejectHistoryReadback   domain.ObservationKind = "reject_failed_history"
+	RejectBlocklistReadback domain.ObservationKind = "reject_blocklist_entry"
+	RejectSourceReadback    domain.ObservationKind = "reject_source_retained"
+	RejectClientReadback    domain.ObservationKind = "reject_client_removal"
+	RejectDataReadback      domain.ObservationKind = "reject_data_removal"
+	StorageProbeSource      domain.Source          = "storage_probe"
+)
 
 type Capacity struct {
 	Scope           domain.Scope

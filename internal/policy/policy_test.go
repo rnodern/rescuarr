@@ -67,7 +67,18 @@ func example(product domain.Product) Input {
 		},
 		Gates: make(map[Path]Gate),
 	}
-	input.Failure.Corroborated.Observation.Source = "sab"
+	for _, observation := range []*domain.Observation{
+		&input.JobPhase.Observation, &input.Import.Assessment.Observation, &input.Failure.Primary.Observation,
+		&input.Targets[0].Intent.Observation, &input.Targets[0].Target.Monitored.Observation,
+		&input.Targets[0].Target.FileID.Observation, &input.Targets[0].CompetingGrab.Observation,
+		&input.Targets[0].SearchAvailable.Observation, &input.Import.Candidates[0].Approved.Observation,
+	} {
+		observation.Source = domain.Source(product)
+	}
+	input.JobPhase.Observation.SnapshotGeneration = 1
+	input.Failure.Primary.Observation.SourceRecord = input.Case.Job.DownloadID
+	input.Failure.Corroborated.Observation.Source = domain.Source(domain.ProductSAB)
+	input.Failure.Corroborated.Observation.SourceRecord = input.Case.Job.DownloadID
 	for path, effects := range map[Path][]domain.EffectKind{
 		ImportOriginal: {domain.EffectLibraryImport, domain.EffectSourceRetained},
 		RejectRetain:   {domain.EffectQueueRemoval, domain.EffectBlocklist, domain.EffectSourceRetained},
@@ -176,26 +187,69 @@ func TestPermissionIntersectionAndApproval(t *testing.T) {
 	}
 }
 
-func TestReplacementRequiresAllIndependentEffects(t *testing.T) {
-	i := failed(domain.ProductRadarr)
-	got := Evaluate(i)
-	if got.Path != RejectRetain || got.Authority != AuthorityAutonomous || got.Proposal == nil {
-		t.Fatalf("failed job was not considered for source retention: %+v", got)
+func rejected(t *testing.T, i *Input, path Path) {
+	t.Helper()
+	got := Evaluate(*i)
+	if got.Path != path || got.Proposal == nil {
+		t.Fatalf("expected initial rejection plan %s: %+v", path, got)
 	}
-	outcome := domain.Outcome{AttemptID: "reject-attempt", Verification: domain.VerificationEffect, ObservedAt: i.Now.Add(-time.Second)}
+	job := i.Case.Job
+	arrScope := domain.Scope{Kind: domain.ScopeInstance, Instance: job.Ref.Instance}
+	proof := func(scope domain.Scope, id string, kind domain.ObservationKind, source domain.Source, state domain.ObservationState) domain.Observation {
+		observation := evidence(i.Now, scope, id, true).Observation
+		observation.Source, observation.Kind, observation.State = source, kind, state
+		observation.SourceRecord = job.DownloadID
+		return observation
+	}
+	owner := domain.Source(i.Instance.Product)
+	readback := RejectReadback{
+		AttemptID: "reject-attempt", Job: job.Ref, DownloadID: job.DownloadID, Release: job.Release,
+		QueueIDs: sortedQueueIDs(job), FailedHistoryID: 22,
+		Queue:          proof(arrScope, "rejected-queue", RejectQueueReadback, owner, domain.ObservationAbsent),
+		FailedHistory:  proof(arrScope, "rejected-history", RejectHistoryReadback, owner, domain.ObservationKnown),
+		Blocklist:      proof(arrScope, "rejected-blocklist", RejectBlocklistReadback, owner, domain.ObservationKnown),
+		SourceRetained: proof(job.Client, "source-retained", RejectSourceReadback, StorageProbeSource, domain.ObservationKnown),
+		ClientRemoval:  proof(job.Client, "client-removed", RejectClientReadback, domain.Source(domain.ProductSAB), domain.ObservationAbsent),
+		DataRemoval:    proof(job.Client, "data-removed", RejectDataReadback, StorageProbeSource, domain.ObservationAbsent),
+	}
+	outcome := domain.Outcome{AttemptID: readback.AttemptID, Verification: domain.VerificationEffect, ObservedAt: i.Now.Add(-time.Second)}
+	refs := map[domain.EffectKind]domain.EvidenceID{
+		domain.EffectQueueRemoval: readback.Queue.ID, domain.EffectBlocklist: readback.Blocklist.ID,
+		domain.EffectSourceRetained: readback.SourceRetained.ID, domain.EffectClientRemoval: readback.ClientRemoval.ID,
+		domain.EffectDataRemoval: readback.DataRemoval.ID,
+	}
 	for _, effect := range got.Proposal.Operation.Effects {
-		outcome.Effects = append(outcome.Effects, domain.EffectResult{Effect: effect, Verification: domain.VerificationEffect, Evidence: []domain.EvidenceID{"readback"}})
+		outcome.Effects = append(outcome.Effects, domain.EffectResult{Effect: effect, Verification: domain.VerificationEffect,
+			Evidence: []domain.EvidenceID{refs[effect.Kind]},
+		})
 	}
-	i.PriorReject = &PriorReject{Job: i.Case.Job.Ref, Path: RejectRetain, CapabilityRevision: 1, OwnedSearch: SearchByRescuarr, Targets: got.Proposal.Operation.Targets, Outcome: outcome}
-	got = Evaluate(i)
-	if got.Path != SearchScoped || got.Proposal == nil || len(got.Proposal.Operation.Targets) != 1 ||
-		got.Proposal.Operation.Effects[0].Target != i.Targets[0].Target.Ref {
-		t.Fatalf("search is not movie-scoped: %+v", got)
-	}
-	i.PriorReject.Outcome.Effects = outcome.Effects[:1]
-	got = Evaluate(i)
-	if got.Proposal != nil || !hasHold(got, AwaitingRejectVerification) {
-		t.Fatalf("queue disappearance substituted for blocklist verification: %+v", got)
+	current := readback.Queue
+	current.ID, current.ObservedAt = "fresh-queue-absence", i.Now
+	i.PriorReject = &PriorReject{Job: job.Ref, Path: path, CapabilityRevision: got.Proposal.CapabilityRevision,
+		OwnedSearch: SearchByRescuarr, Targets: got.Proposal.Operation.Targets, Outcome: outcome,
+		Readback: readback, SentAt: i.Now.Add(-4 * time.Second), CurrentRetirement: current}
+	i.JobPhase.Observation = current
+}
+
+func TestReplacementRequiresAllIndependentEffects(t *testing.T) {
+	for _, path := range []Path{RejectRetain, RejectRemove} {
+		t.Run(string(path), func(t *testing.T) {
+			i := failed(domain.ProductRadarr)
+			if path == RejectRemove {
+				delete(i.Capabilities, RejectRetain)
+			}
+			rejected(t, &i, path)
+			got := Evaluate(i)
+			if got.Path != SearchScoped || got.Proposal == nil || len(got.Proposal.Operation.Targets) != 1 ||
+				got.Proposal.Operation.Effects[0].Target != i.Targets[0].Target.Ref {
+				t.Fatalf("search is not movie-scoped: %+v", got)
+			}
+			i.PriorReject.Outcome.Effects = i.PriorReject.Outcome.Effects[:1]
+			got = Evaluate(i)
+			if got.Proposal != nil || !hasHold(got, AwaitingRejectVerification) {
+				t.Fatalf("queue disappearance substituted for full reject verification: %+v", got)
+			}
+		})
 	}
 }
 
@@ -296,29 +350,46 @@ func TestCapacityEvidenceIsCurrentScopedAndOverflowSafe(t *testing.T) {
 }
 
 func TestRejectedJobSearchFreshnessAndBoundaries(t *testing.T) {
-	i := failed(domain.ProductRadarr)
-	retained := Evaluate(i)
-	i.PriorReject = &PriorReject{Job: i.Case.Job.Ref, Path: retained.Path, CapabilityRevision: retained.Proposal.CapabilityRevision,
-		Targets: retained.Proposal.Operation.Targets, OwnedSearch: SearchByRescuarr, Outcome: domain.Outcome{
-			AttemptID: "test-verified-attempt", ObservedAt: i.Now.Add(-time.Minute), Verification: domain.VerificationEffect,
-		}}
-	for _, effect := range retained.Proposal.Operation.Effects {
-		i.PriorReject.Outcome.Effects = append(i.PriorReject.Outcome.Effects, domain.EffectResult{
-			Effect: effect, Verification: domain.VerificationEffect, Evidence: []domain.EvidenceID{domain.EvidenceID(effect.Kind)},
+	checks := []struct {
+		name   string
+		mutate func(*Input)
+		reason domain.ReasonCode
+	}{
+		{"active job", func(i *Input) {
+			i.JobPhase.Observation.State, i.JobPhase.Value = domain.ObservationKnown, PhaseDownload
+		}, DownloadActive},
+		{"old job still failed", func(i *Input) {
+			i.JobPhase.Observation.State, i.JobPhase.Value = domain.ObservationKnown, PhaseFailed
+		}, AwaitingRejectVerification},
+		{"old queue evidence", func(i *Input) {
+			i.PriorReject.CurrentRetirement.ObservedAt = i.Now.Add(-2 * time.Minute)
+			i.JobPhase.Observation = i.PriorReject.CurrentRetirement
+		}, AwaitingRejectVerification},
+		{"mixed target scope", func(i *Input) { i.PriorReject.Targets = nil }, TargetAmbiguous},
+		{"no failed history", func(i *Input) { i.PriorReject.Readback.FailedHistoryID = 0 }, AwaitingRejectVerification},
+		{"foreign release", func(i *Input) { i.PriorReject.Readback.Release.GUID += "-different" }, AwaitingRejectVerification},
+		{"collapsed effect references", func(i *Input) {
+			for n := range i.PriorReject.Outcome.Effects {
+				i.PriorReject.Outcome.Effects[n].Evidence = []domain.EvidenceID{i.PriorReject.Readback.Queue.ID}
+			}
+		}, AwaitingRejectVerification},
+		{"record not linked to this download", func(i *Input) {
+			i.PriorReject.Readback.Blocklist.SourceRecord = "another-job"
+		}, AwaitingRejectVerification},
+		{"same evidence labelled twice", func(i *Input) {
+			i.PriorReject.Readback.FailedHistory.ID = i.PriorReject.Readback.Blocklist.ID
+		}, AwaitingRejectVerification},
+	}
+	for _, test := range checks {
+		t.Run(test.name, func(t *testing.T) {
+			i := failed(domain.ProductRadarr)
+			rejected(t, &i, RejectRetain)
+			test.mutate(&i)
+			got := Evaluate(i)
+			if got.Proposal != nil || (got.Reason != test.reason && !hasHold(got, test.reason)) {
+				t.Fatalf("invalid previous rejection was accepted: %+v", got)
+			}
 		})
-	}
-	i.JobPhase.Observation.State = domain.ObservationAbsent
-	if got := Evaluate(i); got.Path != SearchScoped || got.Proposal == nil {
-		t.Fatalf("verified queue absence should allow scope to proceed: %+v", got)
-	}
-	i.JobPhase.Observation.State, i.JobPhase.Value = domain.ObservationKnown, PhaseDownload
-	if got := Evaluate(i); got.Proposal != nil || got.Reason != DownloadActive {
-		t.Fatalf("active new download failed to stop search: %+v", got)
-	}
-	i.JobPhase.Observation.State = domain.ObservationAbsent
-	i.PriorReject.Targets = nil
-	if got := Evaluate(i); got.Proposal != nil || !hasHold(got, TargetAmbiguous) {
-		t.Fatalf("prior rejection failed to bind original target: %+v", got)
 	}
 }
 
@@ -342,5 +413,48 @@ func TestEffectCertificateRejectsUnplannedDestructiveSideEffect(t *testing.T) {
 	i.Capabilities[ImportOriginal] = certificate
 	if got := Evaluate(i); got.Proposal != nil || !hasHold(got, UnsupportedEffect) {
 		t.Fatalf("import with unplanned data removal was accepted: %+v", got)
+	}
+}
+
+func TestRejectHoldsConflictingCandidatesAndUntrustedTargetEvidence(t *testing.T) {
+	i := example(domain.ProductRadarr)
+	i.JobPhase.Value, i.Import.Assessment.Value = PhaseFailed, ImportNone
+	if got := Evaluate(i); got.Proposal != nil || !hasHold(got, ConflictingCandidates) {
+		t.Fatalf("reject ignored a surviving candidate: %+v", got)
+	}
+	i = failed(domain.ProductRadarr)
+	i.Targets[0].Intent.Observation.Source = StorageProbeSource
+	i.Targets[0].Intent.Observation.Scope = i.Targets[0].Target.Root
+	if got := Evaluate(i); got.Proposal != nil || !hasHold(got, UnknownEvidence) {
+		t.Fatalf("target intent came from a non-owner source: %+v", got)
+	}
+}
+
+func TestRejectHoldsIncoherentQueueMemberAliases(t *testing.T) {
+	for _, queueID := range []int64{6, 7} {
+		i := failed(domain.ProductSonarr)
+		target := i.Targets[0]
+		target.Target.Ref.ID++
+		i.Case.Targets = append(i.Case.Targets, target.Target)
+		i.Targets = append(i.Targets, target)
+		i.Case.Job.Members = append(i.Case.Job.Members, domain.QueueMember{QueueID: queueID, SnapshotGeneration: 2, Target: target.Target.Ref})
+		got := Evaluate(i)
+		if got.Proposal != nil || !hasHold(got, TargetAmbiguous) {
+			t.Fatalf("incoherent aliases passed: %+v", got)
+		}
+	}
+}
+
+func TestFreshQueueAbsenceCanUseEarlierDurableEffects(t *testing.T) {
+	i := failed(domain.ProductRadarr)
+	rejected(t, &i, RejectRetain)
+	older := i.PriorReject
+	older.SentAt = i.Now.Add(-3 * time.Minute)
+	older.Outcome.ObservedAt = i.Now.Add(-2 * time.Minute)
+	for _, historic := range []*domain.Observation{&older.Readback.Queue, &older.Readback.FailedHistory, &older.Readback.Blocklist, &older.Readback.SourceRetained} {
+		historic.ObservedAt, historic.ExpiresAt = older.Outcome.ObservedAt.Add(-time.Second), older.Outcome.ObservedAt.Add(time.Minute)
+	}
+	if got := Evaluate(i); got.Proposal == nil || got.Path != SearchScoped {
+		t.Fatalf("valid fresh absence with older committed effect evidence was refused: %+v", got)
 	}
 }

@@ -26,7 +26,8 @@ func (a *assessment) evaluateImport() {
 			a.hold(TargetAmbiguous)
 		}
 		candidateKeys = append(candidateKeys, candidate.Key)
-		if !a.verified(candidate.Approved) || !a.verified(candidate.PathContained) || !a.verified(candidate.StableAndUsable) {
+		if !a.requireArr(candidate.Approved.Observation) || !a.verified(candidate.Approved) ||
+			!a.verified(candidate.PathContained) || !a.verified(candidate.StableAndUsable) {
 			a.hold(TargetAmbiguous, candidate.Approved.Observation, candidate.PathContained.Observation, candidate.StableAndUsable.Observation)
 		}
 		for _, ref := range candidate.Targets {
@@ -62,12 +63,15 @@ func (a *assessment) evaluateImport() {
 func (a *assessment) evaluateReject() {
 	i := a.input
 	failure := i.Failure
-	if !eligibleFailure(failure.Reason) || !a.verified(failure.Primary) {
+	if !eligibleFailure(failure.Reason) || !a.requireArr(failure.Primary.Observation) || !a.verified(failure.Primary) {
 		a.find(StalledUnknown, i.Import.Assessment.Observation)
 		return
 	}
 	a.find(failure.Reason, failure.Primary.Observation, failure.Corroborated.Observation)
-	if !a.verified(failure.Corroborated) || !independent(failure.Primary.Observation, failure.Corroborated.Observation) {
+	corroboration := failure.Corroborated.Observation
+	if !a.verified(failure.Corroborated) || !independent(failure.Primary.Observation, corroboration) ||
+		corroboration.Scope != i.Case.Job.Client || corroboration.Source != domain.Source(domain.ProductSAB) ||
+		corroboration.SourceRecord != i.Case.Job.DownloadID || failure.Primary.Observation.SourceRecord != i.Case.Job.DownloadID {
 		a.hold(UnknownEvidence, failure.Corroborated.Observation)
 	}
 	if i.JobPhase.Value != PhaseFailed && i.JobPhase.Value != PhaseComplete {
@@ -111,19 +115,21 @@ func (a *assessment) evaluateSearch(prior PriorReject) {
 		a.hold(AwaitingRejectVerification)
 		return
 	}
+	for _, target := range a.wanted {
+		if !slices.Contains(prior.Targets, target) {
+			a.hold(TargetAmbiguous)
+		}
+	}
 	if prior.OwnedSearch == SearchByArr {
 		a.find(AwaitingArrSearch)
-		a.result.State = domain.CaseWaitingReplacement
+		if len(a.result.Holds) == 0 {
+			a.result.State = domain.CaseWaitingReplacement
+		}
 		return
 	}
 	if prior.OwnedSearch != SearchByRescuarr || !a.availableForSearch(a.wanted) {
 		a.hold(UnsupportedEffect)
 		return
-	}
-	for _, target := range a.wanted {
-		if !slices.Contains(prior.Targets, target) {
-			a.hold(TargetAmbiguous)
-		}
 	}
 	if i.Instance.Product == domain.ProductRadarr && len(a.wanted) != 1 {
 		a.hold(TargetAmbiguous)
@@ -137,35 +143,106 @@ func (a *assessment) evaluateSearch(prior PriorReject) {
 }
 
 func (a *assessment) verifiedReject(prior PriorReject) bool {
-	outcome := prior.Outcome
-	if outcome.AttemptID == "" || outcome.Verification != domain.VerificationEffect || outcome.ObservedAt.IsZero() || outcome.ObservedAt.After(a.input.Now) {
+	outcome, proof, job := prior.Outcome, prior.Readback, a.input.Case.Job
+	if outcome.AttemptID == "" || outcome.Verification != domain.VerificationEffect || prior.SentAt.IsZero() ||
+		outcome.ObservedAt.Before(prior.SentAt) || outcome.ObservedAt.After(a.input.Now) ||
+		proof.AttemptID != outcome.AttemptID || proof.Job != job.Ref || proof.DownloadID != job.DownloadID ||
+		proof.Release != job.Release || proof.Release.GrabHistoryID <= 0 || proof.Release.IndexerID <= 0 || proof.Release.GUID == "" ||
+		proof.FailedHistoryID <= 0 || proof.FailedHistoryID == proof.Release.GrabHistoryID ||
+		!slices.Equal(sortedQueueIDs(job), sortedIDs(proof.QueueIDs)) {
 		return false
 	}
-	var required []domain.EffectKind
-	switch prior.Path {
-	case RejectRetain:
-		required = []domain.EffectKind{domain.EffectQueueRemoval, domain.EffectBlocklist, domain.EffectSourceRetained}
-	case RejectRemove:
-		required = []domain.EffectKind{domain.EffectQueueRemoval, domain.EffectBlocklist, domain.EffectClientRemoval, domain.EffectDataRemoval}
-	default:
+	// A failed or completed positive observation is not proof of retirement.
+	// Require the exact fresh, positive absence read in the job projection too.
+	if phase := a.input.JobPhase.Observation; phase != prior.CurrentRetirement || phase.SourceRecord != proof.DownloadID ||
+		phase.Kind != RejectQueueReadback || phase.State != domain.ObservationAbsent ||
+		phase.ObservedAt.Before(outcome.ObservedAt) || !a.requireArr(phase) {
 		return false
 	}
-	if !a.certified(a.input.Capabilities[prior.Path], prior.Path, rejectEffects(required)) {
+	if !a.readback(prior, proof.Queue, RejectQueueReadback, domain.ObservationAbsent, a.fromArr(proof.Queue)) ||
+		!a.readback(prior, proof.FailedHistory, RejectHistoryReadback, domain.ObservationKnown, a.fromArr(proof.FailedHistory)) ||
+		!a.readback(prior, proof.Blocklist, RejectBlocklistReadback, domain.ObservationKnown, a.fromArr(proof.Blocklist)) {
+		return false
+	}
+	if prior.Path == RejectRetain {
+		if !a.readback(prior, proof.SourceRetained, RejectSourceReadback, domain.ObservationKnown, a.storageProof(proof.SourceRetained)) {
+			return false
+		}
+		return a.matchEffects(prior, map[domain.EffectKind]domain.EvidenceID{
+			domain.EffectQueueRemoval: proof.Queue.ID, domain.EffectBlocklist: proof.Blocklist.ID,
+			domain.EffectSourceRetained: proof.SourceRetained.ID,
+		})
+	}
+	if prior.Path != RejectRemove || !a.readback(prior, proof.ClientRemoval, RejectClientReadback, domain.ObservationAbsent,
+		proof.ClientRemoval.Source == domain.Source(domain.ProductSAB) && proof.ClientRemoval.Scope == job.Client) ||
+		!a.readback(prior, proof.DataRemoval, RejectDataReadback, domain.ObservationAbsent, a.storageProof(proof.DataRemoval)) {
+		return false
+	}
+	return a.matchEffects(prior, map[domain.EffectKind]domain.EvidenceID{
+		domain.EffectQueueRemoval: proof.Queue.ID, domain.EffectBlocklist: proof.Blocklist.ID,
+		domain.EffectClientRemoval: proof.ClientRemoval.ID, domain.EffectDataRemoval: proof.DataRemoval.ID,
+	})
+}
+
+func (a *assessment) readback(prior PriorReject, observation domain.Observation, kind domain.ObservationKind, state domain.ObservationState, trusted bool) bool {
+	if !trusted || observation.Kind != kind || observation.State != state || observation.SourceRecord != prior.Readback.DownloadID ||
+		observation.ObservedAt.Before(prior.SentAt) || observation.ObservedAt.After(prior.Outcome.ObservedAt) ||
+		!observation.Fresh(prior.Outcome.ObservedAt) || observation.ID == "" {
+		return false
+	}
+	a.remember(observation)
+	return true
+}
+
+func (a *assessment) storageProof(observation domain.Observation) bool {
+	return observation.Source == StorageProbeSource && a.affects(observation.Scope) &&
+		(observation.Scope == a.input.Case.Job.Client || observation.Scope.Kind == domain.ScopeVolume)
+}
+
+func (a *assessment) matchEffects(prior PriorReject, required map[domain.EffectKind]domain.EvidenceID) bool {
+	kinds := make([]domain.EffectKind, 0, len(required))
+	used := map[domain.EvidenceID]bool{prior.Readback.FailedHistory.ID: true}
+	for kind, id := range required {
+		if used[id] {
+			return false
+		}
+		used[id] = true
+		kinds = append(kinds, kind)
+	}
+	if !a.certified(a.input.Capabilities[prior.Path], prior.Path, rejectEffects(kinds)) {
 		return false
 	}
 	verified := make(map[domain.EffectKind]bool)
-	for _, result := range outcome.Effects {
+	for _, result := range prior.Outcome.Effects {
 		kind := result.Effect.Kind
-		if !slices.Contains(required, kind) {
+		id, expected := required[kind]
+		if !expected {
 			continue
 		}
 		if verified[kind] || result.Effect.Target != (domain.TargetRef{}) || result.Verification != domain.VerificationEffect ||
-			!slices.ContainsFunc(result.Evidence, func(id domain.EvidenceID) bool { return id != "" }) {
+			!slices.Contains(result.Evidence, id) || slices.ContainsFunc(result.Evidence, func(ref domain.EvidenceID) bool {
+			return ref != id && ref != prior.Readback.FailedHistory.ID && used[ref]
+		}) {
 			return false
 		}
 		verified[kind] = true
 	}
 	return len(verified) == len(required)
+}
+
+func sortedIDs(ids []int64) []int64 {
+	sorted := slices.Clone(ids)
+	slices.Sort(sorted)
+	return sorted
+}
+
+func sortedQueueIDs(job domain.Job) []int64 {
+	queue := make([]int64, 0, len(job.Members))
+	for _, member := range job.Members {
+		queue = append(queue, member.QueueID)
+	}
+	slices.Sort(queue)
+	return queue
 }
 
 func rejectEffects(kinds []domain.EffectKind) []domain.Effect {
@@ -180,7 +257,7 @@ func (a *assessment) availableForSearch(targets []domain.TargetRef) bool {
 	allowed := true
 	for _, ref := range targets {
 		availability := a.targets[ref].SearchAvailable
-		if !a.verified(availability) {
+		if !a.requireArr(availability.Observation) || !a.verified(availability) {
 			a.hold(RequestChanged, availability.Observation)
 			allowed = false
 		}
@@ -262,11 +339,7 @@ func (a *assessment) plan(path Path, action domain.Action, targets []domain.Targ
 		Targets    []domain.TargetRef
 		Selectors  []string
 	}{operation.Job, path, i.Case.Job.DownloadID, i.Case.Job.Client, i.Case.Job.Release, targets, selectors}))
-	queue := make([]int64, 0, len(i.Case.Job.Members))
-	for _, member := range i.Case.Job.Members {
-		queue = append(queue, member.QueueID)
-	}
-	slices.Sort(queue)
+	queue := sortedQueueIDs(i.Case.Job)
 	ids, materialEvidence := a.evidenceFingerprint()
 	guards := []domain.Guard{{Reason: "preconditions_verified", Passed: true, Evidence: ids}}
 	type targetIntent struct {
