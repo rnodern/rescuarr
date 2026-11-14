@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/netip"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -17,10 +19,14 @@ import (
 const DefaultListen = "127.0.0.1:8787"
 
 type Config struct {
-	Listen   string
-	DataDir  string
-	BasePath string
-	Sources  map[string]string
+	Listen         string
+	DataDir        string
+	BasePath       string
+	PublicURL      *url.URL
+	TrustedProxies []netip.Prefix
+	Input          string
+	Output         string
+	Sources        map[string]string
 }
 
 // Parse applies explicit flags over nonempty environment values and platform defaults.
@@ -39,6 +45,10 @@ func Parse(args []string, getenv func(string) string) (Config, error) {
 	flags.StringVar(&cfg.Listen, "listen", resolve("RESCUARR_LISTEN", DefaultListen), "listen address")
 	flags.StringVar(&cfg.DataDir, "data-dir", resolve("RESCUARR_DATA_DIR", ""), "state directory")
 	flags.StringVar(&cfg.BasePath, "base-path", resolve("RESCUARR_BASE_PATH", ""), "browser route prefix")
+	publicURL := flags.String("public-url", resolve("RESCUARR_PUBLIC_URL", ""), "public HTTP or HTTPS URL")
+	proxies := flags.String("trusted-proxies", resolve("RESCUARR_TRUSTED_PROXIES", ""), "trusted proxy CIDRs")
+	flags.StringVar(&cfg.Input, "input", "", "backup database to restore")
+	flags.StringVar(&cfg.Output, "output", "", "database backup destination")
 	if err := flags.Parse(args); err != nil {
 		return Config{}, err
 	}
@@ -47,8 +57,13 @@ func Parse(args []string, getenv func(string) string) (Config, error) {
 	}
 	keys := map[string]string{
 		"listen": "RESCUARR_LISTEN", "data-dir": "RESCUARR_DATA_DIR", "base-path": "RESCUARR_BASE_PATH",
+		"public-url": "RESCUARR_PUBLIC_URL", "trusted-proxies": "RESCUARR_TRUSTED_PROXIES",
 	}
-	flags.Visit(func(f *flag.Flag) { cfg.Sources[keys[f.Name]] = "flag" })
+	flags.Visit(func(f *flag.Flag) {
+		if key := keys[f.Name]; key != "" {
+			cfg.Sources[key] = "flag"
+		}
+	})
 
 	if cfg.DataDir == "" && cfg.Sources["RESCUARR_DATA_DIR"] == "default" {
 		var err error
@@ -73,6 +88,35 @@ func Parse(args []string, getenv func(string) string) (Config, error) {
 	}
 	if err := validateBasePath(cfg.BasePath); err != nil {
 		return Config{}, err
+	}
+	if cfg.BasePath == "/healthz" || cfg.BasePath == "/readyz" {
+		return Config{}, errors.New("base path conflicts with a public health route")
+	}
+	if *publicURL != "" {
+		u, err := url.Parse(*publicURL)
+		if err != nil || u.Hostname() == "" || u.User != nil || u.Fragment != "" || u.RawQuery != "" ||
+			u.ForceQuery || u.RawPath != "" || u.Opaque != "" || (u.Scheme != "http" && u.Scheme != "https") {
+			return Config{}, errors.New("public URL requires an HTTP or HTTPS host and the configured base path")
+		}
+		if cfg.BasePath != strings.TrimSuffix(u.Path, "/") {
+			return Config{}, errors.New("public URL path must match the configured base path")
+		}
+		if u.Scheme == "http" && !LoopbackHost(u.Hostname()) {
+			return Config{}, errors.New("public URL for a non-loopback host requires HTTPS")
+		}
+		cfg.PublicURL = u
+	}
+	if *proxies != "" {
+		if cfg.PublicURL == nil {
+			return Config{}, errors.New("trusted proxies require a configured public URL")
+		}
+		for _, value := range strings.Split(*proxies, ",") {
+			ip, err := netip.ParsePrefix(strings.TrimSpace(value))
+			if err != nil || ip.Bits() == 0 {
+				return Config{}, errors.New("trusted proxies must be specific CIDRs")
+			}
+			cfg.TrustedProxies = append(cfg.TrustedProxies, ip.Masked())
+		}
 	}
 	return cfg, nil
 }
@@ -120,4 +164,12 @@ func defaultDataDir(getenv func(string) string) (string, error) {
 		}
 		return filepath.Join(home, ".local", "state", "rescuarr"), nil
 	}
+}
+
+func LoopbackHost(value string) bool {
+	if strings.EqualFold(value, "localhost") {
+		return true
+	}
+	ip, err := netip.ParseAddr(value)
+	return err == nil && ip.Unmap().IsLoopback()
 }

@@ -2,19 +2,12 @@ package app
 
 import (
 	"context"
-	_ "embed"
-	"html/template"
 	"net/http"
 )
 
-//go:embed assets/index.html
-var indexHTML string
-
-var index = template.Must(template.New("index").Parse(indexHTML))
-
 type Readiness func(context.Context) error
 
-func Handler(basePath string, ready Readiness) http.Handler {
+func withStatus(ready Readiness, browser http.Handler) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		writeStatus(w, http.StatusOK, "ok")
@@ -26,12 +19,7 @@ func Handler(basePath string, ready Readiness) http.Handler {
 		}
 		writeStatus(w, http.StatusOK, "ready")
 	})
-	mux.HandleFunc("GET "+basePath+"/{$}", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.Header().Set("Cache-Control", "no-store")
-		w.Header().Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'")
-		_ = index.Execute(w, nil)
-	})
+	mux.Handle("/", browser)
 	return mux
 }
 
