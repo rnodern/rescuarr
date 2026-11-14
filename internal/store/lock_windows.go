@@ -4,9 +4,43 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
+
+func makeDataDirectory(path string) error {
+	if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	path = filepath.Clean(path)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	user, err := windows.GetCurrentProcessToken().GetTokenUser()
+	if err != nil {
+		return err
+	}
+	// An elevated token can default to an Administrators-owned directory.
+	// Install the current user's ownership and the private DACL at creation.
+	descriptor, err := windows.SecurityDescriptorFromString("O:" + user.User.Sid.String() + ownerDACL(user.User.Sid, true))
+	if err != nil {
+		return err
+	}
+	name, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		return err
+	}
+	attributes := windows.SecurityAttributes{SecurityDescriptor: descriptor}
+	attributes.Length = uint32(unsafe.Sizeof(attributes))
+	err = windows.CreateDirectory(name, &attributes)
+	if errors.Is(err, os.ErrExist) {
+		// A simultaneous startup may have created it. secureDirectory checks ownership.
+		return nil
+	}
+	return err
+}
 
 func secureDirectory(path string) error {
 	info, err := os.Lstat(path)
@@ -36,11 +70,7 @@ func restrictOwner(path string, directory bool) error {
 	if !owner.Equals(user.User.Sid) {
 		return errors.New("local state must be owned by the current user")
 	}
-	flags := ""
-	if directory {
-		flags = "OICI"
-	}
-	descriptor, err := windows.SecurityDescriptorFromString("D:P(A;" + flags + ";FA;;;" + owner.String() + ")(A;" + flags + ";FA;;;SY)")
+	descriptor, err := windows.SecurityDescriptorFromString(ownerDACL(owner, directory))
 	if err != nil {
 		return err
 	}
@@ -50,6 +80,14 @@ func restrictOwner(path string, directory bool) error {
 	}
 	return windows.SetNamedSecurityInfo(path, windows.SE_FILE_OBJECT,
 		windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION, nil, nil, dacl, nil)
+}
+
+func ownerDACL(owner *windows.SID, directory bool) string {
+	flags := ""
+	if directory {
+		flags = "OICI"
+	}
+	return "D:P(A;" + flags + ";FA;;;" + owner.String() + ")(A;" + flags + ";FA;;;SY)"
 }
 
 func lockFile(f *os.File) error {

@@ -232,6 +232,10 @@ func prepareRestore(ctx context.Context, path string, now time.Time) (err error)
 		UPDATE app_state SET mode = 'observe', reconcile_required = 1 WHERE singleton = 1;
 		DELETE FROM owner_sessions;
 		DELETE FROM setup_token;
+		UPDATE notification_outbox
+		SET state = CASE WHEN state = 'sending' THEN 'uncertain' ELSE 'suppressed' END,
+		    reason = 'notification_restored_without_delivery'
+		WHERE state IN ('pending', 'delayed', 'sending');
 	`); err != nil {
 		return err
 	}
