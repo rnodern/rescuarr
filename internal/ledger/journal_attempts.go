@@ -68,6 +68,16 @@ type journalAttempt struct {
 	attempt     domain.Attempt
 	outcome     domain.Outcome
 	conflicting bool
+	readbacks   int
+	nextRead    string
+}
+
+// The pacing fields live with the outcome so upgrading an existing journal
+// needs no schema change. Missing fields denote a legacy outcome.
+type scheduledOutcome struct {
+	domain.Outcome
+	Readbacks int    `json:"readbacks,omitempty"`
+	NextRead  string `json:"nextRead,omitempty"`
 }
 
 func readAttempt(ctx context.Context, tx *sql.Tx, row journalIntent, id domain.AttemptID) (journalAttempt, error) {
@@ -96,9 +106,11 @@ func readAttempt(ctx context.Context, tx *sql.Tx, row journalIntent, id domain.A
 	if err := json.Unmarshal([]byte(ack), &a.attempt.Acknowledgement); err != nil {
 		return journalAttempt{}, ErrJournal
 	}
-	if err := json.Unmarshal([]byte(outcome), &a.outcome); err != nil {
+	var stored scheduledOutcome
+	if err := json.Unmarshal([]byte(outcome), &stored); err != nil {
 		return journalAttempt{}, ErrJournal
 	}
+	a.outcome, a.readbacks, a.nextRead = stored.Outcome, stored.Readbacks, stored.NextRead
 	a.attempt.SentAt, err = time.Parse(time.RFC3339Nano, sent)
 	if err != nil {
 		return journalAttempt{}, ErrJournal
@@ -176,6 +188,14 @@ func (j *Journal) RecordDispatch(ctx context.Context, lease SendLease, ack domai
 }
 
 func (j *Journal) BeginReconcile(ctx context.Context, id domain.AttemptID, now time.Time) (Reconciliation, error) {
+	return j.beginReconcile(ctx, id, now, false)
+}
+
+func (j *Journal) beginScheduledReconcile(ctx context.Context, id domain.AttemptID, now time.Time) (Reconciliation, error) {
+	return j.beginReconcile(ctx, id, now, true)
+}
+
+func (j *Journal) beginReconcile(ctx context.Context, id domain.AttemptID, now time.Time, scheduled bool) (Reconciliation, error) {
 	if !boundedID(string(id)) || now.IsZero() {
 		return Reconciliation{}, ErrInvalid
 	}
@@ -198,6 +218,9 @@ func (j *Journal) BeginReconcile(ctx context.Context, id domain.AttemptID, now t
 			return err
 		}
 		if now.Before(attempt.attempt.SentAt) {
+			return ErrHeld
+		}
+		if scheduled && (attempt.nextRead > journalTime(now) || now.Before(attempt.attempt.SentAt.Add(initialReadback))) {
 			return ErrHeld
 		}
 		if err := updateIntent(ctx, tx, row, domain.IntentReconciling, journalTime(now.Add(readLease))); err != nil {
@@ -236,14 +259,6 @@ func (j *Journal) RecordOutcome(ctx context.Context, lease Reconciliation, outco
 		}
 		observed := normaliseOutcome(attempt.attempt, outcome, outcome.ObservedAt)
 		current, conflict := mergeReadback(attempt, observed)
-		payload, err := marshalJournal(current)
-		if err != nil {
-			return err
-		}
-		result, err := tx.ExecContext(ctx, "UPDATE action_attempts SET outcome = ?, conflicting_readback = ? WHERE id = ?", payload, conflict, current.AttemptID)
-		if err := oneChange(result, err); err != nil {
-			return err
-		}
 		state, reason := domain.IntentReconciling, domain.ReasonCode(current.Verification)
 		switch {
 		case conflict:
@@ -254,6 +269,19 @@ func (j *Journal) RecordOutcome(ctx context.Context, lease Reconciliation, outco
 			if err := releaseLocks(ctx, tx, row.intent.ID); err != nil {
 				return err
 			}
+		}
+		stored := scheduledOutcome{Outcome: current}
+		if state == domain.IntentReconciling {
+			stored.Readbacks = min(max(attempt.readbacks, 0), len(readbackStages)-1) + 1
+			stored.NextRead = journalTime(current.ObservedAt.Add(readbackDelay(current.AttemptID, stored.Readbacks)))
+		}
+		payload, err := marshalJournal(stored)
+		if err != nil {
+			return err
+		}
+		result, err := tx.ExecContext(ctx, "UPDATE action_attempts SET outcome = ?, conflicting_readback = ? WHERE id = ?", payload, conflict, current.AttemptID)
+		if err := oneChange(result, err); err != nil {
+			return err
 		}
 		if err := updateIntent(ctx, tx, row, state, ""); err != nil {
 			return err

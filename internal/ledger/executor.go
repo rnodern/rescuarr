@@ -222,10 +222,14 @@ func (e *Executor) Dispatch(ctx context.Context, intentID domain.IntentID) (doma
 // Reconcile reads back an existing attempt. It may run while dispatch is
 // paused or latched off due to a journal fault.
 func (e *Executor) Reconcile(ctx context.Context, attemptID domain.AttemptID) (domain.Outcome, error) {
+	return e.reconcile(ctx, attemptID, e.store.BeginReconcile)
+}
+
+func (e *Executor) reconcile(ctx context.Context, attemptID domain.AttemptID, begin func(context.Context, domain.AttemptID, time.Time) (Reconciliation, error)) (domain.Outcome, error) {
 	if attemptID == "" {
 		return domain.Outcome{}, ErrInvalid
 	}
-	lease, err := e.store.BeginReconcile(ctx, attemptID, e.clock.Now())
+	lease, err := begin(ctx, attemptID, e.clock.Now())
 	if err != nil {
 		return domain.Outcome{}, e.checkStore(err)
 	}
