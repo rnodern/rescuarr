@@ -102,6 +102,7 @@ def build(args):
         package = scratch / "package"
         package.mkdir()
         binary = package / ("rescuarr.exe" if args.os == "windows" else "rescuarr")
+        print(f"Building native {args.os}/{args.arch} executable", flush=True)
         subprocess.run(
             ["go", "build", "-mod=readonly", "-trimpath", "-buildvcs=false",
              "-ldflags", f"-s -w -X main.version={args.version} -X main.commit={revision}",
@@ -127,6 +128,7 @@ def build(args):
         installed = extracted / binary.name
         if checksum(installed) != checksum(binary):
             raise RuntimeError("Archived executable differs from the build output")
+        print(f"Starting smoke tests on the extracted {args.os}/{args.arch} executable", flush=True)
         smoke(installed, scratch, args.version, revision)
         sbom(output / "sbom.cdx.json", installed, args.version, revision)
         write_json(output / "build.json", {
