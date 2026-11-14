@@ -20,6 +20,8 @@ SEED = "rescuarr-lab-v1"
 TVDB_ID = 91000001
 TMDB_IDS = (92000001, 92000002)
 SONARR_TITLE = "Rescuarr Synthetic Series"
+ID_ONLY_PHASE = "series-id-original"
+ID_ONLY_TARGET = "episode1"
 RADARR_TITLES = ("Rescuarr Synthetic Film", "Rescuarr Synthetic Sequel")
 NEWS_GROUP = "alt.binaries.rescuarr-lab"
 NEWS_DOMAIN = "rescuarr.invalid"
@@ -29,11 +31,12 @@ SEGMENT_BYTES = 262_144
 RELEASE_GROUPS = {
     "original": "LABORIGINAL",
     "terminal-original": "LABORIGINAL",
+    ID_ONLY_PHASE: "LABIDMATCH",
     "replacement": "LABREPLACEMENT",
 }
 ARTICLE_ID = re.compile(
     rb"<" + re.escape(SEED.encode("ascii")) + rb"\.(episode[12]|movie[12])\."
-    rb"(original|terminal-original|replacement)\.(\d{1,5})@" + re.escape(NEWS_DOMAIN.encode("ascii")) + rb">"
+    rb"(original|terminal-original|replacement|series-id-original)\.(\d{1,5})@" + re.escape(NEWS_DOMAIN.encode("ascii")) + rb">"
 )
 
 # Each target can select its release fixture through the lab control route.
@@ -95,8 +98,16 @@ def movie_metadata(index):
     }
 
 
+def valid_phase(target, phase):
+    return phase in RELEASE_GROUPS and (phase != ID_ONLY_PHASE or target == ID_ONLY_TARGET)
+
+
 def releases(target, phase):
-    prefix = TARGETS[target][1]
+    if not valid_phase(target, phase):
+        raise ValueError("Invalid synthetic release phase for target")
+    # Sonarr's title/alias mapping should miss the shortened name. The indexer's
+    # TVDB ID still identifies the series. The episode number stays the same.
+    prefix = "Rescuarr.Synthetic.S01E01" if phase == ID_ONLY_PHASE else TARGETS[target][1]
     group = RELEASE_GROUPS[phase]
     return f"{prefix}.720p.WEB-DL.x264-{group}"
 
@@ -244,6 +255,9 @@ class News(socketserver.StreamRequestHandler):
             self.line(b"430 No such synthetic article")
             return
         target, phase, number = (value.decode("ascii") for value in match.groups())
+        if not valid_phase(target, phase):
+            self.line(b"430 No such synthetic article")
+            return
         number = int(number)
         article = news_article(target, phase, number, self.server.media)
         if article is None:
@@ -290,8 +304,8 @@ class Source(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urlsplit(self.path).path
-        match = re.fullmatch(r"/lab/feed/(episode[12]|movie[12])/(original|terminal-original|replacement)", path)
-        if not match:
+        match = re.fullmatch(r"/lab/feed/(episode[12]|movie[12])/([a-z-]+)", path)
+        if not match or not valid_phase(*match.groups()):
             self.send_error(404)
             return
         target, phase = match.groups()
@@ -331,7 +345,7 @@ class Source(BaseHTTPRequestHandler):
             ])
         elif path == "/lab/media":
             self.write(self.server.media_fingerprint)
-        elif (match := re.fullmatch(r"/nzb/(episode[12]|movie[12])/(original|terminal-original|replacement)", path)):
+        elif (match := re.fullmatch(r"/nzb/(episode[12]|movie[12])/([a-z-]+)", path)) and valid_phase(*match.groups()):
             self.write(nzb(*match.groups(), self.server.media), ENCLOSURE_TYPE)
         else:
             self.send_error(404)

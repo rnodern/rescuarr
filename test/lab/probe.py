@@ -17,6 +17,8 @@ TARGETS = {
     "radarr": (7878, "6.4.4.10685", "includeUnknownMovieItems"),
 }
 SAB_VERSION = "5.1.3"
+SONARR_V5_ID_IMPORT = "sonarr/v5-id-import"
+SONARR_V5_VERSION = "5.0.0.2941"
 
 
 class ProbeFailure(RuntimeError):
@@ -158,9 +160,13 @@ def main():
         "evidenceClass": "observedRead",
         "results": {},
     }
+    targets = dict(TARGETS)
+    if scenario == [SONARR_V5_ID_IMPORT]:
+        port, _, unknown_flag = targets["sonarr"]
+        targets["sonarr"] = (port, SONARR_V5_VERSION, unknown_flag)
     observers = {
         product: lambda product=product, args=args: arr_snapshot(product, *args)
-        for product, args in TARGETS.items()
+        for product, args in targets.items()
     }
     observers["sabnzbd"] = sab_snapshot
     failed = False

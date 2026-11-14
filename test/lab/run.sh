@@ -4,12 +4,12 @@ set -euo pipefail
 lab_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repo_dir="$(cd -- "$lab_dir/../.." && pwd)"
 if [[ $# -lt 1 || $# -gt 2 || -e "$1" || -L "$1" ]]; then
-  printf 'Usage: %s NEW_REPORT.json [sonarr|radarr]/[import|reject-preserve|reject-remove|reject-lost-response|replace-terminal]\n' "$0" >&2
+  printf 'Usage: %s NEW_REPORT.json [sonarr|radarr]/[import|reject-preserve|reject-remove|reject-lost-response|replace-terminal] [or sonarr/v5-id-import]\n' "$0" >&2
   exit 2
 fi
 scenario="${2:-}"
 case "$scenario" in
-  ""|sonarr/import|radarr/import|sonarr/reject-preserve|radarr/reject-preserve|sonarr/reject-remove|radarr/reject-remove|sonarr/reject-lost-response|radarr/reject-lost-response|sonarr/replace-terminal|radarr/replace-terminal) ;;
+  ""|sonarr/import|sonarr/v5-id-import|radarr/import|sonarr/reject-preserve|radarr/reject-preserve|sonarr/reject-remove|radarr/reject-remove|sonarr/reject-lost-response|radarr/reject-lost-response|sonarr/replace-terminal|radarr/replace-terminal) ;;
   *) printf 'Unknown lab scenario.\n' >&2; exit 2 ;;
 esac
 
@@ -54,6 +54,9 @@ if [[ -n "$scenario" ]]; then
   export RESCUARR_LAB_RUN_DIR="$run_dir"
   compose+=(--file "$lab_dir/compose.scenarios.yaml")
   services+=(source)
+  if [[ "$scenario" == "sonarr/v5-id-import" ]]; then
+    compose+=(--file "$lab_dir/compose.sonarr-v5.yaml")
+  fi
   scenario_args+=("$scenario")
 fi
 images="$("${compose[@]}" config --images)"

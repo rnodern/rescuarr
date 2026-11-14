@@ -21,9 +21,17 @@ Run the offline checks with `python3 -B -m unittest discover -s test/lab -p 'tes
 
 ## Optional effect scenarios
 
-Pass one of `sonarr/import`, `radarr/import`, `sonarr/reject-preserve`, `radarr/reject-preserve`, `sonarr/reject-remove`, `radarr/reject-remove`, `sonarr/reject-lost-response`, `radarr/reject-lost-response`, `sonarr/replace-terminal` or `radarr/replace-terminal` as the second argument. The effect runner also requires OpenSSL and FFmpeg. It generates disposable certificates and a video from filters, serves controlled metadata, search results and articles on the closed network, and exports scoped evidence. GitHub pull requests still run the read probes. Use the workflow dispatch input to run one effect scenario on an exact checked-out revision.
+Pass one of `sonarr/import`, `radarr/import`, `sonarr/reject-preserve`, `radarr/reject-preserve`, `sonarr/reject-remove`, `radarr/reject-remove`, `sonarr/reject-lost-response`, `radarr/reject-lost-response`, `sonarr/replace-terminal` or `radarr/replace-terminal` as the second argument. The effect runner also requires OpenSSL and FFmpeg. It generates disposable certificates and a video from filters, serves controlled metadata, search results and articles on the closed network, and exports scoped evidence. GitHub pull requests run the read probes plus the isolated Sonarr 5 ID-only scenario as a separate job. Use the workflow dispatch input to run one effect scenario on an exact checked-out revision.
 
 The import scenario records whether the source was preserved as a separate result. The rejection scenarios exercise the Arr queue branch on a paused synthetic download. They do not establish terminal downloader failure, qualify automatic removal, or qualify the production replacement flow. A source-retaining trial can leave final import pending. Review each effect independently before drawing a capability conclusion.
+
+### Sonarr 5 series-ID import
+
+Run `test/lab/run.sh /tmp/rescuarr-sonarr-v5-id.json sonarr/v5-id-import` for the isolated [Sonarr 5.0.0.2941 prerelease](https://github.com/Sonarr/Sonarr/releases/tag/v5.0.0.2941) image. The other scenarios keep the Sonarr 4 pin.
+
+An episode search grabs a synthetic release with an abbreviated series title and the exact TVDB ID. The scenario requires Sonarr's own grab history to report an ID match and its completed queue row to carry the series-ID import warning. It checks the one staged file, submits the exact series, season and episode to native reprocessing, and checks the native rejections before sending one Copy import command.
+
+The evidence records the imported file ID, contents, matching history and disappearance of the exact queue row. It independently compares the original folder inventory and bytes, downloader state and the neighbouring episode before and after. The scenario exercises the upstream path in the lab. Runtime approval and effects in the Rescuarr application require their own evidence.
 
 ### Terminal replacement
 
