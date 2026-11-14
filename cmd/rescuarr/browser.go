@@ -14,7 +14,7 @@ import (
 func browserHandler(cfg config.Config, auth *access.Auth, local *store.Store, observations *observeservice.Service, notifications webconsole.NotificationService) http.Handler {
 	browser := webconsole.New(webconsole.Options{
 		BasePath:      cfg.BasePath,
-		Read:          observations,
+		Read:          recoveryViews{ConsoleReader: observations, local: local},
 		Connections:   observations,
 		Authorize:     app.CurrentBrowserSession,
 		Notifications: notifications,
