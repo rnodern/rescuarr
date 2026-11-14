@@ -107,36 +107,42 @@ func TestQueuePagingHoldsInconsistentScans(t *testing.T) {
 	for _, test := range []struct {
 		name    string
 		second  string
-		moving  bool
+		moving  string
 		wantErr error
 		wantLen int
 	}{
-		{"stable", `{"id":101}`, false, nil, 101},
-		{"duplicate-window", `{"id":1}`, false, ErrPartial, 100},
-		{"empty-window", "", false, ErrPartial, 100},
-		{"moving-head", `{"id":101}`, true, ErrPartial, 101},
+		{"stable", `{"id":101}`, "", nil, 101},
+		{"duplicate-window", `{"id":1}`, "", ErrPartial, 100},
+		{"empty-window", "", "", ErrPartial, 100},
+		{"moving-head", `{"id":101}`, "1", ErrPartial, 101},
+		{"moving-tail", `{"id":101}`, "2", ErrPartial, 101},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			calls := 0
+			calls := make(map[string]int)
 			a := arrFor(t, domain.ProductSonarr, func(r *http.Request) (*http.Response, error) {
-				calls++
 				page := r.URL.Query().Get("page")
+				calls[page]++
 				rows := test.second
 				if page == "1" {
 					ids := make([]string, 100)
 					for i := range ids {
 						ids[i] = fmt.Sprintf(`{"id":%d}`, i+1)
 					}
-					if calls > 1 && test.moving {
+					if calls[page] > 1 && test.moving == page {
 						ids[0] = `{"id":1,"status":"completed"}`
 					}
 					rows = strings.Join(ids, ",")
+				} else if calls[page] > 1 && test.moving == page {
+					rows = `{"id":102}`
 				}
 				return response(http.StatusOK, fmt.Sprintf(`{"page":%s,"pageSize":100,"totalRecords":101,"records":[%s]}`, page, rows)), nil
 			})
 			q, err := a.Queue(t.Context(), 1, observedAt)
 			if !errors.Is(err, test.wantErr) || len(q.Records) != test.wantLen || q.Evidence.Complete != (test.wantErr == nil) || q.Evidence.Fresh(observedAt) != (test.wantErr == nil) {
 				t.Fatalf("records %d, evidence %+v, err %v", len(q.Records), q.Evidence, err)
+			}
+			if test.wantErr == nil && (calls["1"] != 2 || calls["2"] != 2) {
+				t.Fatalf("both pages should be confirmed: %v", calls)
 			}
 		})
 	}
@@ -262,5 +268,21 @@ func TestSentTransportErrorIsRedacted(t *testing.T) {
 	_, err = s.Queue(context.Background(), "SABnzbd_nzo_labmovie")
 	if !errors.Is(err, ErrUnavailable) || strings.Contains(err.Error(), "synthetic-api-key") {
 		t.Fatalf("unsafe transport error: %v", err)
+	}
+}
+
+func TestSABQueueUsesCategoryAndLeavesExactSizeUnknown(t *testing.T) {
+	s, err := NewSAB(configuration(domain.ProductSAB), roundTrip(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Query().Get("mode") != "queue" {
+			t.Fatal("unexpected SAB mode")
+		}
+		return response(200, `{"queue":{"slots":[{"nzo_id":"SABnzbd_nzo_labmovie","cat":"radarr-lab","status":"Downloading","mb":"104.1","size":"104.1 MB","category":"ignored","bytes":104}]}}`), nil
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	jobs, err := s.Queue(t.Context(), "SABnzbd_nzo_labmovie")
+	if err != nil || len(jobs) != 1 || jobs[0].Category != "radarr-lab" || jobs[0].Bytes != nil || jobs[0].State != SABActive {
+		t.Fatalf("queue %+v: %v", jobs, err)
 	}
 }

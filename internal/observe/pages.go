@@ -28,7 +28,7 @@ func scanPages[T any](ctx context.Context, r *reader, path string, query url.Val
 	}
 	out := make([]T, 0)
 	ids := make(map[int64]bool)
-	var head page[T]
+	pages := make([]page[T], 0, maximumPages)
 	total := 0
 	for number := 1; number <= maximumPages; number++ {
 		p, err := fetch(number)
@@ -36,7 +36,6 @@ func scanPages[T any](ctx context.Context, r *reader, path string, query url.Val
 			return out, err
 		}
 		if number == 1 {
-			head = p
 			if p.Total != nil {
 				total = *p.Total
 			}
@@ -58,15 +57,23 @@ func scanPages[T any](ctx context.Context, r *reader, path string, query url.Val
 		if !credible || len(out) > total || (len(out) < total && len(p.Records) != size) {
 			return out, ErrPartial
 		}
-		if len(out) == total {
-			if number > 1 {
-				currentHead, err := fetch(1)
-				if err != nil || !reflect.DeepEqual(head, currentHead) {
+		pages = append(pages, p)
+		if len(out) != total {
+			continue
+		}
+		// Arr's page totals lack a snapshot token. Re-read every page of a
+		// multi-page scan within the same cycle timeout to detect pages that
+		// changed without affecting the head or total. A matching scan still
+		// represents an observation window, not an atomic upstream snapshot.
+		if len(pages) > 1 {
+			for index, initial := range pages {
+				current, err := fetch(index + 1)
+				if err != nil || !reflect.DeepEqual(initial, current) {
 					return out, ErrPartial
 				}
 			}
-			return out, nil
 		}
+		return out, nil
 	}
 	return out, ErrPartial
 }

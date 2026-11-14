@@ -62,6 +62,7 @@ type SABJob struct {
 type sabJobWire struct {
 	ID       string `json:"nzo_id"`
 	Category string `json:"category"`
+	Cat      string `json:"cat"`
 	Status   string `json:"status"`
 	Bytes    *int64 `json:"bytes"`
 }
@@ -116,7 +117,13 @@ func (s *SAB) jobs(ctx context.Context, mode string, ids []string) ([]SABJob, er
 			return out, ErrPartial
 		}
 		delete(requested, row.ID)
-		job := SABJob{Instance: s.reader.instance, ID: row.ID, Category: boundedText(row.Category, 128), State: SABUnknown, Bytes: nonnegative(row.Bytes)}
+		job := SABJob{Instance: s.reader.instance, ID: row.ID, State: SABUnknown}
+		if mode == "queue" {
+			job.Category = boundedText(row.Cat, 128)
+		} else {
+			job.Category = boundedText(row.Category, 128)
+			job.Bytes = nonnegative(row.Bytes)
+		}
 		switch strings.ToLower(row.Status) {
 		case "downloading", "queued", "paused", "propagating", "fetching", "quickcheck", "verifying", "repairing", "extracting", "moving", "running", "loaded":
 			job.State = SABActive
