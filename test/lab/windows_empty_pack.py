@@ -1,4 +1,4 @@
-"""Run the empty-pack lab with native disposable Windows Sonarr and SABnzbd."""
+"""Run recovery scenarios with native disposable Windows Sonarr and SABnzbd."""
 import argparse
 import hashlib
 import json
@@ -16,6 +16,7 @@ from unittest.mock import patch
 from xml.etree import ElementTree as ET
 
 import empty_pack
+import language_pack
 import scenarios
 from empty_pack import empty_pack_replacement, run_go_adapter
 from manual_browser import PackagedManualLab
@@ -26,6 +27,7 @@ SONARR = "http://127.0.0.1:18989"
 SAB = "http://127.1.1.1:18080"
 SOURCE = "http://127.0.0.1:8081"
 CASE = "sonarr/windows-v5-adapter-pack"
+LANGUAGE_CASE = "sonarr/windows-v5-language-pack"
 MANUAL_CASE = "sonarr/windows-v5-manual-pack"
 
 
@@ -74,6 +76,8 @@ def exercise(args, result, source_sha):
     result["binaries"] = {}
     for name in ("sonarr", "sab", "adapter" if args.adapter else "rescuarr"):
         executable = getattr(args, name)
+        if executable is None:
+            continue
         with executable.open("rb") as handle:
             result["binaries"][name] = {"file": executable.name, "sha256": hashlib.file_digest(handle, "sha256").hexdigest()}
     with ExitStack() as stack:
@@ -89,11 +93,11 @@ def exercise(args, result, source_sha):
             f"download_dir = {downloads / 'incomplete'}\ncomplete_dir = {downloads / 'complete'}\n"
             "permissions = \napi_warnings = 0\n", encoding="utf-8",
         )
-        adapter = partial(run_go_adapter, executable=args.adapter) if args.adapter else None
         for key, value in {"SAB": SAB, "SOURCE": SOURCE, "LIBRARY": library, "DOWNLOADS": downloads,
                            "sab_key": lambda: sab_key}.items():
             stack.enter_context(patch.object(scenarios, key, value))
         stack.enter_context(patch.object(empty_pack, "SOURCE", SOURCE))
+        stack.enter_context(patch.object(language_pack, "SOURCE", SOURCE))
 
         stage(result, "sourceStartup")
         fixture = start(stack, [sys.executable, "-B", __file__, "--fixture",
@@ -125,19 +129,23 @@ def exercise(args, result, source_sha):
                             "docker": False, "emptyAtStartup": True}
 
         stage(result, "arrSetup")
-        profile = arr.setup()
+        profile = arr.setup(completed_handling=args.language_pack)
         result["settings"] = {"profileId": profile["id"], "cutoff": profile["cutoff"],
-                              "completedHandling": False, "removeCompletedDownloads": False,
+                              "completedHandling": args.language_pack, "removeCompletedDownloads": False,
                               "removeFailedDownloads": False, "automaticRedownloadFailed": True}
         stage(result, "mediaSetup")
         episodes = arr.media(profile["id"])
         stage(result, "exercise")
-        manual_review = None
-        if args.rescuarr:
-            manual = PackagedManualLab(args.rescuarr, root, stack, start, require_ready, stop,
-                                       partial(stage, result), SOURCE, source_sha)
-            manual_review = partial(manual.run, arr)
-        empty_pack_replacement(arr, episodes[0], episodes[1], result, adapter=adapter, manual_review=manual_review)
+        if args.language_pack:
+            language_pack.language_pack_replacement(arr, episodes[0], episodes[1], result)
+        else:
+            adapter = partial(run_go_adapter, executable=args.adapter) if args.adapter else None
+            manual_review = None
+            if args.rescuarr:
+                manual = PackagedManualLab(args.rescuarr, root, stack, start, require_ready, stop,
+                                           partial(stage, result), SOURCE, source_sha)
+                manual_review = partial(manual.run, arr)
+            empty_pack_replacement(arr, episodes[0], episodes[1], result, adapter=adapter, manual_review=manual_review)
         result["fixtureMetadata"] = get_json(SOURCE, "/lab/metadata")
         stage(result, "cleanup")
     result.update(status="observed", stage="complete", qualification="awaitingIndependentReview")
@@ -152,18 +160,20 @@ def main():
         parser.add_argument(f"--{arg}", type=Path, required=True)
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--adapter", type=Path)
+    mode.add_argument("--language-pack", action="store_true")
     mode.add_argument("--rescuarr", type=Path)
     args = parser.parse_args()
     for attr, value in vars(args).items():
-        if value is not None:
+        if isinstance(value, Path):
             setattr(args, attr, value.resolve())
 
     result = {"status": "failed", "evidenceClass": "labObservation", "protocol": "usenet", "stage": "startup"}
     source_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+    scenario = LANGUAGE_CASE if args.language_pack else MANUAL_CASE if args.rescuarr else CASE
     report = {"sourceSHA": source_sha,
               "measuredAt": datetime.now(timezone.utc).isoformat(), "fixtureSeed": SEED,
               "platform": {"system": platform.system(), "release": platform.release(), "arch": platform.machine()},
-              "scenarios": {MANUAL_CASE if args.rescuarr else CASE: result}}
+              "scenarios": {scenario: result}}
     try:
         exercise(args, result, source_sha)
     except scenarios.LabFailure as failure:

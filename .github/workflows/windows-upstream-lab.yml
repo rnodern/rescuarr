@@ -24,11 +24,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        driver: [adapter, manual]
+        driver: [adapter, manual, language]
     defaults:
       run:
         shell: pwsh
     env:
+      LAB_DRIVER: ${{ matrix.driver }}
       GOTOOLCHAIN: local
       SONARR_ARCHIVE: Sonarr.develop.5.0.0.2941.win-x64.zip
       SAB_ARCHIVE: SABnzbd-5.1.3-win64-bin.zip
@@ -80,12 +81,14 @@ jobs:
           fi
           export MSYS2_ARG_CONV_EXCL='/CN='
           lab_dir="$(cygpath -u "$RUNNER_TEMP")/rescuarr-windows-lab"
-          bash test/lab/seed.sh "$lab_dir"
+          if [[ "$LAB_DRIVER" == language ]]; then
+            bash test/lab/seed.sh "$lab_dir" sonarr/v5-language-pack
+          else
+            bash test/lab/seed.sh "$lab_dir"
+          fi
           openssl x509 -in "$lab_dir/tls/root.pem" -outform der -out "$lab_dir/tls/root.cer"
       - name: Run the native Windows Sonarr and SABnzbd lab
         timeout-minutes: 12
-        env:
-          LAB_DRIVER: ${{ matrix.driver }}
         run: |
           $dir = Join-Path $env:RUNNER_TEMP 'rescuarr-windows-lab'
           $sonarrDir = Join-Path $dir ($env:SONARR_ARCHIVE + '.extracted')
@@ -110,11 +113,13 @@ jobs:
             Add-Content -LiteralPath $hosts -Value "`r`n127.0.0.1 skyhook.sonarr.tv" -Encoding ascii
             Clear-DnsClientCache
             Write-Host 'Launching isolated Windows recovery scenario'
-            $driverArgs = if ($env:LAB_DRIVER -eq 'manual') {
-              @('--rescuarr', "$dir/installed/rescuarr.exe")
-            } else {
-              @('--adapter', "$dir/go-pack-probe.exe")
-            }
+            $driverArgs = @(
+              switch ($env:LAB_DRIVER) {
+                'language' { '--language-pack' }
+                'manual' { '--rescuarr'; "$dir/installed/rescuarr.exe" }
+                'adapter' { '--adapter'; "$dir/go-pack-probe.exe" }
+              }
+            )
             python -B test/lab/windows_empty_pack.py --sonarr $sonarr[0].FullName --sab $sab[0].FullName `
               @driverArgs --media "$dir/media/synthetic.mkv" `
               --certificate "$dir/tls/source.pem" --key "$dir/tls/source.key" `
