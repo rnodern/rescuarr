@@ -1,0 +1,51 @@
+services:
+  sonarr:
+    platform: linux/amd64
+    image: ghcr.io/linuxserver/sonarr:4.0.20.3014-ls328@sha256:a73768075d85c9d6dff3b301c50f7bfb854b7c899f15f8781097f648bb19f595
+    environment: &linuxserver
+      PUID: "1000"
+      PGID: "1000"
+      TZ: UTC
+    volumes:
+      - sonarr-config:/config
+      - sonarr-library:/library
+      - downloads:/downloads
+  radarr:
+    platform: linux/amd64
+    image: ghcr.io/linuxserver/radarr:6.4.4.10685-ls326@sha256:90fc402fd050506460369cf263feb1193888ebd06cbf5fa665e9a247f9c02b83
+    environment: *linuxserver
+    volumes:
+      - radarr-config:/config
+      - radarr-library:/library
+      - downloads:/downloads
+  sab:
+    hostname: sab
+    platform: linux/amd64
+    image: docker.io/linuxserver/sabnzbd:5.1.3@sha256:693c208f697d0b411410edd92a98b52c8c754c01f5c078a975cbc892044260f5
+    environment: *linuxserver
+    volumes:
+      - sab-config:/config
+      - downloads:/downloads
+  probe:
+    platform: linux/amd64
+    image: docker.io/library/python:3.12.12-alpine3.22@sha256:848ba4413eb897e225159b8fc1b02094576cbae4aa73fc13142608ae2c8c0e32
+    read_only: true
+    working_dir: /lab
+    volumes:
+      - .:/lab:ro
+      - sonarr-config:/config/sonarr:ro
+      - radarr-config:/config/radarr:ro
+      - sab-config:/config/sab:ro
+      - sonarr-library:/library/sonarr
+      - radarr-library:/library/radarr
+      - downloads:/downloads
+networks:
+  default:
+    internal: true
+volumes:
+  sonarr-config:
+  sonarr-library:
+  radarr-config:
+  radarr-library:
+  sab-config:
+  downloads:

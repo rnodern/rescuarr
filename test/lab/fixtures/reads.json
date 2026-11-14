@@ -1,0 +1,56 @@
+{
+  "evidenceClass": "synthetic",
+  "fixtureSeed": "rescuarr-lab-v1",
+  "cases": [
+    {
+      "id": "sonarr-status",
+      "product": "sonarr",
+      "applicationVersion": "4.0.20.3014",
+      "request": {"method": "GET", "path": "/api/v3/system/status"},
+      "response": {"status": 200, "body": {"appName": "Sonarr", "version": "4.0.20.3014", "branch": "main", "osName": "alpine", "urlBase": "", "startTime": "2026-01-01T00:00:00Z"}}
+    },
+    {
+      "id": "sonarr-pack-two-episodes",
+      "product": "sonarr",
+      "applicationVersion": "4.0.20.3014",
+      "request": {"method": "GET", "path": "/api/v3/queue", "query": {"page": "1", "pageSize": "100", "includeUnknownSeriesItems": "true", "sortKey": "added", "sortDirection": "descending"}},
+      "response": {"status": 200, "body": {"page": 1, "pageSize": 100, "sortKey": "added", "sortDirection": "descending", "totalRecords": 2, "records": [
+        {"id": 1001, "seriesId": 12, "episodeId": 41, "downloadId": "SABnzbd_nzo_labpack", "protocol": "usenet", "downloadClient": "LAB SAB", "indexer": "LAB Newznab", "title": "Rescuarr.Synthetic.S01.720p.WEB-DL-LAB", "status": "completed", "trackedDownloadStatus": "warning", "trackedDownloadState": "importPending", "outputPath": "/downloads/complete/sonarr/Rescuarr.Synthetic.S01.720p.WEB-DL-LAB", "statusMessages": [{"title": "Rescuarr.Synthetic.S01E01.mkv", "messages": ["No files found are eligible for import"]}]},
+        {"id": 1002, "seriesId": 12, "episodeId": 42, "downloadId": "SABnzbd_nzo_labpack", "protocol": "usenet", "downloadClient": "LAB SAB", "indexer": "LAB Newznab", "title": "Rescuarr.Synthetic.S01.720p.WEB-DL-LAB", "status": "completed", "trackedDownloadStatus": "warning", "trackedDownloadState": "importPending", "outputPath": "/downloads/complete/sonarr/Rescuarr.Synthetic.S01.720p.WEB-DL-LAB", "statusMessages": []}
+      ]}}
+    },
+    {
+      "id": "sonarr-pack-history",
+      "product": "sonarr",
+      "applicationVersion": "4.0.20.3014",
+      "request": {"method": "GET", "path": "/api/v3/history", "query": {"downloadId": "SABnzbd_nzo_labpack", "page": "1", "pageSize": "50", "sortKey": "date", "sortDirection": "descending"}},
+      "response": {"status": 200, "body": {"page": 1, "pageSize": 50, "sortKey": "date", "sortDirection": "descending", "totalRecords": 2, "records": [
+        {"id": 204, "seriesId": 12, "episodeId": 42, "downloadId": "SABnzbd_nzo_labpack", "eventType": "grabbed", "date": "2026-01-01T00:01:00Z", "sourceTitle": "Rescuarr.Synthetic.S01.720p.WEB-DL-LAB", "data": {"indexer": "LAB Newznab", "downloadClientName": "LAB SAB"}},
+        {"id": 203, "seriesId": 12, "episodeId": 41, "downloadId": "SABnzbd_nzo_labpack", "eventType": "grabbed", "date": "2026-01-01T00:01:00Z", "sourceTitle": "Rescuarr.Synthetic.S01.720p.WEB-DL-LAB", "data": {"indexer": "LAB Newznab", "downloadClientName": "LAB SAB"}}
+      ]}}
+    },
+    {
+      "id": "radarr-status",
+      "product": "radarr",
+      "applicationVersion": "6.4.4.10685",
+      "request": {"method": "GET", "path": "/api/v3/system/status"},
+      "response": {"status": 200, "body": {"appName": "Radarr", "version": "6.4.4.10685", "branch": "master", "osName": "alpine", "urlBase": "", "startTime": "2026-01-01T00:00:00Z"}}
+    },
+    {
+      "id": "radarr-singleton-empty-preview",
+      "product": "radarr",
+      "applicationVersion": "6.4.4.10685",
+      "request": {"method": "GET", "path": "/api/v3/manualimport", "query": {"downloadId": "SABnzbd_nzo_labmovie", "filterExistingFiles": "false"}},
+      "response": {"status": 200, "body": []}
+    },
+    {
+      "id": "sab-terminal-and-missing",
+      "product": "sabnzbd",
+      "applicationVersion": "5.1.3",
+      "request": {"method": "GET", "path": "/api", "query": {"mode": "history", "nzo_ids": "SABnzbd_nzo_labmovie,SABnzbd_nzo_missing", "start": "0", "limit": "2", "output": "json"}},
+      "response": {"status": 200, "body": {"history": {"slots": [
+        {"nzo_id": "SABnzbd_nzo_labmovie", "name": "Rescuarr.Synthetic.2026.720p.WEB-DL-LAB", "status": "Failed", "category": "radarr-lab", "bytes": 280040, "fail_message": "Download failed - Not on your server(s)"}
+      ], "noofslots": 1}}}
+    }
+  ]
+}
