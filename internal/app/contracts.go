@@ -68,6 +68,22 @@ type ReplacementPreview struct {
 	Episodes     []ReplacementEpisode
 	SearchCount  int
 	UnclearCount int
+	Language     *PackLanguageReview
+}
+
+type PackLanguageReview struct {
+	FilenameLanguages []string
+	SonarrLanguages   []string
+	Agreement         bool
+	Files             []PackLanguageFile
+}
+
+type PackLanguageFile struct {
+	Episode                string
+	Filename               string
+	Origin                 string
+	AudioLanguages         []string
+	AudioLanguagesComplete bool
 }
 
 type ReplacementEpisode struct {

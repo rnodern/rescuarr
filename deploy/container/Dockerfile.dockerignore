@@ -5,6 +5,9 @@
 !cmd/**
 !internal/
 !internal/**
+!deploy/
+!deploy/licenses/
+!deploy/licenses/**
 **/.env*
 **/*.db
 **/*.sqlite*
