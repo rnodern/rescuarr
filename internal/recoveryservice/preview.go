@@ -64,6 +64,11 @@ func (s *PreviewService) ImportPreview(ctx context.Context, id domain.CaseID, re
 			}
 		}
 	}
+	release, err := s.cases.HoldRecoveryConnection(ctx, proof.Instance)
+	if err != nil {
+		return app.ImportPreview{}, err
+	}
+	defer release()
 	key, err := s.secrets.ReadSecret(proof.Instance.SecretRef)
 	if err != nil {
 		return heldPreview("The connection’s API key is unavailable. Check the service in Connections.")
