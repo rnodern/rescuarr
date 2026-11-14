@@ -8,6 +8,11 @@ if [[ $# -ne 1 || -e "$1" || -L "$1" ]]; then
   exit 2
 fi
 
+if [[ -n "$(git -C "$repo_dir" status --porcelain --untracked-files=all -- test/lab .github/workflows/upstream-lab.yml)" ]]; then
+  printf 'Commit the lab and workflow files before running an evidence capture.\n' >&2
+  exit 2
+fi
+
 # Ignore caller-supplied Compose project, file, profile and environment settings.
 unset COMPOSE_FILE COMPOSE_PROJECT_NAME COMPOSE_PROFILES COMPOSE_ENV_FILES COMPOSE_REMOVE_ORPHANS COMPOSE_IGNORE_ORPHANS
 
@@ -20,8 +25,13 @@ run_dir="$(mktemp -d "${TMPDIR:-/tmp}/rescuarr-lab.XXXXXXXX")"
 project="rescuarr-lab-$(basename "$run_dir" | tr '[:upper:]' '[:lower:]' | cut -d. -f2)"
 compose=(docker compose --env-file /dev/null --project-name "$project" --file "$lab_dir/compose.yaml")
 cleanup() {
-  "${compose[@]}" down --volumes --remove-orphans >&2 || true
-  rmdir "$run_dir"
+  local status=$?
+  if ! "${compose[@]}" down --volumes --remove-orphans >&2; then
+    printf 'Cleanup failed for disposable project %s.\n' "$project" >&2
+    status=1
+  fi
+  rmdir "$run_dir" || status=1
+  exit "$status"
 }
 trap cleanup EXIT
 trap 'exit 130' INT
