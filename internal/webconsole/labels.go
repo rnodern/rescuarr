@@ -58,6 +58,12 @@ func reasonLabel(code domain.ReasonCode) string {
 		return "Sonarr found the series by ID and blocked automatic import"
 	case "awaiting_import_assessment":
 		return "Download complete. Import still pending"
+	case "sonarr_import_verified":
+		return "Sonarr imported this download and linked the episode"
+	case "queue_missing_unverified":
+		return "The download left the queue. An import could not be verified."
+	case "queue_presence_unknown":
+		return "The download is missing from the latest queue scan"
 	case "download_failed":
 		return "Download failed"
 	case "target_ambiguous":

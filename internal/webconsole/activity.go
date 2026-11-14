@@ -93,6 +93,10 @@ func activityLabel(kind domain.EventKind, reason domain.ReasonCode) (status, eve
 		return "Paused", "Automatic recovery paused", true
 	case "action_resume":
 		return "Recorded", "Automatic recovery resumed", false
+	case "recovery_external_import_verified":
+		return "Verified", "Sonarr import verified. Case closed.", false
+	case "recovery_queue_missing":
+		return "Closed", "Download left the queue", true
 	case "recovery_verified":
 		return "Verified", "Recovery verified", false
 	case "action_readback_recorded", "action_outcome":

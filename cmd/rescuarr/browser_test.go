@@ -38,6 +38,8 @@ func TestBrowserUsesOwnerSessionAndLocalState(t *testing.T) {
 	const keyFile = "fixture-key"
 	const upstream = "http://sonarr.invalid/arr"
 	calls := 0
+	var importedAt time.Time
+	var importDownload string
 	observations := observeservice.New(local, nil, browserTransport(func(r *http.Request) (*http.Response, error) {
 		calls++
 		if r.Method != http.MethodGet || r.URL.Host != "sonarr.invalid" || r.Header.Get("X-Api-Key") != key {
@@ -48,7 +50,19 @@ func TestBrowserUsesOwnerSessionAndLocalState(t *testing.T) {
 		case "/arr/api/v3/system/status":
 			body = `{"appName":"Sonarr","version":"5.0.0.2941","osName":"Linux","isLinux":true}`
 		case "/arr/api/v3/queue":
+			if !importedAt.IsZero() {
+				body = `{"page":1,"pageSize":100,"totalRecords":0,"records":[]}`
+				break
+			}
 			body = `{"page":1,"pageSize":100,"totalRecords":1,"records":[{"id":4,"title":"Fixture.Show.S02E04.1080p","seriesId":8,"episodeId":11,"series":{"id":8,"title":"Fixture Show"},"episode":{"id":11,"seriesId":8,"title":"Fixture Episode","seasonNumber":2,"episodeNumber":4},"downloadId":"fixture-job","downloadClient":"lab","protocol":"usenet","status":"completed","trackedDownloadState":"importBlocked","outputPath":"/private/fixture-path/Fixture.Show.S02E04.1080p","statusMessages":[{"messages":["Found matching series via grab history, but release was matched to series by ID. Automatic import is not possible. See the FAQ for details.","fixture unclassified message"]}]}]}`
+		case "/arr/api/v3/history":
+			if query := r.URL.Query(); query.Get("episodeId") != "11" || query.Get("seriesIds") != "8" || query.Get("eventType") != "3" {
+				t.Fatal("history query was not scoped to one episode")
+			}
+			body = fmt.Sprintf(`{"page":1,"pageSize":50,"totalRecords":1,"records":[{"id":50,"seriesId":8,"episodeId":11,"downloadId":%q,"eventType":"downloadFolderImported","date":%q,"data":{"fileId":"23","downloadClientName":"lab"}}]}`,
+				importDownload, importedAt.UTC().Format(time.RFC3339Nano))
+		case "/arr/api/v3/episode/11":
+			body = `{"id":11,"seriesId":8,"episodeFileId":23,"hasFile":true}`
 		case "/arr/api/v3/rootfolder":
 			body = `[{"id":1,"path":"/private/library"}]`
 		case "/arr/api/v3/manualimport":
@@ -183,7 +197,30 @@ func TestBrowserUsesOwnerSessionAndLocalState(t *testing.T) {
 			t.Fatal("private connection or queue data appeared in the console")
 		}
 	}
-
+	importedAt = time.Now().UTC()
+	importDownload = "different-download"
+	queueCheck := func() {
+		t.Helper()
+		if response := request(http.MethodPost, check[1], session.Token, origin, url.Values{"csrf": {session.CSRF}}); response.Code != http.StatusSeeOther {
+			t.Fatalf("queue refresh returned %d", response.Code)
+		}
+	}
+	queueCheck()
+	queueCheck()
+	if body := perform(detailPath[1], session.Token).Body.String(); !strings.Contains(body, "An import could not be verified") ||
+		strings.Contains(body, "Sonarr imported this download and linked the episode") {
+		t.Fatal("an unrelated download was marked as a verified import")
+	}
+	importDownload = "fixture-job"
+	queueCheck()
+	queueCheck()
+	if body := perform(detailPath[1], session.Token).Body.String(); !strings.Contains(body, "Sonarr imported this download and linked the episode") {
+		t.Fatal("verified native import did not close the case")
+	}
+	activity = perform(base+"/activity", session.Token).Body.String()
+	if strings.Count(activity, "Sonarr import verified. Case closed.") != 1 || !strings.Contains(activity, "An import could not be verified") {
+		t.Fatal("import verification and preceding closure did not appear exactly once in activity")
+	}
 }
 
 type browserTransport func(*http.Request) (*http.Response, error)

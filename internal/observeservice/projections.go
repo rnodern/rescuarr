@@ -14,6 +14,7 @@ import (
 
 	"github.com/rnodern/rescuarr/internal/domain"
 	"github.com/rnodern/rescuarr/internal/observe"
+	"github.com/rnodern/rescuarr/internal/store"
 )
 
 const (
@@ -47,7 +48,7 @@ type storedCase struct {
 }
 
 func persistCases(ctx context.Context, tx *sql.Tx, instance domain.Instance, snapshot observe.QueueSnapshot, generation uint64,
-	now time.Time, coverage domain.ObservationState, checks map[int64]domain.EpisodeNameReview) error {
+	now time.Time, coverage domain.ObservationState, checks map[int64]domain.EpisodeNameReview, imports map[domain.CaseID]domain.EvidenceID) error {
 	isComplete := coverage == domain.ObservationKnown
 	if isComplete {
 		if _, err := tx.ExecContext(ctx, `DELETE FROM observe_cases WHERE instance_id = ? AND state = ? AND updated_at < ?`,
@@ -100,7 +101,7 @@ func persistCases(ctx context.Context, tx *sql.Tx, instance domain.Instance, sna
 	if !isComplete {
 		return nil
 	}
-	return markMissing(ctx, tx, instance.Ref, generation, now)
+	return markMissing(ctx, tx, instance.Ref, generation, now, imports)
 }
 
 func persistGroup(ctx context.Context, tx *sql.Tx, instance domain.Instance, group jobGroup, evidence domain.Observation,
@@ -116,7 +117,7 @@ func persistGroup(ctx context.Context, tx *sql.Tx, instance domain.Instance, gro
 	if errors.Is(err, sql.ErrNoRows) && *count >= limit {
 		return nil
 	}
-	item := domain.Case{ID: previous.ID, Revision: previous.Revision, NextCheckAt: now.Add(45 * time.Second)}
+	item := domain.Case{ID: previous.ID, Revision: previous.Revision, LastSeenAt: now, NextCheckAt: now.Add(45 * time.Second)}
 	if len(previous.Payload) > 0 && !isComplete {
 		// Partial positives refresh visibility, never erase a known member set or
 		// provide absence. Keep the existing state and projection unchanged.
@@ -266,9 +267,19 @@ func retireConflictingGroup(ctx context.Context, tx *sql.Tx, detail domain.Case,
 	return err
 }
 
-func markMissing(ctx context.Context, tx *sql.Tx, instance domain.InstanceRef, generation uint64, now time.Time) error {
+func markMissing(ctx context.Context, tx *sql.Tx, instance domain.InstanceRef, generation uint64, now time.Time, imports map[domain.CaseID]domain.EvidenceID) error {
+	verifiedIDs := make([]domain.CaseID, 0, len(imports))
+	for id := range imports {
+		verifiedIDs = append(verifiedIDs, id)
+	}
+	encoded, err := json.Marshal(verifiedIDs)
+	if err != nil {
+		return err
+	}
 	rows, err := tx.QueryContext(ctx, `SELECT id, payload, missing_complete_scans FROM observe_cases
-		WHERE instance_id = ? AND epoch = ? AND state <> 'closed' AND observation_only = 0 AND last_seen_generation < ? LIMIT ?`, instance.ID, instance.Epoch, generation, maxCases)
+		WHERE instance_id = ? AND epoch = ? AND (state <> 'closed' OR
+			(reason = 'queue_missing_unverified' AND id IN (SELECT value FROM json_each(?))))
+		AND observation_only = 0 AND last_seen_generation < ? LIMIT ?`, instance.ID, instance.Epoch, string(encoded), generation, maxCases)
 	if err != nil {
 		return err
 	}
@@ -292,9 +303,20 @@ func markMissing(ctx context.Context, tx *sql.Tx, instance domain.InstanceRef, g
 		if err := json.Unmarshal([]byte(item.Payload), &detail); err != nil {
 			return err
 		}
+		verified := imports[detail.ID]
+		if detail.State == domain.CaseClosed && verified == "" {
+			continue
+		}
 		state, reason := domain.CaseHeld, domain.ReasonCode("queue_presence_unknown")
 		if item.Misses >= 1 {
 			state, reason = domain.CaseClosed, "queue_missing_unverified"
+		}
+		if verified != "" {
+			state, reason = domain.CaseClosed, "sonarr_import_verified"
+			detail.Evidence = append(detail.Evidence, verified)
+		}
+		if detail.LastSeenAt.IsZero() && item.Misses == 0 {
+			detail.LastSeenAt = detail.NextCheckAt.Add(-45 * time.Second)
 		}
 		detail.State, detail.Reason, detail.Revision, detail.Job.CompleteSet = state, reason, detail.Revision+1, false
 		detail.NextCheckAt = now.Add(45 * time.Second)
@@ -311,6 +333,17 @@ func markMissing(ctx context.Context, tx *sql.Tx, instance domain.InstanceRef, g
 			missing_complete_scans = ?, updated_at = ? WHERE id = ?`, state, reason, detail.Revision, string(payload), fingerprint, item.Misses+1, stamp(now), item.ID)
 		if err != nil {
 			return err
+		}
+		kind := domain.EventKind("recovery_queue_missing")
+		if verified != "" {
+			kind = "recovery_external_import_verified"
+		}
+		if state == domain.CaseClosed {
+			if err := store.AppendEvent(ctx, tx, domain.Event{ID: domain.EventID(store.NewID()), Kind: kind,
+				Actor: "queue-worker", Reason: reason, Scope: domain.Scope{Kind: domain.ScopeInstance, Instance: instance},
+				CaseID: detail.ID, Evidence: detail.Evidence, OccurredAt: now}); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

@@ -188,6 +188,7 @@ type Case struct {
 	Reason      ReasonCode
 	Evidence    []EvidenceID
 	NextCheckAt time.Time
+	LastSeenAt  time.Time   `json:",omitzero"`
 	Display     CaseDisplay `json:",omitzero"`
 }
 

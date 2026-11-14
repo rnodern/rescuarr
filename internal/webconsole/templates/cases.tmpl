@@ -51,7 +51,7 @@
     <p>{{reason .Body.Case.Reason}}</p>
     <dl><dt>Service</dt><dd>{{serviceLabel .Body.Case.Display.Service .Body.Case.Display.Product}}{{if .Body.Case.Display.Version}} {{.Body.Case.Display.Version}}{{end}}</dd>
     {{if and .Body.Case.Display.Title .Body.Case.Display.Release}}<dt>Download release</dt><dd>{{.Body.Case.Display.Release}}</dd>{{end}}
-    <dt>Next check</dt><dd>{{when .Body.Case.NextCheckAt}}</dd>
+    {{if ne .Body.Case.State "closed"}}<dt>Next check</dt><dd>{{when .Body.Case.NextCheckAt}}</dd>{{end}}
     <dt>Affected incidents</dt><dd>{{len .Body.Case.Incidents}}</dd></dl>
     <details><summary>Technical details</summary><p>Case ID <code>{{.Body.Case.ID}}</code></p>
     {{if .Body.Case.Evidence}}<p>Evidence references</p><ul>{{range .Body.Case.Evidence}}<li>{{.}}</li>{{end}}</ul>{{end}}
