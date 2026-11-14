@@ -5,7 +5,7 @@
 <table class="panel">
   <thead><tr><th scope="col">Connection</th><th scope="col">Version</th><th scope="col">Status</th><th scope="col">Queue coverage</th><th scope="col">Last checked</th><th scope="col">Action</th></tr></thead>
   <tbody>{{range .Body}}<tr>
-    <th scope="row">{{.DisplayName}} · {{connectionProduct .Product}}</th>
+    <th scope="row">{{serviceLabel .DisplayName .Product}}</th>
     <td data-label="Version">{{if .Version}}{{.Version}}{{else}}Unknown{{end}}</td>
     <td data-label="Status">{{connectionStatus .Status}}</td>
     <td data-label="Queue coverage">{{connectionCoverage .Coverage}}</td>

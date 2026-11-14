@@ -46,9 +46,9 @@ func TestBrowserUsesOwnerSessionAndLocalState(t *testing.T) {
 		var body string
 		switch r.URL.Path {
 		case "/arr/api/v3/system/status":
-			body = `{"appName":"Sonarr","version":"4.0.20.3014"}`
+			body = `{"appName":"Sonarr","version":"4.0.20.3012"}`
 		case "/arr/api/v3/queue":
-			body = `{"page":1,"pageSize":100,"totalRecords":1,"records":[{"id":4,"seriesId":8,"episodeId":11,"downloadId":"fixture-job","downloadClient":"lab","protocol":"usenet","status":"completed","trackedDownloadState":"importPending","outputPath":"/private/fixture-path"}]}`
+			body = `{"page":1,"pageSize":100,"totalRecords":1,"records":[{"id":4,"title":"Fixture.Show.S02E04.1080p","seriesId":8,"episodeId":11,"series":{"id":8,"title":"Fixture Show"},"episode":{"id":11,"seriesId":8,"title":"Fixture Episode","seasonNumber":2,"episodeNumber":4},"downloadId":"fixture-job","downloadClient":"lab","protocol":"usenet","status":"completed","trackedDownloadState":"importPending","outputPath":"/private/fixture-path"}]}`
 		default:
 			t.Fatalf("unexpected upstream request path %s", r.URL.Path)
 		}
@@ -149,12 +149,19 @@ func TestBrowserUsesOwnerSessionAndLocalState(t *testing.T) {
 	connections = perform(base+"/connections", session.Token).Body.String()
 	cases := perform(base+"/cases", session.Token).Body.String()
 	detailPath := regexp.MustCompile(`href="(/rescuarr/cases/[^/"]+)"`).FindStringSubmatch(cases)
-	if len(detailPath) != 2 || !strings.Contains(connections, "4.0.20.3014") || !strings.Contains(connections, "Complete") {
+	if len(detailPath) != 2 || !strings.Contains(connections, "4.0.20.3012") || !strings.Contains(connections, "Complete") {
 		t.Fatal("saved status or observed queue case did not render")
 	}
 	detail := perform(detailPath[1], session.Token).Body.String()
-	if !strings.Contains(detail, "Episode #11") {
-		t.Fatal("observed target did not render")
+	if !strings.Contains(cases, "Fixture Show · S02E04") || !strings.Contains(cases, "Fixture.Show.S02E04.1080p") ||
+		!strings.Contains(detail, "S02E04 · Fixture Episode") || !strings.Contains(detail, "Import preview is currently supported on Sonarr 4.0.20.3014") ||
+		strings.Contains(detail, "Check Arr import candidates") {
+		t.Fatal("case did not show the job identity and version-specific limitation")
+	}
+	for _, query := range []string{"fixture+show", "s02e04", "fixture+episode", "1080p"} {
+		if !strings.Contains(perform(base+"/cases?q="+query, session.Token).Body.String(), detailPath[1]) {
+			t.Fatalf("search did not find the saved case for %q", query)
+		}
 	}
 	for _, private := range []string{key, keyFile, upstream, "fixture-job", "/private/fixture-path"} {
 		if strings.Contains(connections, private) || strings.Contains(cases, private) || strings.Contains(detail, private) {

@@ -55,6 +55,7 @@ type ImportPreview struct {
 	Reason     domain.ReasonCode
 	Candidates int
 	Eligible   int
+	Hold       string
 }
 
 type ImportPreviewReader interface {

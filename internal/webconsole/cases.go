@@ -8,13 +8,21 @@ import (
 
 	"github.com/rnodern/rescuarr/internal/app"
 	"github.com/rnodern/rescuarr/internal/domain"
+	"github.com/rnodern/rescuarr/internal/importflow"
+	"github.com/rnodern/rescuarr/internal/observeservice"
 )
 
 type casesView struct {
-	Cases  []domain.Case
-	Query  app.CaseQuery
-	States []domain.CaseState
-	Next   string
+	Cases    []domain.Case
+	Query    app.CaseQuery
+	States   []domain.CaseState
+	Next     string
+	Services []observeservice.InstanceStatus
+}
+
+type caseView struct {
+	app.CaseDetail
+	PreviewHold string
 }
 
 var caseStates = []domain.CaseState{
@@ -44,7 +52,7 @@ func (c console) cases(w http.ResponseWriter, r *http.Request) {
 	if (query.Instance != "" && !localID(string(query.Instance))) ||
 		(query.Reason != "" && !localID(string(query.Reason))) ||
 		(query.State != "" && !slicesState(query.State)) ||
-		len(query.Search) > 200 || len(query.After) > 512 {
+		len(query.Search) > 128 || len(query.After) > 128 {
 		c.errorPage(w, r, http.StatusBadRequest, "cases", "Invalid case filters", "Remove the filters or start again from Cases.")
 		return
 	}
@@ -58,6 +66,13 @@ func (c console) cases(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	content := casesView{Cases: cases.Cases, Query: query, States: caseStates}
+	if c.Connections != nil {
+		content.Services, err = c.Connections.Instances(r.Context())
+		if err != nil {
+			c.readError(w, r, err)
+			return
+		}
+	}
 	if cases.After != "" {
 		next := url.Values{}
 		for _, key := range []string{"instance", "state", "cause", "q", "limit"} {
@@ -95,7 +110,24 @@ func (c console) caseDetail(w http.ResponseWriter, r *http.Request) {
 		c.readError(w, r, err)
 		return
 	}
-	c.render(w, r, http.StatusOK, "case", page{Title: "Case " + id, Active: "cases", Status: status, Body: detail})
+	body := caseView{CaseDetail: detail, PreviewHold: previewVersionHold(detail.Case.Display)}
+	c.render(w, r, http.StatusOK, "case", page{Title: caseTitle(detail.Case), Active: "cases", Status: status, Body: body})
+}
+
+func previewVersionHold(display domain.CaseDisplay) string {
+	switch display.Product {
+	case domain.ProductSonarr:
+		if display.Version != "" && display.Version != importflow.SonarrVersion {
+			return "This build can read the queue on Sonarr " + display.Version +
+				". Import preview is currently supported on Sonarr " + importflow.SonarrVersion + "."
+		}
+	case domain.ProductRadarr:
+		if display.Version != "" && display.Version != importflow.RadarrVersion {
+			return "This build can read the queue on Radarr " + display.Version +
+				". Import preview is currently supported on Radarr " + importflow.RadarrVersion + "."
+		}
+	}
+	return ""
 }
 
 func (c console) intent(w http.ResponseWriter, r *http.Request) {

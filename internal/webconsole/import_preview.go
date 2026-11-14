@@ -62,7 +62,10 @@ func (c console) importPreview(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, app.ErrConflict):
 		c.render(w, r, http.StatusConflict, "approval-error", page{Title: "The case changed", Active: "cases", Body: id, Status: status})
 	case errors.Is(err, app.ErrHeld):
-		c.render(w, r, http.StatusConflict, "approval-error", page{Title: "Import preview is unavailable for this case", Active: "cases", Body: id, Status: status})
+		if result.Hold == "" {
+			result.Hold = "Check the current download in Arr, then return to this case for a fresh preview."
+		}
+		c.render(w, r, http.StatusConflict, "import-preview", page{Title: "Import preview unavailable", Active: "cases", Body: importPreviewView{id, result}, Status: status})
 	case err != nil:
 		c.readError(w, r, err)
 	default:

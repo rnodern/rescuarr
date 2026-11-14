@@ -66,7 +66,14 @@ func TestArrStatusAndQueue(t *testing.T) {
 				case "/namespace/api/v3/system/status":
 					return response(http.StatusOK, fmt.Sprintf(`{"appName":%q,"version":%q,"osName":"alpine"}`, tc.app, tc.version)), nil
 				case "/namespace/api/v3/queue":
-					if want := (url.Values{tc.flag: {"true"}, "page": {"1"}, "pageSize": {"100"}, "sortKey": {"added"}, "sortDirection": {"descending"}}); !reflect.DeepEqual(r.URL.Query(), want) {
+					want := url.Values{tc.flag: {"true"}, "page": {"1"}, "pageSize": {"100"}, "sortKey": {"added"}, "sortDirection": {"descending"}}
+					if tc.product == domain.ProductSonarr {
+						want.Set("includeSeries", "true")
+						want.Set("includeEpisode", "true")
+					} else {
+						want.Set("includeMovie", "true")
+					}
+					if !reflect.DeepEqual(r.URL.Query(), want) {
 						t.Fatalf("query mismatch: %v", r.URL.Query())
 					}
 					return response(http.StatusOK, fmt.Sprintf(`{"page":1,"pageSize":100,"totalRecords":2,"records":[

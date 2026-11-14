@@ -188,6 +188,24 @@ type Case struct {
 	Reason      ReasonCode
 	Evidence    []EvidenceID
 	NextCheckAt time.Time
+	Display     CaseDisplay `json:",omitzero"`
+}
+
+// CaseDisplay contains operator-facing labels. Recovery decisions use typed
+// identities and evidence separately.
+type CaseDisplay struct {
+	Title   string
+	Release string
+	Media   []CaseMedia
+	Service string  `json:"-"`
+	Product Product `json:"-"`
+	Version string  `json:"-"`
+}
+
+type CaseMedia struct {
+	Target  TargetRef
+	Title   string
+	Episode string
 }
 
 type Incident struct {

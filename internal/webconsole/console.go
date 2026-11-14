@@ -44,6 +44,7 @@ type console struct {
 var files embed.FS
 
 var views = template.Must(template.New("").Funcs(template.FuncMap{
+	"caseTitle": caseTitle, "serviceLabel": serviceLabel, "caseTarget": caseTargetLabel,
 	"state": stateLabel, "mode": modeLabel, "reason": reasonLabel,
 	"target": targetLabel, "effect": effectLabel, "verification": verificationLabel,
 	"action": actionLabel, "intent": intentLabel, "when": formatTime,

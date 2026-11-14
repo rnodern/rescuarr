@@ -30,6 +30,8 @@ func fixture(options ...func(*apptest.Console)) Options {
 		ID: "case-1", Revision: 5, State: domain.CaseProposed,
 		Job: domain.Job{Ref: job}, Targets: []domain.Target{{Ref: target}},
 		Reason: "unusual_filename", Evidence: []domain.EvidenceID{"source-evidence"},
+		Display: domain.CaseDisplay{Service: "Sonarr HD", Product: domain.ProductSonarr, Title: "Fixture Series",
+			Release: "Fixture.Series.S02E03", Media: []domain.CaseMedia{{Target: target, Episode: "S02E03", Title: "Fixture Episode"}}},
 	}
 	other := domain.Case{
 		ID: "case-2", Revision: 2, State: domain.CaseHeld, Reason: "capacity_unknown",
@@ -101,10 +103,10 @@ func TestConsoleViewsAndAssets(t *testing.T) {
 	h := New(fixture())
 	expect(t, request(h, "GET", "/", "owner", "", nil), 200, "<h1>Overview</h1>", "Held cases", "Open incidents")
 	expect(t, request(h, "GET", "/cases?state=held&q=fixture&limit=10", "owner", "", nil), 200,
-		"sonarr-hd", "sonarr-uhd", "case-1", "case-2",
+		"Sonarr HD", "Fixture Series", "case-1", "case-2",
 		"after=next-fixture&amp;limit=10&amp;q=fixture&amp;state=held")
 	expect(t, request(h, "GET", "/cases/case-1", "owner", "", nil), 200,
-		"<h1>Case case-1</h1>", "Episode #42", "Review import", "source-evidence")
+		"<h1>Fixture Series · S02E03</h1>", "Fixture Episode", "Review import", "source-evidence")
 	expect(t, request(h, "GET", "/actions/intent-1", "owner", "", nil), 200,
 		"Checking whether Arr accepted the request", "Import into the library")
 	expect(t, request(h, "GET", "/cases?limit=101", "owner", "", nil), 400, "Invalid page size")

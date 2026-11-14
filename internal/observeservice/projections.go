@@ -167,6 +167,12 @@ func persistGroup(ctx context.Context, tx *sql.Tx, instance domain.Instance, gro
 	}
 	seen := make(map[domain.TargetRef]bool)
 	for _, row := range group.rows {
+		if item.Display.Release == "" {
+			item.Display.Release = row.Release
+		}
+		if item.Display.Title == "" {
+			item.Display.Title = row.MediaTitle
+		}
 		item.Job.Members = append(item.Job.Members, domain.QueueMember{QueueID: row.ID, SnapshotGeneration: domain.Revision(generation), Target: row.Target})
 		if !row.Target.Valid() {
 			item.Job.CompleteSet = false
@@ -175,6 +181,9 @@ func persistGroup(ctx context.Context, tx *sql.Tx, instance domain.Instance, gro
 		if !seen[row.Target] {
 			seen[row.Target] = true
 			item.Targets = append(item.Targets, domain.Target{Ref: row.Target})
+			if row.EpisodeTitle != "" || row.Episode != "" {
+				item.Display.Media = append(item.Display.Media, domain.CaseMedia{Target: row.Target, Title: row.EpisodeTitle, Episode: row.Episode})
+			}
 		}
 	}
 	slices.SortFunc(item.Targets, func(a, b domain.Target) int {

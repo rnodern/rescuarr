@@ -107,6 +107,10 @@ type QueueRecord struct {
 	SizeBytes     *int64
 	AddedAt       time.Time
 	Findings      []QueueFinding
+	Release       string `json:"-"`
+	MediaTitle    string `json:"-"`
+	EpisodeTitle  string `json:"-"`
+	Episode       string `json:"-"`
 	// OutputPath is Arr-visible server data. It must stay out of generic serialisation.
 	OutputPath string `json:"-"`
 }
@@ -117,23 +121,39 @@ type QueueSnapshot struct {
 }
 
 type queueWire struct {
-	ID         int64     `json:"id"`
-	SeriesID   int64     `json:"seriesId"`
-	EpisodeID  int64     `json:"episodeId"`
-	MovieID    int64     `json:"movieId"`
-	DownloadID string    `json:"downloadId"`
-	Protocol   string    `json:"protocol"`
-	Client     string    `json:"downloadClient"`
-	Indexer    string    `json:"indexer"`
-	Status     string    `json:"status"`
-	State      string    `json:"trackedDownloadState"`
-	Tracked    string    `json:"trackedDownloadStatus"`
-	Size       *int64    `json:"size"`
-	AddedAt    time.Time `json:"added"`
-	OutputPath string    `json:"outputPath"`
-	Messages   []struct {
+	ID         int64      `json:"id"`
+	SeriesID   int64      `json:"seriesId"`
+	EpisodeID  int64      `json:"episodeId"`
+	MovieID    int64      `json:"movieId"`
+	DownloadID string     `json:"downloadId"`
+	Protocol   string     `json:"protocol"`
+	Client     string     `json:"downloadClient"`
+	Indexer    string     `json:"indexer"`
+	Status     string     `json:"status"`
+	State      string     `json:"trackedDownloadState"`
+	Tracked    string     `json:"trackedDownloadStatus"`
+	Size       *int64     `json:"size"`
+	AddedAt    time.Time  `json:"added"`
+	OutputPath string     `json:"outputPath"`
+	Title      string     `json:"title"`
+	Series     queueMedia `json:"series"`
+	Movie      queueMedia `json:"movie"`
+	Episode    struct {
+		ID     int64  `json:"id"`
+		Series int64  `json:"seriesId"`
+		Season *int   `json:"seasonNumber"`
+		Number *int   `json:"episodeNumber"`
+		Title  string `json:"title"`
+	} `json:"episode"`
+	Messages []struct {
 		Messages []string `json:"messages"`
 	} `json:"statusMessages"`
+}
+
+type queueMedia struct {
+	ID    int64  `json:"id"`
+	Title string `json:"title"`
+	Year  int    `json:"year"`
 }
 
 func (a *Arr) Queue(ctx context.Context, generation domain.Revision, observedAt time.Time) (QueueSnapshot, error) {
@@ -143,8 +163,11 @@ func (a *Arr) Queue(ctx context.Context, generation domain.Revision, observedAt 
 	query := url.Values{"sortKey": {"added"}, "sortDirection": {"descending"}}
 	if a.reader.product == domain.ProductSonarr {
 		query.Set("includeUnknownSeriesItems", "true")
+		query.Set("includeSeries", "true")
+		query.Set("includeEpisode", "true")
 	} else {
 		query.Set("includeUnknownMovieItems", "true")
+		query.Set("includeMovie", "true")
 	}
 	rows, err := scanPages[queueWire](ctx, a.reader, "/api/v3/queue", query, queuePageSize, func(row queueWire) int64 { return row.ID })
 	out := QueueSnapshot{Records: make([]QueueRecord, 0, len(rows))}
@@ -203,7 +226,7 @@ func (a *Arr) queueRecord(row queueWire) QueueRecord {
 			}
 		}
 	}
-	return QueueRecord{
+	record := QueueRecord{
 		ID: row.ID, Target: a.target(row.SeriesID, row.EpisodeID, row.MovieID),
 		DownloadID: exactToken(row.DownloadID, 256), Protocol: protocol(row.Protocol),
 		ClientLabel: boundedText(row.Client, 128), IndexerLabel: boundedText(row.Indexer, 128),
@@ -213,6 +236,30 @@ func (a *Arr) queueRecord(row queueWire) QueueRecord {
 		SizeBytes:     nonnegative(row.Size), AddedAt: row.AddedAt, Findings: findings,
 		OutputPath: exactToken(row.OutputPath, 4096),
 	}
+	record.Release = boundedText(row.Title, 300)
+	if strings.ContainsAny(record.Release, "/\\") {
+		record.Release = ""
+	}
+	switch record.Target.Kind {
+	case domain.TargetEpisode:
+		if row.Series.ID == row.SeriesID {
+			record.MediaTitle = boundedText(row.Series.Title, 240)
+		}
+		if e := row.Episode; e.ID == row.EpisodeID && e.Series == row.SeriesID {
+			record.EpisodeTitle = boundedText(e.Title, 240)
+			if e.Season != nil && e.Number != nil && *e.Season >= 0 && *e.Season <= 999 && *e.Number > 0 && *e.Number <= 9999 {
+				record.Episode = fmt.Sprintf("S%02dE%02d", *e.Season, *e.Number)
+			}
+		}
+	case domain.TargetMovie:
+		if row.Movie.ID == row.MovieID {
+			record.MediaTitle = boundedText(row.Movie.Title, 240)
+			if record.MediaTitle != "" && row.Movie.Year >= 1800 && row.Movie.Year <= 2200 {
+				record.MediaTitle += fmt.Sprintf(" (%d)", row.Movie.Year)
+			}
+		}
+	}
+	return record
 }
 
 func (a *Arr) target(seriesID, episodeID, movieID int64) domain.TargetRef {
