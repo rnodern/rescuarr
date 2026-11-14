@@ -12,15 +12,16 @@ import (
 	"github.com/rnodern/rescuarr/internal/webconsole"
 )
 
-func browserHandler(cfg config.Config, auth *access.Auth, local *store.Store, observations *observeservice.Service, notifications webconsole.NotificationService) http.Handler {
+func browserHandler(cfg config.Config, auth *access.Auth, local *store.Store, observations *observeservice.Service, notifications webconsole.NotificationService, recoveryPause webconsole.RecoveryPause) http.Handler {
 	browser := webconsole.New(webconsole.Options{
 		BasePath:         cfg.BasePath,
-		Read:             observations,
+		Read:             recoveryViews{ConsoleReader: observations, local: local},
 		Connections:      observations,
 		RecoveryActivity: observations,
 		ImportPreview:    recoveryservice.NewPreviewService(observations, local, nil, app.SystemClock{}),
 		Authorize:        app.CurrentBrowserSession,
 		Notifications:    notifications,
+		RecoveryPause:    recoveryPause,
 		ProwlDelivery:    cfg.ProwlDelivery,
 	})
 	return app.ConsoleHandler(cfg, auth, local, browser)
