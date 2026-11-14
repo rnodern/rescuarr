@@ -89,6 +89,13 @@ jobs:
           sudo apt-get install -y --no-install-recommends ffmpeg openssl
       - name: Run the isolated Sonarr 5 ID-only import
         run: test/lab/run.sh "$RUNNER_TEMP/rescuarr-sonarr-v5-import.json" sonarr/v5-id-import
+      - name: Show sanitised Sonarr 5 evidence
+        if: always()
+        shell: bash
+        run: |
+          if [[ -s "$RUNNER_TEMP/rescuarr-sonarr-v5-import.json" ]]; then
+            cat "$RUNNER_TEMP/rescuarr-sonarr-v5-import.json"
+          fi
       - name: Attach Sonarr 5 evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
