@@ -16,6 +16,7 @@
       <a href="{{.Base}}/"{{if eq .Active "overview"}} aria-current="page"{{end}}>Overview</a>
       <a href="{{.Base}}/cases"{{if eq .Active "cases"}} aria-current="page"{{end}}>Cases</a>
       {{if .HasConnections}}<a href="{{.Base}}/connections"{{if eq .Active "connections"}} aria-current="page"{{end}}>Connections</a>{{end}}
+      {{if .HasNotifications}}<a href="{{.Base}}/notifications"{{if eq .Active "notifications"}} aria-current="page"{{end}}>Notifications</a>{{end}}
     </nav>
     {{if .CSRF}}<form method="post" action="{{.Base}}/logout">
       <input type="hidden" name="csrf" value="{{.CSRF}}">
