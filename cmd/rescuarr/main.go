@@ -133,7 +133,7 @@ func serve(ctx context.Context, cfg config.Config, local *store.Store, auth *acc
 		return fmt.Errorf("open listener: %w", err)
 	}
 	server := &http.Server{
-		Handler:           app.ConsoleHandler(cfg, auth, local),
+		Handler:           browserHandler(cfg, auth, local),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      30 * time.Second,

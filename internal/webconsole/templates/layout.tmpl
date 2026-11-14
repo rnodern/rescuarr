@@ -16,6 +16,10 @@
       <a href="{{.Base}}/"{{if eq .Active "overview"}} aria-current="page"{{end}}>Overview</a>
       <a href="{{.Base}}/cases"{{if eq .Active "cases"}} aria-current="page"{{end}}>Cases</a>
     </nav>
+    {{if .CSRF}}<form method="post" action="{{.Base}}/logout">
+      <input type="hidden" name="csrf" value="{{.CSRF}}">
+      <button type="submit">Sign out</button>
+    </form>{{end}}
   </aside>
   <div class="workspace">
     {{if .Status.Mode}}<header class="topbar">

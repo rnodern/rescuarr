@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"embed"
 	"errors"
 	"html/template"
@@ -12,30 +13,44 @@ import (
 
 	"github.com/rnodern/rescuarr/internal/access"
 	"github.com/rnodern/rescuarr/internal/config"
+	"github.com/rnodern/rescuarr/internal/domain"
 	"github.com/rnodern/rescuarr/internal/store"
 )
 
-//go:embed assets/access.html assets/console.html
+//go:embed assets/access.html
 var consoleAssets embed.FS
 
-var consoleTemplates = template.Must(template.ParseFS(consoleAssets, "assets/access.html", "assets/console.html"))
+var consoleTemplates = template.Must(template.ParseFS(consoleAssets, "assets/access.html"))
 
-type console struct {
-	cfg   config.Config
-	auth  *access.Auth
-	store *store.Store
+type BrowserSession struct {
+	Actor  domain.ActorID
+	CSRF   string
+	Origin string
 }
 
-func ConsoleHandler(cfg config.Config, auth *access.Auth, local *store.Store) http.Handler {
-	c := &console{cfg: cfg, auth: auth, store: local}
+type browserSessionKey struct{}
+
+// CurrentBrowserSession supplies an authenticated session to the console.
+func CurrentBrowserSession(r *http.Request) BrowserSession {
+	session, _ := r.Context().Value(browserSessionKey{}).(BrowserSession)
+	return session
+}
+
+type console struct {
+	cfg  config.Config
+	auth *access.Auth
+}
+
+func ConsoleHandler(cfg config.Config, auth *access.Auth, local *store.Store, browser http.Handler) http.Handler {
+	c := &console{cfg: cfg, auth: auth}
 	mux := http.NewServeMux()
 	base := cfg.BasePath
-	mux.HandleFunc("GET "+base+"/{$}", c.home)
 	mux.HandleFunc("GET "+base+"/setup", c.showSetup)
 	mux.HandleFunc("POST "+base+"/setup", c.submitSetup)
 	mux.HandleFunc("GET "+base+"/login", c.showLogin)
 	mux.HandleFunc("POST "+base+"/login", c.submitLogin)
 	mux.HandleFunc("POST "+base+"/logout", c.logout)
+	mux.Handle(base+"/", c.authenticatedBrowser(browser))
 	return withStatus(local.Ready, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		headers(w)
 		if _, ok := c.origin(r); !ok {
@@ -50,38 +65,35 @@ func ConsoleHandler(cfg config.Config, auth *access.Auth, local *store.Store) ht
 	}))
 }
 
-func (c *console) home(w http.ResponseWriter, r *http.Request) {
-	token := readCookie(r, "rescuarr_owner")
-	session, err := c.auth.Authenticate(r.Context(), token, true)
-	if errors.Is(err, access.ErrDenied) {
-		required, err := c.auth.SetupRequired(r.Context())
-		if err != nil {
+func (c *console) authenticatedBrowser(browser http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		isHome := r.URL.Path == c.cfg.BasePath+"/" && (r.Method == http.MethodGet || r.Method == http.MethodHead)
+		session, err := c.auth.Authenticate(r.Context(), readCookie(r, "rescuarr_owner"), true)
+		if errors.Is(err, access.ErrDenied) && isHome {
+			required, err := c.auth.SetupRequired(r.Context())
+			if err != nil {
+				unavailable(w)
+				return
+			}
+			if required {
+				c.redirect(w, r, "/setup")
+			} else {
+				c.redirect(w, r, "/login")
+			}
+			return
+		}
+		if errors.Is(err, access.ErrDenied) {
+			http.Error(w, "Sign in again", http.StatusUnauthorized)
+			return
+		}
+		if err != nil || browser == nil {
 			unavailable(w)
 			return
 		}
-		path := "/login"
-		if required {
-			path = "/setup"
-		}
-		c.redirect(w, r, path)
-		return
-	}
-	if err != nil {
-		unavailable(w)
-		return
-	}
-	state, err := c.store.State(r.Context())
-	if err != nil {
-		unavailable(w)
-		return
-	}
-	data := struct {
-		Mode      string
-		Reconcile bool
-		Logout    string
-		CSRF      string
-	}{string(state.Mode), state.ReconcileRequired, c.cfg.BasePath + "/logout", session.CSRF}
-	_ = consoleTemplates.ExecuteTemplate(w, "console", data)
+		origin, _ := c.origin(r)
+		scope := BrowserSession{Actor: access.Owner, CSRF: session.CSRF, Origin: origin}
+		browser.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), browserSessionKey{}, scope)))
+	})
 }
 
 func (c *console) showSetup(w http.ResponseWriter, r *http.Request) {

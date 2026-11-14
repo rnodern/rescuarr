@@ -13,16 +13,11 @@ import (
 	"strings"
 
 	"github.com/rnodern/rescuarr/internal/app"
-	"github.com/rnodern/rescuarr/internal/domain"
 )
 
 // Session carries values issued by the authentication boundary. Origin is the
 // canonical external HTTP origin derived from validated host/proxy settings.
-type Session struct {
-	Actor  domain.ActorID
-	CSRF   string
-	Origin string
-}
+type Session = app.BrowserSession
 
 // Authorize authenticates the current owner. An empty session denies access.
 type Authorize func(*http.Request) Session
@@ -86,7 +81,7 @@ func New(options Options) http.Handler {
 				return
 			}
 		}
-		c.errorPage(w, http.StatusUnauthorized, "", "Sign in to continue", "Your session is missing or has expired.")
+		c.errorPage(w, r, http.StatusUnauthorized, "", "Sign in to continue", "Your session is missing or has expired.")
 	})
 }
 
@@ -97,34 +92,36 @@ func currentSession(r *http.Request) Session {
 }
 
 type page struct {
-	Base, Title, Active string
-	Status              app.Overview
-	Body                any
+	Base, Title, Active, CSRF string
+	Status                    app.Overview
+	Body                      any
 }
 
-func (c console) render(w http.ResponseWriter, code int, name string, p page) {
+func (c console) render(w http.ResponseWriter, r *http.Request, code int, name string, p page) {
 	p.Base = c.BasePath
+	session, _ := r.Context().Value(sessionKey{}).(Session)
+	p.CSRF = session.CSRF
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(code)
 	_ = views.ExecuteTemplate(w, name, p)
 }
 
-func (c console) errorPage(w http.ResponseWriter, code int, active, title, message string) {
-	c.render(w, code, "error", page{Title: title, Active: active, Body: message})
+func (c console) errorPage(w http.ResponseWriter, r *http.Request, code int, active, title, message string) {
+	c.render(w, r, code, "error", page{Title: title, Active: active, Body: message})
 }
 
-func (c console) readError(w http.ResponseWriter, err error) {
+func (c console) readError(w http.ResponseWriter, r *http.Request, err error) {
 	if errors.Is(err, app.ErrNotFound) {
-		c.errorPage(w, http.StatusNotFound, "cases", "Record unavailable", "Return to Cases to choose a current record.")
+		c.errorPage(w, r, http.StatusNotFound, "cases", "Record unavailable", "Return to Cases to choose a current record.")
 		return
 	}
-	c.errorPage(w, http.StatusServiceUnavailable, "", "Local data is unavailable", "Try refreshing after the local service recovers.")
+	c.errorPage(w, r, http.StatusServiceUnavailable, "", "Local data is unavailable", "Try refreshing after the local service recovers.")
 }
 
 func (c console) loadStatus(w http.ResponseWriter, r *http.Request) (app.Overview, bool) {
 	status, err := c.Read.Overview(r.Context())
 	if err != nil {
-		c.readError(w, err)
+		c.readError(w, r, err)
 	}
 	return status, err == nil
 }
@@ -134,7 +131,7 @@ func (c console) overview(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	c.render(w, http.StatusOK, "overview", page{Title: "Overview", Active: "overview", Status: status})
+	c.render(w, r, http.StatusOK, "overview", page{Title: "Overview", Active: "overview", Status: status})
 }
 
 func (c console) statusFragment(w http.ResponseWriter, r *http.Request) {
@@ -154,7 +151,7 @@ func (c console) statusFragment(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	c.render(w, http.StatusOK, "status", page{Status: status})
+	c.render(w, r, http.StatusOK, "status", page{Status: status})
 }
 
 func equalSecret(got, expected string) bool {
