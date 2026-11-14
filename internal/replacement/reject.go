@@ -50,7 +50,7 @@ type Original struct {
 // read. It is evidence for policy, not permission to reject.
 func (o Original) VerifiedSource(now time.Time) bool {
 	job := o.Job
-	record, ok := o.exactGrab()
+	grabbedAt, ok := o.exactGrab()
 	if !ok || job.Protocol != domain.ProtocolUsenet ||
 		job.Client.Kind != domain.ScopeClient || job.Client.Key == "" || job.Client.Instance != job.Ref.Instance {
 		return false
@@ -60,34 +60,36 @@ func (o Original) VerifiedSource(now time.Time) bool {
 		arrObservation(o, o.Arr.Observation, ArrTerminal, domain.ObservationKnown, now) &&
 		scopedObservation(o.Client.Observation, job.Client, domain.Source(domain.ProductSAB),
 			ClientTerminal, domain.ObservationKnown, job.DownloadID, now) &&
-		!o.Arr.Observation.ObservedAt.Before(record.At) && !o.Client.Observation.ObservedAt.Before(record.At) &&
+		!o.Arr.Observation.ObservedAt.Before(grabbedAt) && !o.Client.Observation.ObservedAt.Before(grabbedAt) &&
 		uniqueEvidence(o.Grab.Observation, o.Arr.Observation, o.Client.Observation)
 }
 
-func (o Original) exactGrab() (Record, bool) {
+// exactGrab returns the latest timestamp in the complete original grab group.
+func (o Original) exactGrab() (time.Time, bool) {
 	job := o.Job
 	if !exactScope(o) || len(o.Grab.Value) != len(o.Targets) || job.Release.GrabHistoryID <= 0 || job.Release.GUID == "" {
-		return Record{}, false
+		return time.Time{}, false
 	}
-	signature, grabbedAt := o.Grab.Value[0].Signature, o.Grab.Value[0].At
-	if !validSignature(signature, job) || grabbedAt.IsZero() || grabbedAt.After(o.Grab.Observation.ObservedAt) {
-		return Record{}, false
+	signature := o.Grab.Value[0].Signature
+	if !validSignature(signature, job) {
+		return time.Time{}, false
 	}
 	ids := make(map[int64]bool, len(o.Grab.Value))
 	targets := make([]domain.TargetRef, 0, len(o.Grab.Value))
-	var primary Record
+	// Sonarr assigns a timestamp to each episode row as it records the grab.
+	var latest time.Time
 	for _, record := range o.Grab.Value {
 		if record.ID <= 0 || ids[record.ID] || record.DownloadID != job.DownloadID ||
-			record.Signature != signature || !record.At.Equal(grabbedAt) {
-			return Record{}, false
+			record.Signature != signature || record.At.IsZero() || record.At.After(o.Grab.Observation.ObservedAt) {
+			return time.Time{}, false
 		}
 		ids[record.ID] = true
 		targets = append(targets, record.Target)
-		if record.ID == job.Release.GrabHistoryID {
-			primary = record
+		if record.At.After(latest) {
+			latest = record.At
 		}
 	}
-	return primary, primary.ID != 0 && sameTargets(targets, o.Targets)
+	return latest, ids[job.Release.GrabHistoryID] && sameTargets(targets, o.Targets)
 }
 
 type BlocklistEntry struct {

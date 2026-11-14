@@ -157,6 +157,27 @@ func TestRejectRequiresCompleteIndependentTerminalSource(t *testing.T) {
 	}
 }
 
+func TestSonarrPackGrabRowsCanHaveDistinctTimestamps(t *testing.T) {
+	input := syntheticRejection(domain.ProductSonarr, false)
+	last := &input.Origin.Grab.Value[1]
+	last.At = input.Origin.Grab.Value[0].At.Add(15 * time.Millisecond)
+	if out := VerifyReject(input); out.Outcome.Verification != domain.VerificationEffect {
+		t.Fatalf("pack with distinct grab timestamps did not verify: %#v", out)
+	}
+	for _, observation := range []*domain.Observation{&input.Origin.Arr.Observation, &input.Origin.Client.Observation} {
+		observedAt := observation.ObservedAt
+		observation.ObservedAt = last.At.Add(-time.Millisecond)
+		if input.Origin.VerifiedSource(input.Attempt.SentAt) {
+			t.Fatalf("%s terminal read predates the last pack grab", observation.Source)
+		}
+		observation.ObservedAt = observedAt
+	}
+	last.At = input.Origin.Grab.Observation.ObservedAt.Add(time.Millisecond)
+	if input.Origin.VerifiedSource(input.Attempt.SentAt) {
+		t.Fatal("pack row timestamp after grab observation verified")
+	}
+}
+
 func TestRejectSeparatesPartialEffects(t *testing.T) {
 	checks := []struct {
 		name    string
