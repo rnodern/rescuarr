@@ -1,0 +1,26 @@
+services:
+  rescuarr:
+    image: ${RESCUARR_IMAGE:-rescuarr:preview}
+    build:
+      context: ../..
+      dockerfile: deploy/container/Dockerfile
+      args:
+        RESCUARR_VERSION: ${RESCUARR_VERSION:-dev}
+        RESCUARR_REVISION: ${RESCUARR_REVISION:-unknown}
+    pull_policy: never
+    user: "10001:10001"
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${RESCUARR_HOST_PORT:-8787}:8787"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - data:/data
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m,mode=1777
+
+volumes:
+  data:
