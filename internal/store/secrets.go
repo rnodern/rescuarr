@@ -58,7 +58,7 @@ func (s *Store) WriteSecret(name, value string) error {
 		return err
 	}
 	path := filepath.Join(directory, name)
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	f, err := createSecretFile(path)
 	if err != nil {
 		return errors.New("could not create private credential file")
 	}

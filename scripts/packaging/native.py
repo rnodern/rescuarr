@@ -134,7 +134,7 @@ def build(args):
             "go": command("go", "version"), "archive": archive.name,
             "archive_sha256": checksum(archive), "binary_sha256": checksum(installed),
             "runtime": {"runner": os.environ.get("RUNNER_NAME", platform.platform()),
-                        "checks": ["version", "health", "readiness", "setup page", "restart", "backup", "restore", "owner setup and sign-in", "case and connection pages", "session logout"]},
+                        "checks": ["version", "health", "readiness", "setup page", "restart", "backup", "restore", "owner setup and sign-in", "case and connection pages", "connection key save", "session logout"]},
             "signing": "external hook completed" if args.sign_hook else "unsigned",
             "notarisation": (
                 "external hook completed" if args.notarise_hook else

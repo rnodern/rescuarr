@@ -148,7 +148,12 @@ func (s *ManualReviews) ManualReview(ctx context.Context) (app.ManualReviewView,
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return app.ManualReviewView{}, err
 		}
-		if stage == string(EmptyPackSearchSending) {
+		switch EmptyPackStage(stage) {
+		case EmptyPackRejectSending:
+			view.Hold = "Waiting for Sonarr to confirm queue removal and blocklisting. Check the Sonarr queue and blocklist if this persists."
+		case EmptyPackRejectVerified:
+			view.Hold = "Sonarr confirmed removal and blocklisting. The episode search is waiting for fresh evidence and a verified connection."
+		case EmptyPackSearchSending:
 			view.Hold = "Sonarr’s search acknowledgement is pending or unavailable. Check Sonarr’s Activity before starting another search."
 		}
 		return view, nil

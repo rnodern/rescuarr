@@ -312,12 +312,15 @@ func (w *emptyPackWorker) manualStep(ctx context.Context, transport http.RoundTr
 	}
 	defer release()
 	effects, _, err := w.connection(instance)
+	if errors.Is(err, arradapter.ErrQualification) {
+		return resetManualReview(ctx, local, id, token, w.clock.Now())
+	}
 	if err != nil {
 		return err
 	}
 	plan.checkpoint.manualToken, plan.checkpoint.manualScopeHash = token, scopeHash
 	err = w.reject(ctx, effects, plan.checkpoint)
-	if errors.Is(err, app.ErrConflict) || errors.Is(err, arradapter.ErrReadback) {
+	if errors.Is(err, app.ErrConflict) || errors.Is(err, arradapter.ErrReadback) || errors.Is(err, arradapter.ErrQualification) {
 		return resetManualReview(ctx, local, id, token, w.clock.Now())
 	}
 	return err

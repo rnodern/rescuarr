@@ -42,6 +42,10 @@ func checkSecretDirectory(path string) error {
 	return secureDirectory(path)
 }
 
+func createSecretFile(path string) (*os.File, error) {
+	return os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+}
+
 func checkSecretFile(_ string, info os.FileInfo) bool {
 	stat, ok := info.Sys().(*syscall.Stat_t)
 	return ok && stat.Uid == uint32(os.Geteuid()) && info.Mode().Perm()&0o077 == 0
