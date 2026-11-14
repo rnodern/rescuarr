@@ -230,6 +230,7 @@ func prepareManualEmptyPack(ctx context.Context, cases *observeservice.Service, 
 		folder = ""
 	}
 	plan := manualPackPlan{checkpoint: checkpoint, preview: replacementPlan(current, needs), folder: folder}
+	plan.preview.Language = reviewPackLanguage(ctx, arr, current, plan.preview, clock.Now())
 	plan.searchIDs = wantedEmptyPackEpisodes(plan.preview)
 	// The token binds to what the owner sees and to the original private job
 	// and path identity. Only the digest is persisted with the approval.

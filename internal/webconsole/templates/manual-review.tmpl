@@ -31,6 +31,7 @@
     {{else}}
       {{if $folder}}<dl><dt>Download folder</dt><dd>{{$folder}}</dd></dl>{{end}}
       {{if $.Body.Preview.Replacement}}<p>Sonarr found no eligible files in the completed download. Episode status determines which episodes still need a search.</p>
+      {{with $.Body.Preview.Replacement.Language}}{{template "pack-language-review" .}}{{end}}
       {{else if $.Body.Preview.Hold}}<p>{{$.Body.Preview.Hold}}</p>
       {{else if not $.Body.Processing}}<p>Waiting for import evidence from Arr.</p>{{end}}
     {{end}}
@@ -39,6 +40,7 @@
 <section class="panel section" aria-labelledby="manual-proposal-heading">
   <h2 id="manual-proposal-heading">{{if $.Body.Processing}}Approved action{{else}}Proposed action{{end}}</h2>
   {{if $.Body.Preview.Replacement}}
+  {{if not $.Body.Preview.Replacement.Language}}
   <ol>
     <li>Remove this download from the Sonarr queue.</li>
     <li>Blocklist this release and keep the download client job.</li>
@@ -46,6 +48,7 @@
     {{else if $.Body.Preview.Replacement.UnclearCount}}<li>Confirm which episodes still need a search.</li>
     {{else}}<li>Finish without a search.</li>{{end}}
   </ol>
+  {{end}}
   {{else if and $.Body.Episode $.Body.Episode.Matched}}<p>Import the matching file into the library.</p>
   {{else if not $.Body.Processing}}<p>Waiting for enough evidence to propose an action.</p>{{end}}
   {{if $.Body.Hold}}<p class="notice">{{$.Body.Hold}}</p>{{end}}

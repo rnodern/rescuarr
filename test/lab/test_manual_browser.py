@@ -33,6 +33,7 @@ class ManualBrowserFormsTest(unittest.TestCase):
             origin = "http://127.0.0.1:18989"
             headers = {"X-Api-Key": "fixture-key"}
 
-        with patch.object(browser, "get", return_value=connection_page), patch.object(browser, "post") as post:
+        pages = [connection_page, connection_page, "<td>Available</td><td>Complete</td>"]
+        with patch.object(browser, "get", side_effect=pages), patch.object(browser, "post") as post:
             self.assertEqual(browser.connect(DisposableArr()), identity)
         self.assertEqual(post.call_args.args, (route, "/connections", {"csrf": "owner"}))

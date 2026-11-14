@@ -102,6 +102,13 @@ class OwnerBrowser:
         checks = [path for path, _ in forms.forms if path and CONNECTION_CHECK.fullmatch(path)]
         verify(len(checks) == 1, "manualBrowserConnectionCheckFormMissing")
         self.post(checks[0], "/connections", forms.form(checks[0]))
+        status_page = self.get("/connections")
+        if ">Available<" not in status_page or ">Complete<" not in status_page:
+            labels = {"API key rejected or unavailable": "access", "Service unavailable": "unavailable",
+                      "Unsupported response": "response", "Queue read incomplete": "partial",
+                      "Version changed": "version", "Awaiting first check": "awaitingCheck"}
+            outcome = next((label for message, label in labels.items() if message in status_page), "unknown")
+            raise LabFailure(f"manualBrowserConnectionCheckNotReady:{outcome}")
         return CONNECTION_CHECK.fullmatch(checks[0])[1]
 
     def manual_mode(self):
@@ -152,7 +159,15 @@ class PackagedManualLab:
     def command(self, *args):
         result = subprocess.run([self.executable, *args], cwd=self.root, env=self.environment,
                                 capture_output=True, text=True, timeout=40, check=False)
-        verify(result.returncode == 0, f"manualBrowserCLI:{args[0]}:exit{result.returncode}")
+        if result.returncode != 0:
+            known = {"run Check queue in the console first": "selectConnection",
+                     "observed Sonarr version differs": "savedVersion",
+                     "current version differs": "currentVersion",
+                     "selected Sonarr connection's API key": "localCredential",
+                     "one enabled SABnzbd client": "upstreamProfile",
+                     "data directory is already in use": "localLock"}
+            detail = next((code for message, code in known.items() if message in result.stderr), "unknown")
+            raise LabFailure(f"manualBrowserCLI:{args[0]}:exit{result.returncode}:{detail}")
         return result.stdout
 
     def start(self, directory, settings=None):

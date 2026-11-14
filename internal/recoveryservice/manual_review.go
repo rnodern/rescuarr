@@ -181,6 +181,10 @@ func (s *ManualReviews) ManualReview(ctx context.Context) (app.ManualReviewView,
 		return view, nil
 	}
 	view.Preview.Replacement, view.Folder = plan.preview, plan.folder
+	if plan.preview.Language != nil {
+		view.Hold = "Review the release and audio evidence. File replacement for this language case is awaiting verification."
+		return view, nil
+	}
 	for _, episode := range plan.preview.Episodes {
 		if episode.Status == app.ReplacementSearch {
 			view.SearchLabels = append(view.SearchLabels, episode.Label)
@@ -198,7 +202,7 @@ func (s *ManualReviews) ManualReview(ctx context.Context) (app.ManualReviewView,
 }
 
 func (s *ManualReviews) validateApproval(ctx context.Context, item domain.Case, plan manualPackPlan) error {
-	if s.qualified == nil || plan.preview == nil || plan.preview.UnclearCount != 0 || len(item.Incidents) != 0 {
+	if s.qualified == nil || plan.preview == nil || plan.preview.Language != nil || plan.preview.UnclearCount != 0 || len(item.Incidents) != 0 {
 		return app.ErrHeld
 	}
 	var paused, reconcile bool
