@@ -1,0 +1,12 @@
+{{define "overview"}}
+{{template "start" .}}
+<h1>Overview</h1>
+{{if .Status.Paused}}<p class="notice">New recovery actions are paused.</p>
+{{else if .Status.ReconcileRequired}}<p class="notice">Recovery is held pending reconciliation.</p>{{end}}
+<div class="metrics">
+  <a class="panel metric" href="{{.Base}}/cases"><span>Cases</span><strong>{{.Status.Cases}}</strong></a>
+  <a class="panel metric" href="{{.Base}}/cases?state=held"><span>Held cases</span><strong>{{.Status.HeldCases}}</strong></a>
+  <div class="panel metric"><span>Open incidents</span><strong>{{.Status.OpenIncidents}}</strong></div>
+</div>
+{{template "end" .}}
+{{end}}
