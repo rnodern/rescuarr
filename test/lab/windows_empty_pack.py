@@ -27,6 +27,11 @@ SOURCE = "http://127.0.0.1:8081"
 CASE = "sonarr/windows-v5-adapter-pack"
 
 
+def stage(result, name):
+    result["stage"] = name
+    print("Windows Sonarr lab: " + name, flush=True)
+
+
 def start(stack, command, cwd):
     proc = subprocess.Popen(command, cwd=cwd, stdin=subprocess.DEVNULL,
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -88,13 +93,13 @@ def exercise(args, result):
             stack.enter_context(patch.object(scenarios, key, value))
         stack.enter_context(patch.object(empty_pack, "SOURCE", SOURCE))
 
-        result["stage"] = "sourceStartup"
+        stage(result, "sourceStartup")
         fixture = start(stack, [sys.executable, "-B", __file__, "--fixture",
                                 args.media, args.certificate, args.key], root)
         health = require_ready(fixture, lambda: get_json(SOURCE, "/health"), "fixture")
         scenarios.verify(health.get("seed") == SEED, "unexpectedFixtureVersion")
 
-        result["stage"] = "sabStartup"
+        stage(result, "sabStartup")
         sab = start(stack, [args.sab, "-f", ini, "-s", "127.1.1.1:18080", "-b", "0"], args.sab.parent)
         version = require_ready(sab, lambda: scenarios.sab_api("version"), "sabStartup")
         scenarios.verify(version.get("version") == SAB_VERSION, "unexpectedSABVersion")
@@ -103,7 +108,7 @@ def exercise(args, result):
         result["sabnzbd"] = {"version": SAB_VERSION, "loopback": True, "emptyAtStartup": True}
         scenarios.configure_sab()
 
-        result["stage"] = "sonarrStartup"
+        stage(result, "sonarrStartup")
         sonarr = start(stack, [args.sonarr, f"/data={data}", "/nobrowser"], args.sonarr.parent)
         arr = scenarios.Arr("sonarr", origin=SONARR, key=sonarr_key)
         status = require_ready(sonarr, lambda: get_json(SONARR, "/api/v3/system/status", headers=arr.headers),
@@ -117,15 +122,17 @@ def exercise(args, result):
         result["sonarr"] = {"version": SONARR_V5_VERSION, "branch": "develop", "windows": True,
                             "docker": False, "emptyAtStartup": True}
 
-        result["stage"] = "arrSetup"
+        stage(result, "arrSetup")
         profile = arr.setup()
         result["settings"] = {"profileId": profile["id"], "cutoff": profile["cutoff"],
                               "completedHandling": False, "removeCompletedDownloads": False,
                               "removeFailedDownloads": False, "automaticRedownloadFailed": True}
+        stage(result, "mediaSetup")
         episodes = arr.media(profile["id"])
-        result["stage"] = "exercise"
+        stage(result, "exercise")
         empty_pack_replacement(arr, episodes[0], episodes[1], result, adapter=adapter)
         result["fixtureMetadata"] = get_json(SOURCE, "/lab/metadata")
+        stage(result, "cleanup")
     result.update(status="observed", stage="complete", qualification="awaitingIndependentReview")
 
 
@@ -155,6 +162,7 @@ def main():
         with args.report.open("x", encoding="utf-8") as destination:
             json.dump(report, destination, indent=2)
             destination.write("\n")
+    print(json.dumps(result, indent=2), flush=True)
     return int(result["status"] != "observed")
 
 
