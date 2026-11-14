@@ -137,6 +137,8 @@
 {{define "replacement-preview"}}
 <section class="panel">
   {{if .Release}}<p><strong>Download release</strong> · {{.Release}}</p>{{end}}
+  {{with .Language}}{{template "pack-language-review" .}}{{end}}
+  {{if not .Language}}
   {{if .UnclearCount}}
   <p class="notice">Sonarr has queue entries whose episodes could not be identified. Confirm what they cover before starting a replacement search.</p>
   {{end}}
@@ -145,13 +147,36 @@
   {{if not .UnclearCount}}
   <p>If you’ve confirmed the pack has no usable files, remove this one download from the Sonarr queue and blocklist the release. Leave download-client removal and automatic search off.{{if .SearchCount}} Then check that each episode marked <strong>Search</strong> is still wanted in Sonarr before searching it.{{end}}</p>
   {{end}}
+  {{end}}
   <p>Preview only. Rescuarr has made no changes in Sonarr.</p>
+  {{if .Language}}<h2>Current episode status</h2>{{end}}
   <table>
-    <thead><tr><th scope="col">Episode</th><th scope="col">Recommendation</th></tr></thead>
+    <thead><tr><th scope="col">Episode</th><th scope="col">{{if .Language}}Status{{else}}Recommendation{{end}}</th></tr></thead>
     <tbody>{{range .Episodes}}<tr>
       <th scope="row">{{.Label}}</th>
       <td data-label="Recommendation">{{if eq .Status "search"}}<strong>Search</strong>{{else if eq .Status "in_library"}}Already in library{{else if eq .Status "other_download"}}Another download in queue{{else if eq .Status "unmonitored"}}Unmonitored{{else if eq .Status "unaired"}}No confirmed past airing{{else}}Needs review{{end}}</td>
     </tr>{{end}}</tbody>
   </table>
 </section>
+{{end}}
+
+{{define "pack-language-review"}}
+<h2>Release language</h2>
+<dl>
+  <dt>Release name</dt><dd>{{range $i, $lang := .FilenameLanguages}}{{if $i}}, {{end}}{{$lang}}{{end}}</dd>
+  <dt>Sonarr grab history</dt><dd>{{if .SonarrLanguages}}{{range $i, $lang := .SonarrLanguages}}{{if $i}}, {{end}}{{$lang}}{{end}}{{else}}Language unavailable{{end}}</dd>
+</dl>
+{{if .Agreement}}<p>Sonarr’s grab history agrees with the language in the release name. Check which current library files came from this download and what audio tracks Sonarr found.</p>
+{{else}}<p>Sonarr’s grab history could not confirm the language in the release name.</p>{{end}}
+{{if .Files}}
+<table>
+  <thead><tr><th scope="col">Episode</th><th scope="col">Current file</th><th scope="col">Download source</th><th scope="col">Audio tracks</th></tr></thead>
+  <tbody>{{range .Files}}<tr>
+    <th scope="row">{{.Episode}}</th>
+    <td data-label="Current file">{{if .Filename}}{{.Filename}}{{else}}Unavailable{{end}}</td>
+    <td data-label="Download source">{{if eq .Origin "same_release"}}This download{{else if eq .Origin "other_release"}}Another download{{else}}Unverified{{end}}</td>
+    <td data-label="Audio tracks">{{if .AudioLanguages}}{{range $i, $lang := .AudioLanguages}}{{if $i}}, {{end}}{{$lang}}{{end}}{{if not .AudioLanguagesComplete}} (partial){{end}}{{else}}Unverified{{end}}</td>
+  </tr>{{end}}</tbody>
+</table>
+{{end}}
 {{end}}
