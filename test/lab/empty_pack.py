@@ -158,7 +158,7 @@ def run_go_adapter(arr, operation, scope, *, executable="/lab-tools/go-pack-prob
     return proof
 
 
-def empty_pack_replacement(arr, missing, covered, report, *, adapter=None):
+def empty_pack_replacement(arr, missing, covered, report, *, adapter=None, manual_review=None):
     series_id = missing["seriesId"]
     targets = sorted([missing["id"], covered["id"]])
     verify(covered["seriesId"] == series_id and missing["seasonNumber"] == covered["seasonNumber"] == 1
@@ -228,6 +228,19 @@ def empty_pack_replacement(arr, missing, covered, report, *, adapter=None):
         "episodeFileIDs": before_links,
     }
     start = len(search_events())
+    if manual_review:
+        command_id = manual_review(download_id, title, output, missing["id"], report)
+        command = poll(lambda: arr.completed_command(command_id, "EpisodeSearch"), "manualPackSearchCompletionMissing")
+        grabbed = poll(lambda: arr.find_grab(missing["id"], "episode1", "replacement"), "manualPackReplacementGrabMissing")
+        replacement = {"command": command, "searches": arr.search_scope(start, "episode1"), "grab": grabbed}
+        rejected = poll(lambda: rejected_pack(arr, missing, download_id, title, targets, grab[0]["quality"], previous_blocklist),
+                        "manualPackRejectReadbackMissing")
+        verify(sab_job(download_id) == client and output.is_dir() and not inventory(output, all_files=True),
+               "manualPackRejectChangedIndependentState")
+        report["afterReject"] = {**rejected, "client": client, "sourceInventory": []}
+        finish_replacement(arr, missing, covered, replacement, existing_file, download_id, client, output, report)
+        return
+
     queue_id = min(row["id"] for row in rows) if adapter else rows[0]["id"]
     report["operation"] = {"method": "DELETE", "queueId": queue_id, "query": RETAIN_FLAGS}
     if adapter:
@@ -268,6 +281,10 @@ def empty_pack_replacement(arr, missing, covered, report, *, adapter=None):
         report["goAdapter"]["searchCommandId"] = command_id
     else:
         replacement = grab_episode(arr, missing, "episode1", "replacement")
+    finish_replacement(arr, missing, covered, replacement, existing_file, download_id, client, output, report)
+
+
+def finish_replacement(arr, missing, covered, replacement, existing_file, download_id, client, output, report):
     new_id, new_title = replacement["grab"]["downloadId"], replacement["grab"]["sourceTitle"]
     verify(new_id != download_id, "replacementReusedExistingDownload")
     poll(lambda: completed_job(new_id), "packReplacementSABCompletionTimeout", timeout=150)

@@ -29,6 +29,9 @@ type EmptyPackScope struct {
 	DownloadID, Release string
 	SeriesID            int64
 	EpisodeIDs          []int64
+	// Manual review binds the reported file location and client to the final
+	// rejection check. These private strings never appear in request bodies.
+	OutputPath, ClientLabel string
 }
 
 // EmptyPackAdapter implements the two independently-qualified Sonarr 5
@@ -152,6 +155,9 @@ func exactPackAliases(scope EmptyPackScope, rows []observe.QueueRecord) bool {
 		if row.Target.Kind != domain.TargetEpisode || row.Target.SeriesID != scope.SeriesID ||
 			row.Protocol != domain.ProtocolUsenet || row.Release != scope.Release || row.ClientLabel == "" ||
 			row.OutputPath == "" || !completedPackWithoutFiles(row) {
+			return false
+		}
+		if scope.OutputPath != "" && (row.OutputPath != scope.OutputPath || row.ClientLabel != scope.ClientLabel) {
 			return false
 		}
 		if client != "" && (row.ClientLabel != client || row.OutputPath != path) {

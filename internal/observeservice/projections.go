@@ -51,7 +51,8 @@ func persistCases(ctx context.Context, tx *sql.Tx, instance domain.Instance, sna
 	now time.Time, coverage domain.ObservationState, checks map[int64]domain.EpisodeNameReview, imports map[domain.CaseID]domain.EvidenceID) error {
 	isComplete := coverage == domain.ObservationKnown
 	if isComplete {
-		if _, err := tx.ExecContext(ctx, `DELETE FROM observe_cases WHERE instance_id = ? AND state = ? AND updated_at < ?`,
+		if _, err := tx.ExecContext(ctx, `DELETE FROM observe_cases WHERE instance_id = ? AND state = ? AND updated_at < ?
+			AND NOT EXISTS (SELECT 1 FROM manual_reviews WHERE case_id = observe_cases.id AND state IN ('pending', 'approved'))`,
 			instance.Ref.ID, domain.CaseClosed, stamp(now.Add(-closedRetention))); err != nil {
 			return err
 		}

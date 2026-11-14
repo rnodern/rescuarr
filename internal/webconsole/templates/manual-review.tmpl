@@ -1,0 +1,99 @@
+{{define "manual-review"}}
+{{template "start" .}}
+<h1>Manual Review</h1>
+<div data-manual-review>
+{{with .Body.Case}}
+<div class="case-grid">
+  <section class="panel">
+    <h2>{{caseTitle .}}</h2>
+    <dl>
+      <dt>Service</dt><dd>{{serviceLabel .Display.Service .Display.Product}}{{if .Display.Version}} {{.Display.Version}}{{end}}</dd>
+      {{if .Display.Release}}<dt>Release grabbed</dt><dd>{{.Display.Release}}</dd>{{end}}
+      <dt>Arr reported</dt><dd>{{if $.Body.Diagnosis}}{{$.Body.Diagnosis}}{{else}}{{reason .Reason}}{{end}}</dd>
+      {{if and .Targets (not $.Body.Preview.Replacement)}}
+      <dt>{{if eq (len .Targets) 1}}Target{{else}}Targets{{end}}</dt>
+      {{range .Targets}}<dd>{{caseTarget $.Body.Case .Ref}}</dd>{{end}}
+      {{end}}
+    </dl>
+    <p><a href="{{$.Base}}/cases/{{.ID}}">Open download details</a></p>
+  </section>
+  <section class="panel">
+    <h2>Assessment</h2>
+    {{$folder := $.Body.Folder}}
+    {{with $.Body.Episode}}
+    {{if .Matched}}<p>The folder and filename match the series and episode number.{{if and .EpisodeTitle (not .TitleInNames)}} The names omit the episode title.{{end}}{{if .ArrRejection}} Sonarr still reports an import rejection.{{end}}</p>
+    {{else if .Reason}}<p>{{.Reason}}</p>{{end}}
+    <dl>
+      {{if .Folder}}<dt>Download folder</dt><dd>{{.Folder}}</dd>
+      {{else if $folder}}<dt>Download folder</dt><dd>{{$folder}}</dd>{{end}}
+      {{if .Filename}}<dt>Video file</dt><dd>{{.Filename}}</dd>{{end}}
+    </dl>
+    {{else}}
+      {{if $folder}}<dl><dt>Download folder</dt><dd>{{$folder}}</dd></dl>{{end}}
+      {{if $.Body.Preview.Replacement}}<p>Sonarr found no eligible files in the completed download. Episode status determines which episodes still need a search.</p>
+      {{else if $.Body.Preview.Hold}}<p>{{$.Body.Preview.Hold}}</p>
+      {{else if not $.Body.Processing}}<p>Waiting for import evidence from Arr.</p>{{end}}
+    {{end}}
+  </section>
+</div>
+<section class="panel section" aria-labelledby="manual-proposal-heading">
+  <h2 id="manual-proposal-heading">{{if $.Body.Processing}}Approved action{{else}}Proposed action{{end}}</h2>
+  {{if $.Body.Preview.Replacement}}
+  <ol>
+    <li>Remove this download from the Sonarr queue.</li>
+    <li>Blocklist this release and keep the download client job.</li>
+    {{if $.Body.SearchLabels}}<li>Search only for {{range $i, $label := $.Body.SearchLabels}}{{if $i}}, {{end}}{{$label}}{{end}}, if still missing.</li>
+    {{else if $.Body.Preview.Replacement.UnclearCount}}<li>Confirm which episodes still need a search.</li>
+    {{else}}<li>Finish without a search.</li>{{end}}
+  </ol>
+  {{else if and $.Body.Episode $.Body.Episode.Matched}}<p>Import the matching file into the library.</p>
+  {{else if not $.Body.Processing}}<p>Waiting for enough evidence to propose an action.</p>{{end}}
+  {{if $.Body.Hold}}<p class="notice">{{$.Body.Hold}}</p>{{end}}
+  {{if $.Body.Processing}}<p class="notice" data-manual-processing>Rescuarr is checking the approved action.{{if $.HasRecoveryActivity}} See <a href="{{$.Base}}/activity">Activity</a> for updates.{{end}}</p>
+  <p><a href="{{$.Base}}/manual-review">Refresh review</a></p>
+  {{else}}<div class="connection-actions section">
+    {{if and $.Body.CanApprove $.Body.ApprovalToken}}
+    <form method="post" action="{{$.Base}}/manual-review" data-approval>
+      <input type="hidden" name="csrf" value="{{$.CSRF}}">
+      <input type="hidden" name="token" value="{{$.Body.ApprovalToken}}">
+      <input type="hidden" name="decision" value="approve">
+      <button type="submit">Approve</button>
+    </form>
+    {{end}}
+    {{if $.Body.Token}}
+    <form method="post" action="{{$.Base}}/manual-review" data-approval>
+      <input type="hidden" name="csrf" value="{{$.CSRF}}">
+      <input type="hidden" name="token" value="{{$.Body.Token}}">
+      <input type="hidden" name="decision" value="decline">
+      <button class="button-quiet" type="submit">Decline</button>
+    </form>
+    {{end}}
+  </div>{{end}}
+</section>
+{{with $.Body.Preview.Replacement}}
+<section class="panel section">
+  <h2>Episode status</h2>
+  <table>
+    <thead><tr><th scope="col">Episode</th><th scope="col">Status</th></tr></thead>
+    <tbody>{{range .Episodes}}<tr>
+      <th scope="row">{{.Label}}</th>
+      <td data-label="Status">{{if eq .Status "search"}}<strong>Still missing</strong>{{else if eq .Status "in_library"}}Already in library{{else if eq .Status "other_download"}}Another download in queue{{else if eq .Status "unmonitored"}}Unmonitored{{else if eq .Status "unaired"}}No confirmed past airing{{else}}Needs review{{end}}</td>
+    </tr>{{end}}</tbody>
+  </table>
+</section>
+{{end}}
+{{else}}
+{{if .Body.Hold}}<p class="notice">{{.Body.Hold}}</p>{{end}}
+<p class="panel empty">No downloads are waiting for Manual Review.</p>
+{{end}}
+</div>
+{{template "end" .}}
+{{end}}
+
+{{define "manual-review-error"}}
+{{template "start" .}}
+<h1>{{.Title}}</h1>
+<p>{{.Body}}</p>
+<a href="{{.Base}}/manual-review">Open Manual Review</a>
+{{template "end" .}}
+{{end}}

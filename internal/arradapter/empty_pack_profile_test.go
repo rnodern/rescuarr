@@ -99,6 +99,7 @@ func TestProbeEmptyPackProfilePinsObservedSettings(t *testing.T) {
 		{"retention drift", map[string]string{packClientsRoute: "[" + strings.Replace(packClientResponse, `"removeFailedDownloads":false`, `"removeFailedDownloads":true`, 1) + "]"}, true},
 		{"completed handling drift", map[string]string{packSettingsRoute: strings.Replace(packSettingsResponse, `"enableCompletedDownloadHandling":true`, `"enableCompletedDownloadHandling":false`, 1)}, true},
 		{"client label drift", map[string]string{packClientsRoute: "[" + strings.Replace(packClientResponse, "Rescuarr Fixture SABnzbd", "Renamed SABnzbd", 1) + "]"}, true},
+		{"client endpoint drift", map[string]string{packClientsRoute: "[" + strings.Replace(packClientResponse, "private.sab.invalid", "another.sab.invalid", 1) + "]"}, true},
 		{"package drift", map[string]string{packStatusRoute: strings.Replace(packStatusResponse, "ls208", "ls209", 1)}, true},
 		{"mapping drift", map[string]string{packMappingRoute: `[{"id":1,"host":"private.host","localPath":"/private/from","remotePath":"/private/to"}]`}, true},
 	} {

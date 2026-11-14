@@ -30,6 +30,7 @@ type EmptyPackProfile struct {
 	AutoRedownloadInteractive bool
 	RemoteMappingCount        int
 	Fingerprint               [sha256.Size]byte `json:"-"`
+	clientSettings            [sha256.Size]byte
 }
 
 // ProbeEmptyPackProfile reads the pinned Sonarr API on an existing connection.
@@ -65,7 +66,10 @@ func ProbeEmptyPackProfile(ctx context.Context, instance domain.Instance, apiKey
 		}
 	}
 	profile.RemoteMappingCount = len(mappings)
-	content, err := json.Marshal(profile)
+	content, err := json.Marshal(struct {
+		Profile EmptyPackProfile
+		Client  [sha256.Size]byte
+	}{profile, profile.clientSettings})
 	if err != nil {
 		return EmptyPackProfile{}, ErrReadback
 	}
@@ -129,7 +133,6 @@ func (a *EmptyPackAdapter) packDownloadProfile(ctx context.Context, profile *Emp
 	profile.AutoRedownloadFailed = *settings.AutoRedownloadFailed
 	profile.AutoRedownloadInteractive = *settings.AutoRedownloadInteractive
 
-	// Skip provider fields entirely. They may include credentials, hosts and URLs.
 	var clients []struct {
 		ID              int64  `json:"id"`
 		Name            string `json:"name"`
@@ -138,6 +141,10 @@ func (a *EmptyPackAdapter) packDownloadProfile(ctx context.Context, profile *Emp
 		Enabled         *bool  `json:"enable"`
 		RemoveCompleted *bool  `json:"removeCompletedDownloads"`
 		RemoveFailed    *bool  `json:"removeFailedDownloads"`
+		Fields          []struct {
+			Name  string          `json:"name"`
+			Value json.RawMessage `json:"value"`
+		} `json:"fields"`
 	}
 	if err := a.readPackJSON(ctx, "/api/v3/downloadclient", nil, &clients); err != nil {
 		return err
@@ -159,6 +166,22 @@ func (a *EmptyPackAdapter) packDownloadProfile(ctx context.Context, profile *Emp
 		profile.ClientType = client.Implementation
 		profile.RemoveCompleted = *client.RemoveCompleted
 		profile.RemoveFailed = *client.RemoveFailed
+		// Hash the destination fields without displaying or retaining them.
+		address := make(map[string]json.RawMessage)
+		for _, field := range client.Fields {
+			switch field.Name {
+			case "host", "port", "useSsl", "urlBase", "tvCategory":
+				if _, exists := address[field.Name]; exists || len(field.Value) == 0 {
+					return ErrReadback
+				}
+				address[field.Name] = field.Value
+			}
+		}
+		content, err := json.Marshal(address)
+		if err != nil {
+			return ErrReadback
+		}
+		profile.clientSettings = sha256.Sum256(content)
 	}
 	if profile.ClientID == 0 {
 		return ErrReadback

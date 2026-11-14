@@ -18,6 +18,7 @@ from xml.etree import ElementTree as ET
 import empty_pack
 import scenarios
 from empty_pack import empty_pack_replacement, run_go_adapter
+from manual_browser import PackagedManualLab
 from probe import SAB_VERSION, SONARR_V5_VERSION, get_json
 from source import SEED, serve
 
@@ -25,6 +26,7 @@ SONARR = "http://127.0.0.1:18989"
 SAB = "http://127.1.1.1:18080"
 SOURCE = "http://127.0.0.1:8081"
 CASE = "sonarr/windows-v5-adapter-pack"
+MANUAL_CASE = "sonarr/windows-v5-manual-pack"
 
 
 def stage(result, name):
@@ -32,9 +34,9 @@ def stage(result, name):
     print("Windows Sonarr lab: " + name, flush=True)
 
 
-def start(stack, command, cwd):
+def start(stack, command, cwd, env=None):
     proc = subprocess.Popen(command, cwd=cwd, stdin=subprocess.DEVNULL,
-                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
     stack.callback(stop, proc)
     return proc
 
@@ -67,10 +69,10 @@ def sonarr_config(data, key):
     ET.ElementTree(root).write(data / "config.xml", encoding="utf-8")
 
 
-def exercise(args, result):
+def exercise(args, result, source_sha):
     scenarios.verify(os.name == "nt" and os.environ.get("GITHUB_ACTIONS") == "true", "requiresDisposableWindowsRunner")
     result["binaries"] = {}
-    for name in ("sonarr", "sab", "adapter"):
+    for name in ("sonarr", "sab", "adapter" if args.adapter else "rescuarr"):
         executable = getattr(args, name)
         with executable.open("rb") as handle:
             result["binaries"][name] = {"file": executable.name, "sha256": hashlib.file_digest(handle, "sha256").hexdigest()}
@@ -87,7 +89,7 @@ def exercise(args, result):
             f"download_dir = {downloads / 'incomplete'}\ncomplete_dir = {downloads / 'complete'}\n"
             "permissions = \napi_warnings = 0\n", encoding="utf-8",
         )
-        adapter = partial(run_go_adapter, executable=args.adapter)
+        adapter = partial(run_go_adapter, executable=args.adapter) if args.adapter else None
         for key, value in {"SAB": SAB, "SOURCE": SOURCE, "LIBRARY": library, "DOWNLOADS": downloads,
                            "sab_key": lambda: sab_key}.items():
             stack.enter_context(patch.object(scenarios, key, value))
@@ -130,7 +132,12 @@ def exercise(args, result):
         stage(result, "mediaSetup")
         episodes = arr.media(profile["id"])
         stage(result, "exercise")
-        empty_pack_replacement(arr, episodes[0], episodes[1], result, adapter=adapter)
+        manual_review = None
+        if args.rescuarr:
+            manual = PackagedManualLab(args.rescuarr, root, stack, start, require_ready, stop,
+                                       partial(stage, result), SOURCE, source_sha)
+            manual_review = partial(manual.run, arr)
+        empty_pack_replacement(arr, episodes[0], episodes[1], result, adapter=adapter, manual_review=manual_review)
         result["fixtureMetadata"] = get_json(SOURCE, "/lab/metadata")
         stage(result, "cleanup")
     result.update(status="observed", stage="complete", qualification="awaitingIndependentReview")
@@ -141,19 +148,24 @@ def main():
         serve(Path(sys.argv[2]), sys.argv[3], sys.argv[4], bind="127.0.0.1", index_origin=SOURCE)
         return 0
     parser = argparse.ArgumentParser(description=__doc__)
-    for arg in ("sonarr", "sab", "adapter", "media", "certificate", "key", "report"):
+    for arg in ("sonarr", "sab", "media", "certificate", "key", "report"):
         parser.add_argument(f"--{arg}", type=Path, required=True)
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--adapter", type=Path)
+    mode.add_argument("--rescuarr", type=Path)
     args = parser.parse_args()
-    for attr in vars(args):
-        setattr(args, attr, getattr(args, attr).resolve())
+    for attr, value in vars(args).items():
+        if value is not None:
+            setattr(args, attr, value.resolve())
 
     result = {"status": "failed", "evidenceClass": "labObservation", "protocol": "usenet", "stage": "startup"}
-    report = {"sourceSHA": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
+    source_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+    report = {"sourceSHA": source_sha,
               "measuredAt": datetime.now(timezone.utc).isoformat(), "fixtureSeed": SEED,
               "platform": {"system": platform.system(), "release": platform.release(), "arch": platform.machine()},
-              "scenarios": {CASE: result}}
+              "scenarios": {MANUAL_CASE if args.rescuarr else CASE: result}}
     try:
-        exercise(args, result)
+        exercise(args, result, source_sha)
     except scenarios.LabFailure as failure:
         result["reason"] = str(failure)
     except (OSError, RuntimeError, ValueError, KeyError, TypeError) as failure:

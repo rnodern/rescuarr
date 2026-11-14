@@ -7,6 +7,11 @@ on:
       - test/lab/**
       - internal/arradapter/**
       - internal/observe/**
+      - internal/observeservice/**
+      - internal/recoveryservice/**
+      - internal/webconsole/**
+      - internal/store/**
+      - cmd/rescuarr/**
       - .github/workflows/windows-upstream-lab.yml
 
 permissions:
@@ -16,6 +21,10 @@ jobs:
   empty-pack:
     runs-on: windows-2025
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        driver: [adapter, manual]
     defaults:
       run:
         shell: pwsh
@@ -52,9 +61,17 @@ jobs:
             Expand-Archive -LiteralPath $archive -DestinationPath ($archive + '.extracted')
           }
       - name: Build the Windows Go adapter probe
+        if: matrix.driver == 'adapter'
         env:
           CGO_ENABLED: '0'
         run: go build -trimpath -o "$env:RUNNER_TEMP/rescuarr-windows-lab/go-pack-probe.exe" ./test/lab/go-pack-probe
+      - name: Build and verify the portable Rescuarr package
+        if: matrix.driver == 'manual'
+        run: |
+          $dir = Join-Path $env:RUNNER_TEMP 'rescuarr-windows-lab'
+          python -B scripts/packaging/native.py --os windows --arch amd64 --version candidate --output "$dir/package"
+          if ($LASTEXITCODE -ne 0) { throw 'Could not build the portable Rescuarr package.' }
+          Expand-Archive -LiteralPath "$dir/package/rescuarr-candidate-windows-amd64.zip" -DestinationPath "$dir/installed"
       - name: Seed the local synthetic indexer
         shell: bash
         run: |
@@ -67,6 +84,8 @@ jobs:
           openssl x509 -in "$lab_dir/tls/root.pem" -outform der -out "$lab_dir/tls/root.cer"
       - name: Run the native Windows Sonarr and SABnzbd lab
         timeout-minutes: 12
+        env:
+          LAB_DRIVER: ${{ matrix.driver }}
         run: |
           $dir = Join-Path $env:RUNNER_TEMP 'rescuarr-windows-lab'
           $sonarrDir = Join-Path $dir ($env:SONARR_ARCHIVE + '.extracted')
@@ -91,8 +110,13 @@ jobs:
             Add-Content -LiteralPath $hosts -Value "`r`n127.0.0.1 skyhook.sonarr.tv" -Encoding ascii
             Clear-DnsClientCache
             Write-Host 'Launching isolated Windows recovery scenario'
+            $driverArgs = if ($env:LAB_DRIVER -eq 'manual') {
+              @('--rescuarr', "$dir/installed/rescuarr.exe")
+            } else {
+              @('--adapter', "$dir/go-pack-probe.exe")
+            }
             python -B test/lab/windows_empty_pack.py --sonarr $sonarr[0].FullName --sab $sab[0].FullName `
-              --adapter "$dir/go-pack-probe.exe" --media "$dir/media/synthetic.mkv" `
+              @driverArgs --media "$dir/media/synthetic.mkv" `
               --certificate "$dir/tls/source.pem" --key "$dir/tls/source.key" `
               --report "$env:RUNNER_TEMP/rescuarr-windows-empty-pack.json"
             if ($LASTEXITCODE -ne 0) { throw 'Windows upstream lab failed. See the sanitised evidence.' }
@@ -105,6 +129,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
-          name: sonarr-windows-v5-adapter-pack-evidence
+          name: sonarr-windows-v5-${{ matrix.driver }}-pack-evidence
           path: ${{ runner.temp }}/rescuarr-windows-empty-pack.json
           if-no-files-found: warn

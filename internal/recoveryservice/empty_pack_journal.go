@@ -44,6 +44,10 @@ type EmptyPackCheckpoint struct {
 	SearchIDs          []int64
 	CommandID          int64
 	StartedAt          time.Time
+	manualToken        string
+	manualScopeHash    string
+	outputPath         string
+	clientLabel        string
 }
 
 type EmptyPackJournal struct {
@@ -55,7 +59,7 @@ func NewEmptyPackJournal(local *store.Store) *EmptyPackJournal {
 }
 
 const emptyPackColumns = `case_id, instance_id, instance_epoch, job_id, job_generation, stage,
-	connection_revision, release, download_id, queue_ids, series_id, episode_ids, search_ids, command_id, started_at`
+	connection_revision, release, download_id, queue_ids, series_id, episode_ids, search_ids, command_id, started_at, manual_token`
 
 const emptyPackKeyWhere = `instance_id = ? AND instance_epoch = ? AND job_id = ? AND job_generation = ?`
 
@@ -77,6 +81,20 @@ func (j *EmptyPackJournal) Load(ctx context.Context, key EmptyPackKey) (EmptyPac
 	err := j.local.Read(ctx, func(tx *sql.Tx) error {
 		var err error
 		checkpoint, err = loadEmptyPack(ctx, tx, key)
+		return err
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		return EmptyPackCheckpoint{}, false, nil
+	}
+	return checkpoint, err == nil, err
+}
+
+func (j *EmptyPackJournal) loadManual(ctx context.Context, id domain.CaseID, token string) (EmptyPackCheckpoint, bool, error) {
+	var checkpoint EmptyPackCheckpoint
+	err := j.local.Read(ctx, func(tx *sql.Tx) error {
+		var err error
+		checkpoint, err = scanEmptyPack(tx.QueryRowContext(ctx, `SELECT `+emptyPackColumns+
+			` FROM empty_pack_recovery WHERE case_id = ? AND manual_token = ?`, id, token))
 		return err
 	})
 	if errors.Is(err, sql.ErrNoRows) {
@@ -121,7 +139,8 @@ func (j *EmptyPackJournal) BeginReject(ctx context.Context, key EmptyPackKey, ch
 	if j == nil || j.local == nil || !key.valid() || now.IsZero() ||
 		(checkpoint.Key != (EmptyPackKey{}) && checkpoint.Key != key) ||
 		(checkpoint.Stage != "" && checkpoint.Stage != EmptyPackRejectSending) ||
-		!validEmptyPackIdentity(checkpoint) || len(checkpoint.SearchIDs) > 0 || checkpoint.CommandID != 0 {
+		!validEmptyPackIdentity(checkpoint) || len(checkpoint.SearchIDs) > 0 || checkpoint.CommandID != 0 ||
+		(checkpoint.manualToken == "") != (checkpoint.manualScopeHash == "") {
 		return false, ledger.ErrInvalid
 	}
 	queue, err := json.Marshal(checkpoint.QueueIDs)
@@ -137,8 +156,25 @@ func (j *EmptyPackJournal) BeginReject(ctx context.Context, key EmptyPackKey, ch
 		if _, err := loadEmptyPack(ctx, tx, key); !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
-		if err := allowEmptyPackSend(ctx, tx, key.Job.Instance, checkpoint.ConnectionRevision); err != nil {
+		if err := allowEmptyPackSend(ctx, tx, key.Job.Instance, checkpoint.ConnectionRevision, checkpoint.manualToken != ""); err != nil {
 			return err
+		}
+		if checkpoint.manualToken != "" {
+			var approved bool
+			if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM manual_reviews AS m JOIN observe_cases AS c
+				ON c.id = m.case_id AND c.revision = m.case_revision
+				WHERE m.case_id = ? AND m.token = ? AND m.state = 'approved' AND m.scope_hash = ?
+				AND c.instance_id = ? AND c.epoch = ? AND c.state = 'held' AND c.reason = 'no_eligible_files'
+				AND c.observation_only = 0 AND c.missing_complete_scans = 0
+				AND json_extract(c.payload, '$.Job.Ref.ID') = ?
+				AND json_extract(c.payload, '$.Job.Ref.Generation') = ?)`, key.CaseID, checkpoint.manualToken,
+				checkpoint.manualScopeHash, key.Job.Instance.ID, key.Job.Instance.Epoch, key.Job.ID, key.Job.Generation).
+				Scan(&approved); err != nil {
+				return err
+			}
+			if !approved {
+				return app.ErrConflict
+			}
 		}
 		var active bool
 		if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM empty_pack_recovery
@@ -150,11 +186,11 @@ func (j *EmptyPackJournal) BeginReject(ctx context.Context, key EmptyPackKey, ch
 		}
 		at := emptyPackStamp(now)
 		_, err := tx.ExecContext(ctx, `INSERT INTO empty_pack_recovery (case_id, instance_id, instance_epoch, job_id,
-			job_generation, connection_revision, release, download_id, queue_ids, series_id, episode_ids, stage, started_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'reject_sending', ?, ?)`,
+			job_generation, connection_revision, release, download_id, queue_ids, series_id, episode_ids, stage, started_at, updated_at, manual_token)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'reject_sending', ?, ?, ?)`,
 			key.CaseID, key.Job.Instance.ID, key.Job.Instance.Epoch, key.Job.ID, key.Job.Generation,
 			checkpoint.ConnectionRevision, checkpoint.Release, checkpoint.DownloadID, string(queue),
-			checkpoint.SeriesID, string(episodes), at, at)
+			checkpoint.SeriesID, string(episodes), at, at, checkpoint.manualToken)
 		if err != nil {
 			return err
 		}
@@ -202,8 +238,17 @@ func (j *EmptyPackJournal) Advance(ctx context.Context, key EmptyPackKey, expect
 			if next.CommandID != 0 || !validPackSearchIDs(next.SearchIDs, checkpoint.EpisodeIDs) {
 				return ledger.ErrInvalid
 			}
-			if err := allowEmptyPackSend(ctx, tx, key.Job.Instance, checkpoint.ConnectionRevision); err != nil {
+			if err := allowEmptyPackSend(ctx, tx, key.Job.Instance, checkpoint.ConnectionRevision, checkpoint.manualToken != ""); err != nil {
 				return err
+			}
+			if checkpoint.manualToken != "" {
+				approved, err := manualPackSearchIDs(ctx, tx, checkpoint)
+				if err != nil {
+					return err
+				}
+				if slices.ContainsFunc(next.SearchIDs, func(id int64) bool { return !slices.Contains(approved, id) }) {
+					return app.ErrConflict
+				}
 			}
 			searchIDs, kind = next.SearchIDs, "recovery_empty_pack_search_sending"
 		case expected == EmptyPackRejectVerified && next.Stage == EmptyPackDone:
@@ -211,6 +256,9 @@ func (j *EmptyPackJournal) Advance(ctx context.Context, key EmptyPackKey, expect
 				return ledger.ErrInvalid
 			}
 			kind, reason = "recovery_empty_pack_done", "empty_pack_no_search_needed"
+			if checkpoint.manualToken != "" {
+				reason = "empty_pack_no_approved_search_needed"
+			}
 		case expected == EmptyPackSearchSending && next.Stage == EmptyPackDone:
 			if next.CommandID <= 0 || next.CommandID > math.MaxInt32 ||
 				(len(next.SearchIDs) != 0 && !slices.Equal(next.SearchIDs, searchIDs)) {
@@ -239,6 +287,20 @@ func (j *EmptyPackJournal) Advance(ctx context.Context, key EmptyPackKey, expect
 		count, err := result.RowsAffected()
 		if err != nil || count == 0 {
 			return err
+		}
+		if next.Stage == EmptyPackDone && checkpoint.manualToken != "" {
+			result, err := tx.ExecContext(ctx, `UPDATE manual_reviews SET state = 'completed', updated_at = ?
+				WHERE case_id = ? AND token = ? AND state = 'approved'`, emptyPackStamp(now), key.CaseID, checkpoint.manualToken)
+			if err != nil {
+				return err
+			}
+			rows, err := result.RowsAffected()
+			if err != nil {
+				return err
+			}
+			if rows != 1 {
+				return app.ErrConflict
+			}
 		}
 		if err := appendEmptyPackEvent(ctx, tx, key, kind, reason, now); err != nil {
 			return err
@@ -284,16 +346,47 @@ func (j *EmptyPackJournal) CancelUnsent(ctx context.Context, key EmptyPackKey, s
 	return err == nil && wrote, err
 }
 
-func allowEmptyPackSend(ctx context.Context, tx *sql.Tx, instance domain.InstanceRef, revision domain.Revision) error {
+func (j *EmptyPackJournal) manualSearchScope(ctx context.Context, cp EmptyPackCheckpoint) ([]int64, error) {
+	var ids []int64
+	err := j.local.Read(ctx, func(tx *sql.Tx) error {
+		var err error
+		ids, err = manualPackSearchIDs(ctx, tx, cp)
+		return err
+	})
+	return ids, err
+}
+
+func manualPackSearchIDs(ctx context.Context, tx *sql.Tx, cp EmptyPackCheckpoint) ([]int64, error) {
+	var data []byte
+	err := tx.QueryRowContext(ctx, `SELECT search_ids FROM manual_reviews
+		WHERE case_id = ? AND token = ? AND state = 'approved'`, cp.Key.CaseID, cp.manualToken).Scan(&data)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, app.ErrHeld
+	}
+	if err != nil {
+		return nil, err
+	}
+	var ids []int64
+	if err := json.Unmarshal(data, &ids); err != nil || len(ids) > 0 && !validPackSearchIDs(ids, cp.EpisodeIDs) {
+		return nil, ledger.ErrJournal
+	}
+	return ids, nil
+}
+
+func allowEmptyPackSend(ctx context.Context, tx *sql.Tx, instance domain.InstanceRef, revision domain.Revision, manual bool) error {
+	mode := domain.ModeAutonomous
+	if manual {
+		mode = domain.ModeAssist
+	}
 	var allowed bool
 	err := tx.QueryRowContext(ctx, `SELECT EXISTS (
 		SELECT 1 FROM observe_instances AS i, app_state AS s, action_pause AS p
 		WHERE i.id = ? AND i.epoch = ? AND i.connection_revision = ? AND i.product = 'sonarr'
-		AND i.health = 'available' AND s.mode = 'autonomous' AND s.reconcile_required = 0 AND p.paused = 0
+		AND i.health = 'available' AND s.mode = ? AND s.reconcile_required = 0 AND p.paused = 0
 		AND NOT EXISTS (SELECT 1 FROM action_intents AS intent
 			WHERE intent.state NOT IN ('completed', 'cancelled')
 			AND json_extract(intent.proposal, '$.Operation.Job.Instance.ID') = i.id)
-	)`, instance.ID, instance.Epoch, revision).Scan(&allowed)
+	)`, instance.ID, instance.Epoch, revision, mode).Scan(&allowed)
 	if err != nil {
 		return err
 	}
@@ -318,7 +411,7 @@ func scanEmptyPack(row interface{ Scan(...any) error }) (EmptyPackCheckpoint, er
 	instance := &checkpoint.Key.Job.Instance
 	err := row.Scan(&checkpoint.Key.CaseID, &instance.ID, &instance.Epoch, &checkpoint.Key.Job.ID,
 		&checkpoint.Key.Job.Generation, &checkpoint.Stage, &checkpoint.ConnectionRevision, &checkpoint.Release,
-		&checkpoint.DownloadID, &queue, &checkpoint.SeriesID, &episodes, &search, &checkpoint.CommandID, &started)
+		&checkpoint.DownloadID, &queue, &checkpoint.SeriesID, &episodes, &search, &checkpoint.CommandID, &started, &checkpoint.manualToken)
 	if err != nil {
 		return EmptyPackCheckpoint{}, err
 	}

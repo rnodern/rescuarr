@@ -84,6 +84,14 @@ To build locally from the candidate checkout, run `docker compose -f deploy/cont
 
 The example publishes only on `127.0.0.1`. The default browser address uses `RESCUARR_HOST_PORT`. Set `RESCUARR_PUBLIC_URL` to the exact operator-facing URL when using a reverse proxy. When an integration supports file-based credentials, mount the individual file read-only, accessible to the runtime user, then configure its reference in Rescuarr. Avoid storing credentials in image layers or Compose YAML.
 
+## Manual Review
+
+Open Overview and choose **Enter Manual mode**. Manual Review shows one download until you approve or decline. A decline is recorded in Activity. The first approval workflow covers completed Sonarr season packs with no eligible files. It removes the pack from Sonarr, blocklists the release and searches the episodes shown in the review that are still missing. It retains the SABnzbd job. Import assessments can be reviewed while import execution is still being qualified.
+
+Approval requires a locally verified connection. The tested setup uses Sonarr 5.0.0.2941 develop with SABnzbd 5.1.3, completed download handling enabled, both automatic redownload settings enabled, and both download client removal settings disabled. The lab used storage directly visible to Sonarr without remote path mappings.
+
+To inspect a connection, check its queue in Rescuarr, stop Rescuarr, and run `rescuarr check-empty-pack --data-dir /path/to/data --sonarr-connection ID`. For a verified installation, configure the service with `RESCUARR_MANUAL_EMPTY_PACK_CONNECTION` set to that ID, `RESCUARR_MANUAL_EMPTY_PACK_PROFILE` set to the reported SHA-256, and `RESCUARR_MANUAL_EMPTY_PACK_SAB_VERSION=5.1.3` after checking SABnzbd on its host. The profile is compared again before dispatch. You can leave Manual mode from Overview. An in-flight action retains its journal record.
+
 ## Reverse proxy
 
 For LAN access, put an HTTPS proxy in front of Rescuarr and preserve the client-facing host and path. Set `RESCUARR_PUBLIC_URL` to the complete external URL, such as `https://rescuarr.example.net`. If using `https://example.net/rescuarr`, also set `RESCUARR_BASE_PATH=/rescuarr` and forward the path without stripping the prefix. Set `RESCUARR_TRUSTED_PROXIES` to the proxy ingress addresses as comma-separated CIDRs. Configure the proxy to replace incoming forwarded headers. For example, a proxy on the same host may use `127.0.0.1/32`. Point local liveness and readiness probes to the fixed `/healthz` and `/readyz` paths.

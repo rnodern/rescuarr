@@ -1,0 +1,98 @@
+package main
+
+import (
+	"context"
+	"log/slog"
+	"net"
+	"net/http"
+	"time"
+
+	"github.com/rnodern/rescuarr/internal/app"
+	"github.com/rnodern/rescuarr/internal/arradapter"
+	"github.com/rnodern/rescuarr/internal/config"
+	"github.com/rnodern/rescuarr/internal/domain"
+	"github.com/rnodern/rescuarr/internal/observeservice"
+	"github.com/rnodern/rescuarr/internal/recoveryservice"
+	"github.com/rnodern/rescuarr/internal/store"
+)
+
+func manualPackTransport() *http.Transport {
+	return &http.Transport{
+		DialContext:         (&net.Dialer{Timeout: 3 * time.Second}).DialContext,
+		TLSHandshakeTimeout: 3 * time.Second, ResponseHeaderTimeout: 8 * time.Second,
+		DisableKeepAlives: true, DisableCompression: true, MaxResponseHeaderBytes: 32 << 10,
+	}
+}
+
+// The owner pins a reviewed projection for one configured instance. A fresh
+// read before each authorised route invalidates the pin when settings drift.
+func manualPackQualification(cfg config.Config, local *store.Store, transport http.RoundTripper, clock app.Clock) recoveryservice.ManualEmptyPackQualification {
+	if cfg.ManualPackConnection == "" {
+		return nil
+	}
+	const adapterRevision = "sonarr-v5-empty-pack-1"
+	return func(ctx context.Context, instance domain.Instance) (*arradapter.EmptyPackAdapter, error) {
+		if string(instance.Ref.ID) != cfg.ManualPackConnection {
+			return nil, arradapter.ErrQualification
+		}
+		key, err := local.ReadSecret(instance.SecretRef)
+		if err != nil {
+			return nil, err
+		}
+		qualify := func(ctx context.Context, binding arradapter.Binding) (arradapter.Qualification, error) {
+			var record arradapter.Qualification
+			if binding.Route != arradapter.RouteEmptyPackReject && binding.Route != arradapter.RouteEmptyPackSearch {
+				return record, arradapter.ErrQualification
+			}
+			profile, err := arradapter.ProbeEmptyPackProfile(ctx, instance, key, transport.RoundTrip)
+			if err != nil || !matchesManualPackLab(profile) || profile.Fingerprint != cfg.ManualPackProfile {
+				return record, arradapter.ErrQualification
+			}
+			now := clock.Now()
+			evidence := domain.EvidenceID("sonarr-v5-windows-14132072892")
+			if profile.OSFamily == "linux" {
+				evidence = "sonarr-v5-linux-14132521064"
+			}
+			return arradapter.Qualification{Binding: binding, Verified: true, Evidence: evidence,
+				ObservedAt: now, ExpiresAt: now.Add(time.Minute)}, nil
+		}
+		return arradapter.NewEmptyPackAdapter(arradapter.Config{
+			Instance: instance, AdapterRevision: adapterRevision, SettingsFingerprint: cfg.ManualPackProfile, APIKey: key,
+		}, transport.RoundTrip, qualify, clock.Now)
+	}
+}
+
+func manualPackPlatform(profile arradapter.EmptyPackProfile) bool {
+	return profile.OSFamily == "linux" && profile.Docker || profile.OSFamily == "windows" && !profile.Docker
+}
+
+func matchesManualPackLab(profile arradapter.EmptyPackProfile) bool {
+	packageMatches := profile.OSFamily == "windows" ||
+		profile.Package == "5.0.0.2941-ls208" && profile.PackageAuthor == "linuxserver.io"
+	return manualPackPlatform(profile) && packageMatches && profile.Branch == "develop" && profile.CompletedHandling &&
+		!profile.RemoveCompleted && !profile.RemoveFailed && profile.AutoRedownloadFailed &&
+		profile.AutoRedownloadInteractive && profile.RemoteMappingCount == 0
+}
+
+func startManualPackWorker(ctx context.Context, local *store.Store, observations *observeservice.Service, clock app.Clock,
+	transport http.RoundTripper, qualify recoveryservice.ManualEmptyPackQualification, logger *slog.Logger) <-chan struct{} {
+	done := make(chan struct{})
+	if qualify == nil {
+		close(done)
+		return done
+	}
+	go func() {
+		defer close(done)
+		logged := false
+		err := recoveryservice.RunManualEmptyPackRecovery(ctx, observations, local, clock, transport, qualify, func(error) {
+			if !logged {
+				logger.Warn("manual_recovery_held", "component", "recovery")
+				logged = true
+			}
+		})
+		if err != nil {
+			logger.Warn("manual_recovery_worker_stopped", "component", "recovery")
+		}
+	}()
+	return done
+}
