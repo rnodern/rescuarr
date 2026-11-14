@@ -1,0 +1,25 @@
+{{define "learning"}}
+{{template "start" .}}
+<h1>Learning</h1>
+{{if .Body.Patterns}}
+<p>Stored patterns and their operator controls.</p>
+<table class="panel">
+  <thead><tr><th scope="col">Pattern</th><th scope="col">Cause</th><th scope="col">Control</th></tr></thead>
+  <tbody>{{range .Body.Patterns}}<tr>
+    <th scope="row">{{connectionProduct .Product}} · {{.Family}}</th>
+    <td data-label="Cause">{{reason .Reason}}</td>
+    <td data-label="Control">
+      <form method="post" action="{{$.Base}}/learning/{{.ID}}" class="filter-actions">
+        <input type="hidden" name="csrf" value="{{$.CSRF}}">
+        <input type="hidden" name="revision" value="{{.Revision}}">
+        {{if .Paused}}<button type="submit" name="change" value="resume">Resume</button>
+        {{else}}<button type="submit" name="change" value="pause">Pause</button>{{end}}
+        <button type="submit" name="change" value="reset">Reset samples used</button>
+      </form>
+    </td>
+  </tr>{{end}}</tbody>
+</table>
+{{if .Body.Next}}<p><a href="{{.Base}}/learning?after={{.Body.Next}}">Next page</a></p>{{end}}
+{{else}}<p>No patterns have been recorded.</p>{{end}}
+{{template "end" .}}
+{{end}}

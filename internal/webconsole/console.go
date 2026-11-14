@@ -30,6 +30,7 @@ type Options struct {
 	Connections      ConnectionService
 	ImportPreview    app.ImportPreviewReader
 	RecoveryActivity app.RecoveryActivityReader
+	Learning         LearningService
 	Notifications    NotificationService
 	ProwlDelivery    bool
 	Authorize        Authorize
@@ -87,6 +88,10 @@ func New(options Options) http.Handler {
 		mux.HandleFunc("POST "+base+"/notifications/{id}/test", c.testNotification)
 		mux.HandleFunc("POST "+base+"/notifications/{id}/disable", c.disableNotification)
 	}
+	if c.Learning != nil {
+		mux.HandleFunc("GET "+base+"/learning", c.learn)
+		mux.HandleFunc("POST "+base+"/learning/{id}", c.changePattern)
+	}
 	assets, err := fs.Sub(files, "assets")
 	if err != nil {
 		panic(err)
@@ -125,6 +130,7 @@ type page struct {
 	HasImportPreview          bool
 	HasRecoveryActivity       bool
 	HasNotifications          bool
+	HasLearning               bool
 	Body                      any
 }
 
@@ -134,6 +140,7 @@ func (c console) render(w http.ResponseWriter, r *http.Request, code int, name s
 	p.HasImportPreview = c.ImportPreview != nil
 	p.HasRecoveryActivity = c.RecoveryActivity != nil
 	p.HasNotifications = c.Notifications != nil
+	p.HasLearning = c.Learning != nil
 	session, _ := r.Context().Value(sessionKey{}).(Session)
 	p.CSRF = session.CSRF
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
