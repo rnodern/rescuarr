@@ -122,8 +122,7 @@ func (s *Service) Configure(ctx context.Context, input ConfigureRoute) (Route, e
 				return err
 			}
 			route.Revision++
-			if _, err := tx.ExecContext(ctx, `UPDATE notification_outbox SET state = 'suppressed', reason = 'notification_route_changed'
-				WHERE route_id = ? AND route_revision < ? AND state IN ('pending','delayed')`, route.ID, route.Revision); err != nil {
+			if err := suppressPriorDeliveries(ctx, tx, route); err != nil {
 				return err
 			}
 		}
@@ -135,6 +134,43 @@ func (s *Service) Configure(ctx context.Context, input ConfigureRoute) (Route, e
 	}
 	route.Paused = false
 	return route, nil
+}
+
+// Disable stops new claims for the route and suppresses its unsent work. A
+// claim committed before Disable wins the dispatch race and can complete.
+func (s *Service) Disable(ctx context.Context, id domain.RouteID, revision domain.Revision, actor domain.ActorID) (Route, error) {
+	if id == "" || len(id) > 128 || revision == 0 || actor == "" {
+		return Route{}, ErrInvalid
+	}
+	route := Route{ID: id}
+	now := s.clock.Now()
+	err := s.db.Write(ctx, func(tx *sql.Tx) error {
+		err := tx.QueryRowContext(ctx, `UPDATE prowl_routes SET enabled = 0, revision = revision + 1
+			WHERE id = ? AND revision = ?
+			RETURNING revision, enabled, paused, mask, timezone, quiet_start, quiet_end, digest`, id, revision).
+			Scan(&route.Revision, &route.Enabled, &route.Paused, &route.Categories, &route.Timezone, &route.QuietStart, &route.QuietEnd, &route.Digest)
+		if errors.Is(err, sql.ErrNoRows) {
+			return app.ErrConflict
+		}
+		if err != nil {
+			return err
+		}
+		if err := suppressPriorDeliveries(ctx, tx, route); err != nil {
+			return err
+		}
+		return store.AppendEvent(ctx, tx, domain.Event{ID: domain.EventID(store.NewID()), Kind: "notification_route_disabled",
+			Actor: actor, Reason: "notification_route_disabled", OccurredAt: now})
+	})
+	if err != nil {
+		return Route{}, err
+	}
+	return route, nil
+}
+
+func suppressPriorDeliveries(ctx context.Context, tx *sql.Tx, route Route) error {
+	_, err := tx.ExecContext(ctx, `UPDATE notification_outbox SET state = 'suppressed', reason = 'notification_route_changed'
+		WHERE route_id = ? AND route_revision < ? AND state IN ('pending','delayed')`, route.ID, route.Revision)
+	return err
 }
 
 func routeValid(r Route) bool {

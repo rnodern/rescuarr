@@ -26,6 +26,7 @@ type Config struct {
 	TrustedProxies []netip.Prefix
 	Input          string
 	Output         string
+	ProwlDelivery  bool
 	Sources        map[string]string
 }
 
@@ -47,6 +48,7 @@ func Parse(args []string, getenv func(string) string) (Config, error) {
 	flags.StringVar(&cfg.BasePath, "base-path", resolve("RESCUARR_BASE_PATH", ""), "browser route prefix")
 	publicURL := flags.String("public-url", resolve("RESCUARR_PUBLIC_URL", ""), "public HTTP or HTTPS URL")
 	proxies := flags.String("trusted-proxies", resolve("RESCUARR_TRUSTED_PROXIES", ""), "trusted proxy CIDRs")
+	prowl := flags.String("prowl-delivery", resolve("RESCUARR_PROWL_DELIVERY", "false"), "enable Prowl delivery (true or false)")
 	flags.StringVar(&cfg.Input, "input", "", "backup database to restore")
 	flags.StringVar(&cfg.Output, "output", "", "database backup destination")
 	if err := flags.Parse(args); err != nil {
@@ -58,12 +60,18 @@ func Parse(args []string, getenv func(string) string) (Config, error) {
 	keys := map[string]string{
 		"listen": "RESCUARR_LISTEN", "data-dir": "RESCUARR_DATA_DIR", "base-path": "RESCUARR_BASE_PATH",
 		"public-url": "RESCUARR_PUBLIC_URL", "trusted-proxies": "RESCUARR_TRUSTED_PROXIES",
+		"prowl-delivery": "RESCUARR_PROWL_DELIVERY",
 	}
 	flags.Visit(func(f *flag.Flag) {
 		if key := keys[f.Name]; key != "" {
 			cfg.Sources[key] = "flag"
 		}
 	})
+
+	if *prowl != "true" && *prowl != "false" {
+		return Config{}, errors.New("Prowl delivery must be true or false")
+	}
+	cfg.ProwlDelivery = *prowl == "true"
 
 	if cfg.DataDir == "" && cfg.Sources["RESCUARR_DATA_DIR"] == "default" {
 		var err error

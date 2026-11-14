@@ -1,0 +1,61 @@
+{{define "notifications"}}
+{{template "start" .}}
+<h1>Notifications</h1>
+{{if .Body.Delivery}}<p>Prowl delivery is enabled. Test messages use the selected route and appear in its delivery history.</p>
+{{else}}<p class="notice">Prowl delivery is off. To send messages, start Rescuarr with <code>--prowl-delivery=true</code>.</p>{{end}}
+<p>Prowl acceptance means the provider accepted the request. Handset delivery is tracked by the Prowl app.</p>
+{{range .Body.Routes}}
+<section class="panel section">
+  <h2>Prowl route <code>{{.ID}}</code></h2>
+  <p>{{if .Paused}}Paused after a provider error{{else if .Enabled}}Enabled{{else}}Disabled{{end}}</p>
+  <form method="post" action="{{$.Base}}/notifications">
+    <input type="hidden" name="csrf" value="{{$.CSRF}}">
+    <input type="hidden" name="id" value="{{.ID}}">
+    <input type="hidden" name="revision" value="{{.Revision}}">
+    {{template "notification-fields" .Route}}
+    <button type="submit">Save route</button>
+  </form>
+  {{if .Enabled}}<form class="section" method="post" action="{{$.Base}}/notifications/{{.ID}}/disable">
+    <input type="hidden" name="csrf" value="{{$.CSRF}}">
+    <input type="hidden" name="revision" value="{{.Revision}}">
+    <button type="submit">Disable route</button>
+    <p>A message already queued for transmission may complete.</p>
+  </form>{{end}}
+  {{if $.Body.Delivery}}{{if and .Enabled (not .Paused)}}<form class="section" method="post" action="{{$.Base}}/notifications/{{.ID}}/test">
+    <input type="hidden" name="csrf" value="{{$.CSRF}}">
+    <input type="hidden" name="revision" value="{{.Revision}}">
+    <button type="submit">Queue test message</button>
+  </form>{{end}}{{end}}
+  {{if .Recent}}<h3>Recent deliveries</h3><ul class="links">{{range .Recent}}<li>{{.Category}} · {{.State}}
+    <span>{{when .Scheduled}}{{if .Reason}} · {{reason .Reason}}{{end}} · {{.Attempts}} attempts</span></li>{{end}}</ul>{{end}}
+</section>
+{{end}}
+<section class="panel section" aria-labelledby="new-prowl">
+  <h2 id="new-prowl">Add Prowl route</h2>
+  <form method="post" action="{{.Base}}/notifications">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <input type="hidden" name="id" value="">
+    <input type="hidden" name="revision" value="0">
+    {{template "notification-fields" .Body.Blank}}
+    <button type="submit">Add route</button>
+  </form>
+</section>
+{{template "end" .}}
+{{end}}
+
+{{define "notification-fields"}}
+<div class="filters section">
+  <label>Prowl key filename <input name="key_ref" maxlength="128" autocomplete="off" required></label>
+  <label>Route <select name="enabled"><option value="false">Disabled</option><option value="true"{{if .}}{{if .Enabled}} selected{{end}}{{end}}>Enabled</option></select></label>
+  <label>Events <select name="categories">
+    <option value="13"{{if .}}{{if eq .Categories 13}} selected{{end}}{{end}}>Attention and incidents</option>
+    <option value="15"{{if .}}{{if eq .Categories 15}} selected{{end}}{{end}}>Attention, incidents and recovery</option>
+    <option value="31"{{if .}}{{if eq .Categories 31}} selected{{end}}{{end}}>All events</option>
+  </select></label>
+  <label>Time zone <input name="timezone" maxlength="80" value="{{if .}}{{.Timezone}}{{else}}UTC{{end}}" required></label>
+  <label>Quiet hours start <input name="quiet_start" type="time" value="{{if .}}{{clockMinutes .QuietStart}}{{else}}00:00{{end}}" required></label>
+  <label>Quiet hours end <input name="quiet_end" type="time" value="{{if .}}{{clockMinutes .QuietEnd}}{{else}}00:00{{end}}" required></label>
+  <label>Verified recovery digest <select name="digest"><option value="false">Off</option><option value="true"{{if .}}{{if .Digest}} selected{{end}}{{end}}>Hourly</option></select></label>
+</div>
+<p>Place the Prowl key on one line in a private file in the data directory’s <code>secrets</code> folder. Enter its filename above. Use equal times to turn quiet hours off.</p>
+{{end}}
