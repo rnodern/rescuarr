@@ -68,7 +68,9 @@ func ConsoleHandler(cfg config.Config, auth *access.Auth, local *store.Store, br
 func (c *console) authenticatedBrowser(browser http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		isHome := r.URL.Path == c.cfg.BasePath+"/" && (r.Method == http.MethodGet || r.Method == http.MethodHead)
-		session, err := c.auth.Authenticate(r.Context(), readCookie(r, "rescuarr_owner"), true)
+		// Background status polling does not count as owner activity.
+		extend := r.URL.Path != c.cfg.BasePath+"/fragments/status"
+		session, err := c.auth.Authenticate(r.Context(), readCookie(r, "rescuarr_owner"), extend)
 		if errors.Is(err, access.ErrDenied) && isHome {
 			required, err := c.auth.SetupRequired(r.Context())
 			if err != nil {

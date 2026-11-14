@@ -58,11 +58,11 @@ type language struct {
 	Name string `json:"name"`
 }
 
-func copyImport(product domain.Product, prepared *domain.PreparedImport) (Request, error) {
+func copyImport(product domain.Product, version string, prepared *domain.PreparedImport) (Request, error) {
 	if product == domain.ProductSonarr {
 		files := make([]sonarrImportFile, 0, len(prepared.Files))
 		for _, selected := range prepared.Files {
-			file, ok := nativeImportFile(product, prepared.DownloadID, selected)
+			file, ok := nativeImportFile(product, version, prepared.DownloadID, selected)
 			if !ok {
 				return Request{}, ErrNativeShape
 			}
@@ -76,7 +76,7 @@ func copyImport(product domain.Product, prepared *domain.PreparedImport) (Reques
 
 	// Binds requires exactly one movie and one eligible file for Radarr.
 	selected := prepared.Files[0]
-	file, ok := nativeImportFile(product, prepared.DownloadID, selected)
+	file, ok := nativeImportFile(product, version, prepared.DownloadID, selected)
 	if !ok {
 		return Request{}, ErrNativeShape
 	}
@@ -86,10 +86,10 @@ func copyImport(product domain.Product, prepared *domain.PreparedImport) (Reques
 	})
 }
 
-func nativeImportFile(product domain.Product, downloadID string, selected domain.PreparedImportFile) (importFile, bool) {
+func nativeImportFile(product domain.Product, version, downloadID string, selected domain.PreparedImportFile) (importFile, bool) {
 	if selected.QualityID > math.MaxInt32 || *selected.QualityResolution > math.MaxInt32 ||
 		selected.Quality.Version > math.MaxInt32 || selected.Quality.Real > math.MaxInt32 ||
-		!nativeImportEnums(product, selected) {
+		!nativeImportEnums(product, version, selected) {
 		return importFile{}, false
 	}
 	languages := make([]language, len(selected.Languages))
@@ -117,10 +117,14 @@ func nativeImportFile(product domain.Product, downloadID string, selected domain
 	}, true
 }
 
-func nativeImportEnums(product domain.Product, file domain.PreparedImportFile) bool {
-	// The pinned IndexerFlags enums define 8 Sonarr and 12 Radarr bits.
+func nativeImportEnums(product domain.Product, version string, file domain.PreparedImportFile) bool {
+	// Sonarr v5 adds the Subtitles flag. Older contracts retain their caps.
 	if product == domain.ProductSonarr {
-		if file.QualityModifier != "" || *file.IndexerFlags > 0xff {
+		limit := uint64(0xff)
+		if version == SonarrIDOnlyImportVersion {
+			limit = 0x1ff
+		}
+		if file.QualityModifier != "" || *file.IndexerFlags > limit {
 			return false
 		}
 		switch file.QualitySource {

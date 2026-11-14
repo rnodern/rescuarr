@@ -12,6 +12,7 @@ from urllib.parse import urlencode
 
 from probe import (
     SONARR_V5_EMPTY_PACK,
+    SONARR_V5_ADAPTER_PACK,
     SONARR_V5_ID_IMPORT,
     TARGETS as ARR_BUILDS,
     arr_key,
@@ -24,6 +25,7 @@ from source import ID_ONLY_PHASE, ID_ONLY_TARGET, SEED, SOURCE, SONARR_TITLE, TA
 
 SAB = "http://sab:8080"
 DOWNLOADS = Path("/downloads")
+LIBRARY = Path("/library")
 PAGE = {"page": 1, "pageSize": 50, "sortDirection": "descending"}
 COMMAND = {"sonarr": "EpisodeSearch", "radarr": "MoviesSearch"}
 TARGET_FIELD = {"sonarr": "episodeIds", "radarr": "movieIds"}
@@ -120,8 +122,8 @@ def completed_fixture_media(storage, title, expected, report, *, allow_sidecars=
 
 def linked_library_path(path, lab_library):
     upstream = Path(path)
-    verify(upstream.is_relative_to("/library"), "sourceOutsideLab")
-    return safe_path(str(lab_library / upstream.relative_to("/library")), lab_library)
+    verify(upstream.is_relative_to(LIBRARY), "sourceOutsideLab")
+    return safe_path(str(lab_library / upstream.relative_to(LIBRARY)), lab_library)
 
 
 def validation_category(error):
@@ -165,15 +167,15 @@ def validation_category(error):
 
 
 class Arr:
-    def __init__(self, product):
+    def __init__(self, product, *, origin=None, key=None):
         self.product = product
         self.port, _, self.unknown_flag = ARR_BUILDS[product]
-        self.origin = f"http://{product}:{self.port}"
-        self.headers = {"X-Api-Key": arr_key(product)}
+        self.origin = origin or f"http://{product}:{self.port}"
+        self.headers = {"X-Api-Key": key or arr_key(product)}
         self.command = COMMAND[product]
         self.targets = TARGET_FIELD[product]
         self.file_field = FILE_FIELD[product]
-        self.library = Path("/library", product)
+        self.library = LIBRARY if origin else LIBRARY / product
 
     def api(self, path, *, method="GET", query=None, body=None, timeout=5):
         try:
@@ -207,6 +209,16 @@ class Arr:
         state = poll(terminal, "commandTimeout:" + name)
         verify(state["status"] == "completed", "commandFailed:" + name)
         return {"responseStatus": status, **projection(state, ("id", "name", "status", "result", "started", "ended"))}
+
+    def completed_command(self, command_id, expected_name):
+        command = self.read(f"command/{command_id}")
+        verify(command.get("id") == command_id and command.get("name") == expected_name, "unexpectedCommandIdentity")
+        verify(command.get("status") not in ("failed", "aborted", "cancelled", "orphaned"),
+               "commandFailed:" + expected_name)
+        if command.get("status") != "completed":
+            return None
+        verify(command.get("result") == "successful", "commandFailed:" + expected_name)
+        return projection(command, ("id", "name", "status", "result", "started", "ended"))
 
     def refresh(self):
         self.command_status("RefreshMonitoredDownloads")
@@ -243,7 +255,7 @@ class Arr:
 
     def setup(self, *, automatic_redownload=True, completed_handling=False):
         self.settings(completed_handling, automatic_redownload=automatic_redownload)
-        self.configure("rootfolder", {"path": "/library"})
+        self.configure("rootfolder", {"path": str(LIBRARY)})
         profiles = self.read("qualityprofile")
         verify(bool(profiles), "missingQualityProfile")
         profile = profiles[0]
@@ -266,8 +278,9 @@ class Arr:
         })
         definition = next(item for item in self.read("qualitydefinition") if item["quality"]["id"] == quality["id"])
         self.update(f"qualitydefinition/{definition['id']}", {**definition, "minSize": 0})
+        sab_host, sab_port = SAB.removeprefix("http://").split(":")
         self.provider("downloadclient", "Sabnzbd", CLIENT_NAME, {
-            "host": "sab", "port": 8080, "apiKey": sab_key(), "useSsl": False,
+            "host": sab_host, "port": int(sab_port), "apiKey": sab_key(), "useSsl": False,
             "tvCategory" if self.product == "sonarr" else "movieCategory": CATEGORY[self.product],
         }, {"enable": True, "removeCompletedDownloads": False, "removeFailedDownloads": False})
         self.provider("indexer", "Newznab", INDEXER_NAME, {
@@ -277,7 +290,7 @@ class Arr:
         return profile
 
     def media(self, profile_id):
-        options = {"qualityProfileId": profile_id, "rootFolderPath": "/library", "monitored": True}
+        options = {"qualityProfileId": profile_id, "rootFolderPath": str(LIBRARY), "monitored": True}
         if self.product == "sonarr":
             series = self.configure("series", {"title": SONARR_TITLE, "tvdbId": TVDB_ID, **options,
                                                "seriesType": "standard", "seasonFolder": True,
@@ -356,11 +369,12 @@ def sab_api(mode, **query):
 def configure_sab():
     # The entrypoint owns configuration and generated API credentials. Restrict its
     # two categories and its only NNTP server to the internal network.
-    for setting, value in {"download_dir": "/downloads/incomplete", "complete_dir": "/downloads/complete"}.items():
+    for setting, value in {"download_dir": DOWNLOADS / "incomplete", "complete_dir": DOWNLOADS / "complete"}.items():
         sab_api("set_config", section="misc", keyword=setting, value=value)
     for category in CATEGORY.values():
         sab_api("set_config", section="categories", keyword=category, dir=category, pp=0)
-    sab_api("set_config", section="servers", keyword="lab", host="source", port=8119,
+    news_host = "127.0.0.1" if os.name == "nt" else "source"
+    sab_api("set_config", section="servers", keyword="lab", host=news_host, port=8119,
             ssl=0, connections=1, enable=1, optional=0, timeout=5)
     sab_api("resume")
 
@@ -864,10 +878,13 @@ def run_scenarios(report, scenario):
         result["stage"] = "mediaSetup"
         targets = arr.media(profile["id"])
         result["stage"] = "exercise"
-        if scenario == SONARR_V5_EMPTY_PACK:
+        if scenario in (SONARR_V5_EMPTY_PACK, SONARR_V5_ADAPTER_PACK):
             # Import lazily to keep the specialised fixture out of other scenarios.
-            from empty_pack import empty_pack_replacement
-            empty_pack_replacement(arr, targets[0], targets[1], result)
+            from empty_pack import empty_pack_replacement, run_go_adapter
+            if scenario == SONARR_V5_ADAPTER_PACK:
+                empty_pack_replacement(arr, targets[0], targets[1], result, adapter=run_go_adapter)
+            else:
+                empty_pack_replacement(arr, targets[0], targets[1], result)
         elif scenario == SONARR_V5_ID_IMPORT:
             id_only_import(arr, targets[0], targets[1], result)
         elif case == "import":
@@ -877,7 +894,7 @@ def run_scenarios(report, scenario):
         else:
             reject_replace(arr, targets[0], targets[1], result, remove=case == "reject-remove",
                            lose_response=case == "reject-lost-response")
-        if case == "import" or terminal_case or scenario in (SONARR_V5_ID_IMPORT, SONARR_V5_EMPTY_PACK):
+        if case == "import" or terminal_case or scenario in (SONARR_V5_ID_IMPORT, SONARR_V5_EMPTY_PACK, SONARR_V5_ADAPTER_PACK):
             result.update(status="observed", stage="complete", qualification="awaitingIndependentReview")
         else:
             result.update(status="observed", stage="complete", qualification="terminalOriginalUnproven")

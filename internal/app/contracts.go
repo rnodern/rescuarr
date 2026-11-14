@@ -26,18 +26,20 @@ type Overview struct {
 	Mode              domain.Mode
 	Paused            bool
 	ReconcileRequired bool
+	ScanningEpisodes  bool
 	Cases             int
 	HeldCases         int
 	OpenIncidents     int
 }
 
 type CaseQuery struct {
-	Instance domain.InstanceID
-	State    domain.CaseState
-	Reason   domain.ReasonCode
-	Search   string
-	After    string
-	Limit    int
+	ExcludeClosed bool
+	Instance      domain.InstanceID
+	State         domain.CaseState
+	Reason        domain.ReasonCode
+	Search        string
+	After         string
+	Limit         int
 }
 
 type CasePage struct {
@@ -52,13 +54,58 @@ type CaseDetail struct {
 }
 
 type ImportPreview struct {
-	Reason     domain.ReasonCode
-	Candidates int
-	Eligible   int
+	Reason      domain.ReasonCode
+	Candidates  int
+	Eligible    int
+	Hold        string
+	Episode     *domain.EpisodeNameReview
+	Replacement *ReplacementPreview
 }
+
+// ReplacementPreview describes a read-only plan for the exact Sonarr download.
+type ReplacementPreview struct {
+	Release      string
+	Episodes     []ReplacementEpisode
+	SearchCount  int
+	UnclearCount int
+}
+
+type ReplacementEpisode struct {
+	Target domain.TargetRef
+	Label  string
+	Status ReplacementStatus
+}
+
+type ReplacementStatus string
+
+const (
+	ReplacementSearch        ReplacementStatus = "search"
+	ReplacementInLibrary     ReplacementStatus = "in_library"
+	ReplacementOtherDownload ReplacementStatus = "other_download"
+	ReplacementUnmonitored   ReplacementStatus = "unmonitored"
+	ReplacementUnaired       ReplacementStatus = "unaired"
+	ReplacementUnclear       ReplacementStatus = "unclear"
+)
 
 type ImportPreviewReader interface {
 	ImportPreview(context.Context, domain.CaseID, domain.Revision) (ImportPreview, error)
+}
+
+// RecoveryActivityEntry describes a recorded recovery event. CaseTitle is empty
+// when the case is no longer available.
+type RecoveryActivityEntry struct {
+	Sequence   int64
+	CaseID     domain.CaseID
+	CaseTitle  string
+	Kind       domain.EventKind
+	Reason     domain.ReasonCode
+	OccurredAt time.Time
+}
+
+type RecoveryActivityReader interface {
+	// RecoveryActivity returns up to limit entries in descending sequence order.
+	// before excludes that sequence and newer entries. Zero starts at the newest.
+	RecoveryActivity(ctx context.Context, limit int, before int64) ([]RecoveryActivityEntry, error)
 }
 
 type ConsoleReader interface {

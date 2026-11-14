@@ -178,5 +178,6 @@ func etagFields(status app.Overview) string {
 	return strings.Join([]string{
 		strconv.FormatUint(uint64(status.Revision), 10), string(status.Mode),
 		strconv.FormatBool(status.Paused), strconv.FormatBool(status.ReconcileRequired),
+		strconv.FormatBool(status.ScanningEpisodes),
 	}, ":")
 }

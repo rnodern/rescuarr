@@ -34,7 +34,7 @@ go run ./cmd/rescuarr serve
 docker compose up --build -d
 ```
 
-Open `http://127.0.0.1:8787`. Read the private `setup-token` file from the data directory, or run `docker compose exec -T rescuarr cat /data/setup-token`. Set an owner password and sign in. To check an Arr queue, put its API key on one line in a private file under the data directory’s `secrets` folder. In **Connections**, enter the filename and the Arr base URL, then select **Check queue**.
+Open `http://127.0.0.1:8787`. Read the private `setup-token` file from the data directory, or run `docker compose exec -T rescuarr cat /data/setup-token`. Set an owner password and sign in. In **Connections**, enter the Arr base URL and paste its API key, then select **Add connection**. Use **Check queue** to scan immediately. To stop scanning a service, use **Remove** on its connection. Past recovery activity stays available.
 
 ## Repository layout
 

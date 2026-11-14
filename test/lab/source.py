@@ -153,15 +153,15 @@ def recent_index_targets(product, query):
     return [sample]
 
 
-def rss(items, product, size):
+def rss(items, product, size, origin=SOURCE):
     root = ET.Element("rss", version="2.0", attrib={"xmlns:newznab": NEWZNAB_NS})
     channel = ET.SubElement(root, "channel")
     ET.SubElement(channel, "title").text = "Rescuarr synthetic indexer"
-    ET.SubElement(channel, "link").text = SOURCE
+    ET.SubElement(channel, "link").text = origin
     ET.SubElement(channel, "description").text = "Disposable test releases"
     ET.SubElement(channel, "newznab:response", offset="0", total=str(len(items)))
     for target, phase, timestamp in items:
-        url = f"{SOURCE}/nzb/{target}/{phase}"
+        url = f"{origin}/nzb/{target}/{phase}"
         item = ET.SubElement(channel, "item")
         ET.SubElement(item, "title").text = releases(target, phase)
         ET.SubElement(item, "guid", isPermaLink="false").text = url
@@ -383,7 +383,7 @@ class Source(BaseHTTPRequestHandler):
             if not items:
                 items.extend((target, "original", self.server.started - 3600)
                              for target in recent_index_targets(product, query))
-        self.write(rss(items, product, len(self.server.media)), "application/rss+xml")
+        self.write(rss(items, product, len(self.server.media), self.server.index_origin), "application/rss+xml")
 
 
 class NNTPServer(socketserver.ThreadingTCPServer):
@@ -391,11 +391,11 @@ class NNTPServer(socketserver.ThreadingTCPServer):
     daemon_threads = True
 
 
-def main():
-    media = Path("/media/synthetic.mkv").read_bytes()
-    plain = ThreadingHTTPServer(("0.0.0.0", 8081), Source)
-    secure = ThreadingHTTPServer(("0.0.0.0", 443), Source)
-    news = NNTPServer(("0.0.0.0", 8119), News)
+def serve(media_path, cert, key, *, bind="0.0.0.0", index_origin=SOURCE):
+    media = media_path.read_bytes()
+    plain = ThreadingHTTPServer((bind, 8081), Source)
+    secure = ThreadingHTTPServer((bind, 443), Source)
+    news = NNTPServer((bind, 8119), News)
     # The fixture state is shared between both HTTP listeners.
     lock = threading.Lock()
     phases, searches = {}, []
@@ -409,6 +409,7 @@ def main():
         server.searches = searches
         server.metadata = metadata
         server.media = media
+        server.index_origin = index_origin
         server.media_fingerprint = media_fingerprint
         server.missing_articles = missing_articles
         server.started = started
@@ -416,11 +417,15 @@ def main():
     news.missing_articles = missing_articles
     news.media = media
     tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-    tls.load_cert_chain("/tls/source.pem", "/tls/source.key")
+    tls.load_cert_chain(cert, key)
     secure.socket = tls.wrap_socket(secure.socket, server_side=True)
     for server in (news, secure):
         threading.Thread(target=server.serve_forever, daemon=True).start()
     plain.serve_forever()
+
+
+def main():
+    serve(Path("/media/synthetic.mkv"), "/tls/source.pem", "/tls/source.key")
 
 
 if __name__ == "__main__":

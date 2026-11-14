@@ -30,6 +30,8 @@ func fixture(options ...func(*apptest.Console)) Options {
 		ID: "case-1", Revision: 5, State: domain.CaseProposed,
 		Job: domain.Job{Ref: job}, Targets: []domain.Target{{Ref: target}},
 		Reason: "unusual_filename", Evidence: []domain.EvidenceID{"source-evidence"},
+		Display: domain.CaseDisplay{Service: "Sonarr HD", Product: domain.ProductSonarr, Title: "Fixture Series",
+			Release: "Fixture.Series.S02E03", Media: []domain.CaseMedia{{Target: target, Episode: "S02E03", Title: "Fixture Episode"}}},
 	}
 	other := domain.Case{
 		ID: "case-2", Revision: 2, State: domain.CaseHeld, Reason: "capacity_unknown",
@@ -99,18 +101,25 @@ func expect(t *testing.T, response *httptest.ResponseRecorder, code int, content
 func TestConsoleViewsAndAssets(t *testing.T) {
 	t.Parallel()
 	h := New(fixture())
-	expect(t, request(h, "GET", "/", "owner", "", nil), 200, "<h1>Overview</h1>", "Held cases", "Open incidents")
-	expect(t, request(h, "GET", "/cases?state=held&q=fixture&limit=10", "owner", "", nil), 200,
-		"sonarr-hd", "sonarr-uhd", "case-1", "case-2",
-		"after=next-fixture&amp;limit=10&amp;q=fixture&amp;state=held")
+	expect(t, request(h, "GET", "/", "owner", "", nil), 200, "<h1>Overview</h1>", "Held downloads", "Open incidents")
+	expect(t, request(h, "GET", "/cases?state=held&q=fixture&limit=10&exclude_closed=1", "owner", "", nil), 200,
+		"<h1>Recovery Queue</h1>", "Sonarr HD", "Fixture Series", "case-1", "case-2",
+		`name="exclude_closed" value="1" checked`, `data-queue-filters`,
+		"after=next-fixture&amp;exclude_closed=1&amp;limit=10&amp;q=fixture&amp;state=held")
 	expect(t, request(h, "GET", "/cases/case-1", "owner", "", nil), 200,
-		"<h1>Case case-1</h1>", "Episode #42", "Review import", "source-evidence")
+		"<h1>Fixture Series · S02E03</h1>", "Fixture Episode", "Review import", "source-evidence",
+		`<time datetime="2026-11-14T11:05:00Z" data-local-time>`)
 	expect(t, request(h, "GET", "/actions/intent-1", "owner", "", nil), 200,
 		"Checking whether Arr accepted the request", "Import into the library")
 	expect(t, request(h, "GET", "/cases?limit=101", "owner", "", nil), 400, "Invalid page size")
 	expect(t, request(h, "GET", "/cases/does-not-exist", "owner", "", nil), 404, "Record unavailable")
 	expect(t, request(h, "GET", "/assets/console.css", "owner", "", nil), 200, "@media")
 	expect(t, request(h, "GET", "/assets/console.js", "owner", "", nil), 200, "visibilitychange")
+	icon := request(h, "GET", "/assets/lifebuoy.png", "owner", "", nil)
+	expect(t, icon, 200)
+	if icon.Header().Get("Content-Type") != "image/png" {
+		t.Fatal("lifebuoy asset must be served as an image")
+	}
 }
 
 func TestProjectionTextIsEscaped(t *testing.T) {
@@ -153,6 +162,25 @@ func TestProtectedRoutesAndSessionScopedFragment(t *testing.T) {
 	}
 }
 
+func TestScanStateUpdatesWithoutChangingRevision(t *testing.T) {
+	t.Parallel()
+	options := fixture()
+	data := options.Read.(*apptest.Console)
+	h := New(options)
+	initial := request(h, "GET", "/fragments/status", "owner", "", nil)
+	expect(t, initial, 200, `data-episode-scanning="false"`)
+	data.Dashboard.ScanningEpisodes = true
+	r := httptest.NewRequest("GET", origin+prefix+"/fragments/status", nil)
+	r.Header.Set("X-Session-Fixture", "owner")
+	r.Header.Set("If-None-Match", initial.Header().Get("ETag"))
+	out := httptest.NewRecorder()
+	h.ServeHTTP(out, r)
+	expect(t, out, 200, `data-episode-scanning="true"`)
+	if out.Header().Get("ETag") == initial.Header().Get("ETag") {
+		t.Fatal("scan state must invalidate the status fragment")
+	}
+}
+
 func TestNoJSApprovalConflictsAndRepeatSubmission(t *testing.T) {
 	t.Parallel()
 	var approved []app.ApproveProposal
@@ -180,7 +208,7 @@ func TestNoJSApprovalConflictsAndRepeatSubmission(t *testing.T) {
 	if len(approved) != 0 {
 		t.Fatal("unchecked request reached the command boundary")
 	}
-	expect(t, request(h, "POST", actions, "owner", origin, form), 409, "This proposal changed", "Return to case")
+	expect(t, request(h, "POST", actions, "owner", origin, form), 409, "This proposal changed", "Return to download")
 	if len(approved) != 1 || approved[0].Actor != "owner" || approved[0].CaseID != "case-1" ||
 		approved[0].ProposalID != "proposal-1" || approved[0].Revision != 5 || approved[0].RequestKey == "" {
 		t.Fatalf("unexpected typed command: %+v", approved)

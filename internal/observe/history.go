@@ -3,6 +3,7 @@ package observe
 import (
 	"context"
 	"net/url"
+	"strconv"
 	"time"
 
 	"github.com/rnodern/rescuarr/internal/domain"
@@ -16,6 +17,7 @@ type HistoryRecord struct {
 	At           time.Time
 	IndexerLabel string
 	ClientLabel  string
+	FileID       int64
 }
 
 type HistorySnapshot struct {
@@ -83,4 +85,66 @@ func (a *Arr) Health(ctx context.Context) ([]HealthFinding, error) {
 		out = append(out, HealthFinding{Source: boundedText(row.Source, 128), Severity: state(row.Type, "ok", "notice", "warning", "error")})
 	}
 	return out, nil
+}
+
+// EpisodeImportHistory returns only native import events for the exact Sonarr
+// episode. The download IDs are private inputs for correlation by the caller.
+func (a *Arr) EpisodeImportHistory(ctx context.Context, target domain.TargetRef) ([]HistoryRecord, error) {
+	if a.reader.product != domain.ProductSonarr || target.Kind != domain.TargetEpisode ||
+		!target.Valid() || target.Instance != a.reader.instance {
+		return nil, ErrConfiguration
+	}
+	type row struct {
+		ID         int64     `json:"id"`
+		SeriesID   int64     `json:"seriesId"`
+		EpisodeID  int64     `json:"episodeId"`
+		DownloadID string    `json:"downloadId"`
+		Event      string    `json:"eventType"`
+		Date       time.Time `json:"date"`
+		Data       struct {
+			FileID string `json:"fileId"`
+			Client string `json:"downloadClientName"`
+		} `json:"data"`
+	}
+	query := url.Values{"episodeId": {strconv.FormatInt(target.ID, 10)}, "seriesIds": {strconv.FormatInt(target.SeriesID, 10)},
+		"eventType": {"3"}, "sortKey": {"date"}, "sortDirection": {"descending"}}
+	rows, err := scanPages[row](ctx, a.reader, "/api/v3/history", query, historyPageSize, func(r row) int64 { return r.ID })
+	if err != nil {
+		return nil, err
+	}
+	var history []HistoryRecord
+	for _, r := range rows {
+		if r.Event != "downloadFolderImported" || r.SeriesID != target.SeriesID || r.EpisodeID != target.ID || r.Date.IsZero() {
+			return nil, ErrPartial
+		}
+		fileID, err := strconv.ParseInt(r.Data.FileID, 10, 32)
+		if err != nil || fileID <= 0 || strconv.FormatInt(fileID, 10) != r.Data.FileID {
+			continue
+		}
+		history = append(history, HistoryRecord{ID: r.ID, Target: target, Event: r.Event, At: r.Date, FileID: fileID,
+			DownloadID: exactToken(r.DownloadID, 256), ClientLabel: boundedText(r.Data.Client, 128)})
+	}
+	return history, nil
+}
+
+// EpisodeFileLink reads the currently linked file, separately from import history.
+func (a *Arr) EpisodeFileLink(ctx context.Context, target domain.TargetRef) (int64, error) {
+	if a.reader.product != domain.ProductSonarr || target.Kind != domain.TargetEpisode ||
+		!target.Valid() || target.Instance != a.reader.instance {
+		return 0, ErrConfiguration
+	}
+	var episode struct {
+		ID       int64  `json:"id"`
+		SeriesID int64  `json:"seriesId"`
+		FileID   *int32 `json:"episodeFileId"`
+		HasFile  *bool  `json:"hasFile"`
+	}
+	if err := a.getTargetResource(ctx, "episode", target.ID, &episode); err != nil {
+		return 0, err
+	}
+	if episode.ID != target.ID || episode.SeriesID != target.SeriesID ||
+		!validFileLink(episode.FileID, episode.HasFile, nil) {
+		return 0, ErrResponse
+	}
+	return int64(*episode.FileID), nil
 }

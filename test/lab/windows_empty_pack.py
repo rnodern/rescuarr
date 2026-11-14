@@ -1,0 +1,170 @@
+"""Run the empty-pack lab with native disposable Windows Sonarr and SABnzbd."""
+import argparse
+import hashlib
+import json
+import os
+import platform
+import secrets
+import subprocess
+import sys
+import tempfile
+from contextlib import ExitStack
+from datetime import datetime, timezone
+from functools import partial
+from pathlib import Path
+from unittest.mock import patch
+from xml.etree import ElementTree as ET
+
+import empty_pack
+import scenarios
+from empty_pack import empty_pack_replacement, run_go_adapter
+from probe import SAB_VERSION, SONARR_V5_VERSION, get_json
+from source import SEED, serve
+
+SONARR = "http://127.0.0.1:18989"
+SAB = "http://127.1.1.1:18080"
+SOURCE = "http://127.0.0.1:8081"
+CASE = "sonarr/windows-v5-adapter-pack"
+
+
+def stage(result, name):
+    result["stage"] = name
+    print("Windows Sonarr lab: " + name, flush=True)
+
+
+def start(stack, command, cwd):
+    proc = subprocess.Popen(command, cwd=cwd, stdin=subprocess.DEVNULL,
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    stack.callback(stop, proc)
+    return proc
+
+
+def stop(proc):
+    if proc.poll() is None:
+        proc.kill()
+        proc.wait(timeout=10)
+
+
+def require_ready(proc, read, stage):
+    def observe():
+        scenarios.verify(proc.poll() is None, f"{stage}Exited")
+        try:
+            return read()
+        except (OSError, ValueError, KeyError):
+            return None
+    return scenarios.poll(observe, f"{stage}Deadline", timeout=120)
+
+
+def sonarr_config(data, key):
+    root = ET.Element("Config")
+    for name, value in {
+        "BindAddress": "127.0.0.1", "Port": "18989", "EnableSsl": "False",
+        "LaunchBrowser": "False", "ApiKey": key, "AuthenticationEnabled": "True",
+        "AuthenticationMethod": "Forms",
+        "AuthenticationRequired": "Enabled", "Branch": "develop", "UpdateAutomatically": "False",
+    }.items():
+        ET.SubElement(root, name).text = value
+    ET.ElementTree(root).write(data / "config.xml", encoding="utf-8")
+
+
+def exercise(args, result):
+    scenarios.verify(os.name == "nt" and os.environ.get("GITHUB_ACTIONS") == "true", "requiresDisposableWindowsRunner")
+    result["binaries"] = {}
+    for name in ("sonarr", "sab", "adapter"):
+        executable = getattr(args, name)
+        with executable.open("rb") as handle:
+            result["binaries"][name] = {"file": executable.name, "sha256": hashlib.file_digest(handle, "sha256").hexdigest()}
+    with ExitStack() as stack:
+        root = Path(stack.enter_context(tempfile.TemporaryDirectory(prefix="rescuarr-lab-"))).resolve()
+        data, library, downloads = root / "sonarr", root / "library", root / "downloads"
+        for path in (data, library, downloads / "complete", downloads / "incomplete"):
+            path.mkdir(parents=True)
+        sonarr_key, sab_key = (secrets.token_hex(16) for _ in range(2))
+        sonarr_config(data, sonarr_key)
+        ini = root / "sabnzbd.ini"
+        ini.write_text(
+            f"[misc]\nhost = 127.1.1.1\nport = 18080\napi_key = {sab_key}\n"
+            f"download_dir = {downloads / 'incomplete'}\ncomplete_dir = {downloads / 'complete'}\n"
+            "permissions = \napi_warnings = 0\n", encoding="utf-8",
+        )
+        adapter = partial(run_go_adapter, executable=args.adapter)
+        for key, value in {"SAB": SAB, "SOURCE": SOURCE, "LIBRARY": library, "DOWNLOADS": downloads,
+                           "sab_key": lambda: sab_key}.items():
+            stack.enter_context(patch.object(scenarios, key, value))
+        stack.enter_context(patch.object(empty_pack, "SOURCE", SOURCE))
+
+        stage(result, "sourceStartup")
+        fixture = start(stack, [sys.executable, "-B", __file__, "--fixture",
+                                args.media, args.certificate, args.key], root)
+        health = require_ready(fixture, lambda: get_json(SOURCE, "/health"), "fixture")
+        scenarios.verify(health.get("seed") == SEED, "unexpectedFixtureVersion")
+
+        stage(result, "sabStartup")
+        sab = start(stack, [args.sab, "-f", ini, "-s", "127.1.1.1:18080", "-b", "0"], args.sab.parent)
+        version = require_ready(sab, lambda: scenarios.sab_api("version"), "sabStartup")
+        scenarios.verify(version.get("version") == SAB_VERSION, "unexpectedSABVersion")
+        scenarios.verify(scenarios.sab_api("queue")["queue"]["slots"] == []
+                         and scenarios.sab_api("history")["history"]["slots"] == [], "sabNotEmpty")
+        result["sabnzbd"] = {"version": SAB_VERSION, "loopback": True, "emptyAtStartup": True}
+        scenarios.configure_sab()
+
+        stage(result, "sonarrStartup")
+        sonarr = start(stack, [args.sonarr, f"/data={data}", "/nobrowser"], args.sonarr.parent)
+        arr = scenarios.Arr("sonarr", origin=SONARR, key=sonarr_key)
+        status = require_ready(sonarr, lambda: get_json(SONARR, "/api/v3/system/status", headers=arr.headers),
+                               "sonarrStartup")
+        scenarios.verify(status.get("appName") == "Sonarr" and status.get("version") == SONARR_V5_VERSION
+                         and status.get("branch") == "develop" and status.get("isWindows") is True
+                         and status.get("isDocker") is False
+                         and Path(status["appData"]).resolve() == data, "unexpectedSonarrInstallation")
+        scenarios.verify(arr.read("series") == [] and arr.read("downloadclient") == []
+                         and arr.read("rootfolder") == [], "sonarrNotEmpty")
+        result["sonarr"] = {"version": SONARR_V5_VERSION, "branch": "develop", "windows": True,
+                            "docker": False, "emptyAtStartup": True}
+
+        stage(result, "arrSetup")
+        profile = arr.setup()
+        result["settings"] = {"profileId": profile["id"], "cutoff": profile["cutoff"],
+                              "completedHandling": False, "removeCompletedDownloads": False,
+                              "removeFailedDownloads": False, "automaticRedownloadFailed": True}
+        stage(result, "mediaSetup")
+        episodes = arr.media(profile["id"])
+        stage(result, "exercise")
+        empty_pack_replacement(arr, episodes[0], episodes[1], result, adapter=adapter)
+        result["fixtureMetadata"] = get_json(SOURCE, "/lab/metadata")
+        stage(result, "cleanup")
+    result.update(status="observed", stage="complete", qualification="awaitingIndependentReview")
+
+
+def main():
+    if len(sys.argv) == 5 and sys.argv[1] == "--fixture":
+        serve(Path(sys.argv[2]), sys.argv[3], sys.argv[4], bind="127.0.0.1", index_origin=SOURCE)
+        return 0
+    parser = argparse.ArgumentParser(description=__doc__)
+    for arg in ("sonarr", "sab", "adapter", "media", "certificate", "key", "report"):
+        parser.add_argument(f"--{arg}", type=Path, required=True)
+    args = parser.parse_args()
+    for attr in vars(args):
+        setattr(args, attr, getattr(args, attr).resolve())
+
+    result = {"status": "failed", "evidenceClass": "labObservation", "protocol": "usenet", "stage": "startup"}
+    report = {"sourceSHA": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
+              "measuredAt": datetime.now(timezone.utc).isoformat(), "fixtureSeed": SEED,
+              "platform": {"system": platform.system(), "release": platform.release(), "arch": platform.machine()},
+              "scenarios": {CASE: result}}
+    try:
+        exercise(args, result)
+    except scenarios.LabFailure as failure:
+        result["reason"] = str(failure)
+    except (OSError, RuntimeError, ValueError, KeyError, TypeError) as failure:
+        result["reason"] = type(failure).__name__
+    finally:
+        with args.report.open("x", encoding="utf-8") as destination:
+            json.dump(report, destination, indent=2)
+            destination.write("\n")
+    print(json.dumps(result, indent=2), flush=True)
+    return int(result["status"] != "observed")
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -91,10 +91,13 @@ type QueueFinding string
 
 const (
 	FindingNoEligibleFiles QueueFinding = "no_eligible_files"
+	FindingSeriesIDOnly    QueueFinding = "series_matched_by_id"
 	FindingOtherMessage    QueueFinding = "unclassified_message"
 )
 
 type QueueRecord struct {
+	// SeriesID is an in-memory Sonarr hint, even when no exact episode is mapped.
+	SeriesID      int64 `json:"-"`
 	ID            int64
 	Target        domain.TargetRef
 	DownloadID    string
@@ -107,6 +110,10 @@ type QueueRecord struct {
 	SizeBytes     *int64
 	AddedAt       time.Time
 	Findings      []QueueFinding
+	Release       string `json:"-"`
+	MediaTitle    string `json:"-"`
+	EpisodeTitle  string `json:"-"`
+	Episode       string `json:"-"`
 	// OutputPath is Arr-visible server data. It must stay out of generic serialisation.
 	OutputPath string `json:"-"`
 }
@@ -117,23 +124,39 @@ type QueueSnapshot struct {
 }
 
 type queueWire struct {
-	ID         int64     `json:"id"`
-	SeriesID   int64     `json:"seriesId"`
-	EpisodeID  int64     `json:"episodeId"`
-	MovieID    int64     `json:"movieId"`
-	DownloadID string    `json:"downloadId"`
-	Protocol   string    `json:"protocol"`
-	Client     string    `json:"downloadClient"`
-	Indexer    string    `json:"indexer"`
-	Status     string    `json:"status"`
-	State      string    `json:"trackedDownloadState"`
-	Tracked    string    `json:"trackedDownloadStatus"`
-	Size       *int64    `json:"size"`
-	AddedAt    time.Time `json:"added"`
-	OutputPath string    `json:"outputPath"`
-	Messages   []struct {
+	ID         int64      `json:"id"`
+	SeriesID   int64      `json:"seriesId"`
+	EpisodeID  int64      `json:"episodeId"`
+	MovieID    int64      `json:"movieId"`
+	DownloadID string     `json:"downloadId"`
+	Protocol   string     `json:"protocol"`
+	Client     string     `json:"downloadClient"`
+	Indexer    string     `json:"indexer"`
+	Status     string     `json:"status"`
+	State      string     `json:"trackedDownloadState"`
+	Tracked    string     `json:"trackedDownloadStatus"`
+	Size       *int64     `json:"size"`
+	AddedAt    time.Time  `json:"added"`
+	OutputPath string     `json:"outputPath"`
+	Title      string     `json:"title"`
+	Series     queueMedia `json:"series"`
+	Movie      queueMedia `json:"movie"`
+	Episode    struct {
+		ID     int64  `json:"id"`
+		Series int64  `json:"seriesId"`
+		Season *int   `json:"seasonNumber"`
+		Number *int   `json:"episodeNumber"`
+		Title  string `json:"title"`
+	} `json:"episode"`
+	Messages []struct {
 		Messages []string `json:"messages"`
 	} `json:"statusMessages"`
+}
+
+type queueMedia struct {
+	ID    int64  `json:"id"`
+	Title string `json:"title"`
+	Year  int    `json:"year"`
 }
 
 func (a *Arr) Queue(ctx context.Context, generation domain.Revision, observedAt time.Time) (QueueSnapshot, error) {
@@ -143,8 +166,11 @@ func (a *Arr) Queue(ctx context.Context, generation domain.Revision, observedAt 
 	query := url.Values{"sortKey": {"added"}, "sortDirection": {"descending"}}
 	if a.reader.product == domain.ProductSonarr {
 		query.Set("includeUnknownSeriesItems", "true")
+		query.Set("includeSeries", "true")
+		query.Set("includeEpisode", "true")
 	} else {
 		query.Set("includeUnknownMovieItems", "true")
+		query.Set("includeMovie", "true")
 	}
 	rows, err := scanPages[queueWire](ctx, a.reader, "/api/v3/queue", query, queuePageSize, func(row queueWire) int64 { return row.ID })
 	out := QueueSnapshot{Records: make([]QueueRecord, 0, len(rows))}
@@ -193,26 +219,88 @@ func (a *Arr) queueRecord(row queueWire) QueueRecord {
 	seen := make(map[QueueFinding]bool)
 	for _, message := range row.Messages {
 		for _, line := range message.Messages {
-			finding := FindingOtherMessage
-			if strings.EqualFold(strings.TrimSpace(line), "No files found are eligible for import") {
-				finding = FindingNoEligibleFiles
-			}
+			finding := queueFinding(a.reader.product, line)
 			if !seen[finding] {
 				seen[finding] = true
 				findings = append(findings, finding)
 			}
 		}
 	}
-	return QueueRecord{
+	record := QueueRecord{
 		ID: row.ID, Target: a.target(row.SeriesID, row.EpisodeID, row.MovieID),
 		DownloadID: exactToken(row.DownloadID, 256), Protocol: protocol(row.Protocol),
 		ClientLabel: boundedText(row.Client, 128), IndexerLabel: boundedText(row.Indexer, 128),
 		Status:        state(row.Status, "queued", "paused", "downloading", "completed", "failed", "warning", "delay", "downloadClientUnavailable", "fallback"),
-		TrackedState:  state(row.State, "downloading", "downloadFailed", "downloadFailedPending", "importPending", "importing", "imported", "ignored"),
+		TrackedState:  state(row.State, "downloading", "downloadFailed", "downloadFailedPending", "importBlocked", "importPending", "importing", "imported", "ignored"),
 		TrackedStatus: state(row.Tracked, "ok", "warning", "error"),
 		SizeBytes:     nonnegative(row.Size), AddedAt: row.AddedAt, Findings: findings,
 		OutputPath: exactToken(row.OutputPath, 4096),
 	}
+	if a.reader.product == domain.ProductSonarr {
+		record.SeriesID = queueSeriesHint(row)
+		if record.SeriesID == 0 {
+			record.Target = domain.TargetRef{}
+		}
+	}
+	record.Release = boundedText(row.Title, 300)
+	if strings.ContainsAny(record.Release, "/\\") {
+		record.Release = ""
+	}
+	switch record.Target.Kind {
+	case domain.TargetEpisode:
+		if row.Series.ID == row.SeriesID {
+			record.MediaTitle = boundedText(row.Series.Title, 240)
+		}
+		if e := row.Episode; e.ID == row.EpisodeID && e.Series == row.SeriesID {
+			record.EpisodeTitle = boundedText(e.Title, 240)
+			if e.Season != nil && e.Number != nil && *e.Season >= 0 && *e.Season <= 999 && *e.Number > 0 && *e.Number <= 9999 {
+				record.Episode = fmt.Sprintf("S%02dE%02d", *e.Season, *e.Number)
+			}
+		}
+	case domain.TargetMovie:
+		if row.Movie.ID == row.MovieID {
+			record.MediaTitle = boundedText(row.Movie.Title, 240)
+			if record.MediaTitle != "" && row.Movie.Year >= 1800 && row.Movie.Year <= 2200 {
+				record.MediaTitle += fmt.Sprintf(" (%d)", row.Movie.Year)
+			}
+		}
+	}
+	return record
+}
+
+func queueSeriesHint(row queueWire) int64 {
+	var hint int64
+	for _, id := range [...]int64{row.SeriesID, row.Series.ID, row.Episode.Series} {
+		if id <= 0 {
+			continue
+		}
+		if hint != 0 && id != hint {
+			return 0
+		}
+		hint = id
+	}
+	return hint
+}
+
+func queueFinding(product domain.Product, message string) QueueFinding {
+	const noEligibleFiles = "no files found are eligible for import"
+	line := strings.ToLower(strings.TrimSpace(message))
+	path, hasPath := strings.CutPrefix(line, noEligibleFiles+" in ")
+	switch {
+	case strings.TrimSuffix(line, ".") == noEligibleFiles, hasPath && absoluteQueueMessagePath(path):
+		return FindingNoEligibleFiles
+	case product == domain.ProductSonarr &&
+		strings.HasPrefix(line, "found matching series via grab history, but release was matched to series by id. automatic import is not possible"):
+		return FindingSeriesIDOnly
+	default:
+		return FindingOtherMessage
+	}
+}
+
+// Arr includes paths in its own filesystem format, which can differ from ours.
+func absoluteQueueMessagePath(path string) bool {
+	return strings.HasPrefix(path, "/") || strings.HasPrefix(path, `\\`) ||
+		len(path) >= 3 && path[0] >= 'a' && path[0] <= 'z' && path[1] == ':' && (path[2] == '\\' || path[2] == '/')
 }
 
 func (a *Arr) target(seriesID, episodeID, movieID int64) domain.TargetRef {

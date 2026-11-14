@@ -49,10 +49,75 @@ func stateLabel(state domain.CaseState) string {
 }
 
 func reasonLabel(code domain.ReasonCode) string {
-	if code == "" {
+	switch code {
+	case "upstream_intervention_required":
+		return "Arr flagged this download for manual intervention"
+	case "no_eligible_files":
+		return "Arr found no files eligible for import"
+	case "series_matched_by_id":
+		return "Sonarr found the series by ID and blocked automatic import"
+	case "awaiting_import_assessment":
+		return "Download complete. Import still pending"
+	case "sonarr_import_verified":
+		return "Sonarr imported this download and linked the episode"
+	case "queue_missing_unverified":
+		return "The download left the queue. An import could not be verified."
+	case "queue_presence_unknown":
+		return "The download is missing from the latest queue scan"
+	case "connection_removed":
+		return "The service connection was removed"
+	case "download_failed":
+		return "Download failed"
+	case "target_ambiguous":
+		return "Arr did not identify every target in this download"
+	case "":
 		return "Reason unavailable"
 	}
 	return strings.ReplaceAll(string(code), "_", " ")
+}
+
+func caseTitle(item domain.Case) string {
+	display := item.Display
+	if display.Title != "" {
+		if len(item.Targets) == 1 && len(display.Media) == 1 && display.Media[0].Episode != "" {
+			return display.Title + " · " + display.Media[0].Episode
+		}
+		return display.Title
+	}
+	if display.Release != "" {
+		return display.Release
+	}
+	return "Unidentified download"
+}
+
+func serviceLabel(name string, product domain.Product) string {
+	if product == "" {
+		if name == "" {
+			return "Unknown service"
+		}
+		return name
+	}
+	kind := connectionProduct(product)
+	if name == "" || strings.EqualFold(name, kind) {
+		return kind
+	}
+	return name + " · " + kind
+}
+
+func caseTargetLabel(item domain.Case, target domain.TargetRef) string {
+	for _, media := range item.Display.Media {
+		if media.Target != target {
+			continue
+		}
+		if media.Title != "" && media.Episode != "" {
+			return media.Episode + " · " + media.Title
+		}
+		return media.Episode + media.Title
+	}
+	if target.Kind == domain.TargetMovie && item.Display.Title != "" {
+		return item.Display.Title
+	}
+	return targetLabel(target)
 }
 
 func targetLabel(target domain.TargetRef) string {

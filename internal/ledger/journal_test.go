@@ -79,6 +79,22 @@ func beginFixture(t *testing.T, j *Journal, intent domain.Intent) (Reservation, 
 	return reservation, send
 }
 
+func TestApprovalCannotStartAfterConnectionRemoval(t *testing.T) {
+	local, j := openJournal(t, filepath.Join(t.TempDir(), "state"), fixtureAuthorize)
+	setFixtureMode(t, local)
+	approval := fixtureApproval()
+	if err := local.Write(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), `INSERT INTO observe_instances (id, epoch, product, display_name, base_url, secret_ref, connection_revision, health)
+			VALUES (?, 1, 'sonarr', 'Removed', 'removed:fixture', '', 2, 'removed')`, approval.Proposal.Operation.Job.Instance.ID)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := j.Approve(t.Context(), approval, fixtureTime); !errors.Is(err, ErrHeld) {
+		t.Fatalf("approval after connection removal returned %v", err)
+	}
+}
+
 func TestSQLiteApprovalRequiresPolicyAndIsIdempotent(t *testing.T) {
 	var revision domain.Revision = 2
 	local, j := openJournal(t, filepath.Join(t.TempDir(), "state"), func(_ context.Context, _ *sql.Tx, attempted Approval, _ time.Time) error {

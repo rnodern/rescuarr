@@ -1,0 +1,16 @@
+{{define "remove-connection"}}
+{{template "start" .}}
+<h1>Remove connection</h1>
+{{with .Body}}
+<section class="panel section" aria-labelledby="remove-connection">
+  <h2 id="remove-connection">{{serviceLabel .DisplayName .Product}}</h2>
+  <p>Rescuarr will stop checking this service and close its open recovery items. Past activity stays available.</p>
+  <form method="post" action="{{$.Base}}/connections/{{.ID}}/remove" class="connection-actions">
+    <input type="hidden" name="csrf" value="{{$.CSRF}}">
+    <button class="button button-danger" type="submit">Remove connection</button>
+    <a class="button button-quiet" href="{{$.Base}}/connections">Cancel</a>
+  </form>
+</section>
+{{end}}
+{{template "end" .}}
+{{end}}

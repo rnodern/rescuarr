@@ -163,6 +163,10 @@ func TestObserveProjectsAndRetainsCaseState(t *testing.T) {
 	if err := service.Collect(ctx, sonarr.Ref.ID); err != nil || getCase().State != domain.CaseClosed || getCase().Reason != "queue_missing_unverified" {
 		t.Fatal("second complete absence should mark unknown resolution")
 	}
+	openCases, err := service.Cases(ctx, app.CaseQuery{ExcludeClosed: true, Limit: 1})
+	if err != nil || len(openCases.Cases) != 1 || openCases.Cases[0].State == domain.CaseClosed || openCases.After != "" {
+		t.Fatalf("closed cases should be excluded before pagination: %+v %v", openCases, err)
+	}
 	sonarrMode = ""
 	if err := service.Collect(ctx, sonarr.Ref.ID); err != nil || getCase().ID != first.ID || getCase().State != domain.CaseHeld {
 		t.Fatal("same case did not reopen")
@@ -243,7 +247,7 @@ func TestUnidentifiedQueueChurnCannotExhaustExactCases(t *testing.T) {
 	collect := func(generation uint64, coverage domain.ObservationState, records []observe.QueueRecord) {
 		t.Helper()
 		if err := db.Write(ctx, func(tx *sql.Tx) error {
-			return persistCases(ctx, tx, instance, observe.QueueSnapshot{Records: records}, generation, now, coverage)
+			return persistCases(ctx, tx, instance, observe.QueueSnapshot{Records: records}, generation, now, coverage, nil, nil)
 		}); err != nil {
 			t.Fatal(err)
 		}

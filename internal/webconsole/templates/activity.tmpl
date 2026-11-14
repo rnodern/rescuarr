@@ -1,0 +1,26 @@
+{{define "activity"}}
+{{template "start" .}}
+<h1>Activity</h1>
+{{if .Body.Rows}}
+<table class="panel">
+  <caption class="sr-only">Recovery history, newest entries first</caption>
+  <thead><tr><th scope="col">Download</th><th scope="col">Status</th><th scope="col">What happened</th><th scope="col">Time</th></tr></thead>
+  <tbody>
+    {{range .Body.Rows}}<tr>
+      <th scope="row">{{if and .CaseTitle .CaseID}}<a href="{{$.Base}}/cases/{{.CaseID}}">{{.CaseTitle}}</a>
+        {{else if .CaseTitle}}{{.CaseTitle}}{{else if .CaseID}}Case {{.CaseID}}{{else}}Rescuarr{{end}}</th>
+      <td data-label="Status"><span class="chip{{if .Attention}} hold{{end}}">{{.Status}}</span></td>
+      <td data-label="What happened">{{.Event}}{{if .Detail}}<span class="row-note">{{.Detail}}</span>{{end}}</td>
+      <td data-label="Time">{{template "local-time" .OccurredAt}}</td>
+    </tr>{{end}}
+  </tbody>
+</table>
+{{else}}<p class="panel empty">{{if .Body.Before}}No earlier recovery activity.{{else}}Recovery activity will appear here as Rescuarr processes downloads.{{end}}</p>{{end}}
+{{if or .Body.Before .Body.Next}}
+<p class="filter-actions">
+  {{if .Body.Before}}<a href="{{.Base}}/activity">Latest activity</a>{{end}}
+  {{if .Body.Next}}<a class="next" rel="next" href="{{.Base}}/activity?before={{.Body.Next}}">Older activity</a>{{end}}
+</p>
+{{end}}
+{{template "end" .}}
+{{end}}

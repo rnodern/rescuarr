@@ -8,13 +8,23 @@ import (
 
 	"github.com/rnodern/rescuarr/internal/app"
 	"github.com/rnodern/rescuarr/internal/domain"
+	"github.com/rnodern/rescuarr/internal/importflow"
+	"github.com/rnodern/rescuarr/internal/observe"
+	"github.com/rnodern/rescuarr/internal/observeservice"
 )
 
 type casesView struct {
-	Cases  []domain.Case
-	Query  app.CaseQuery
-	States []domain.CaseState
-	Next   string
+	Cases    []domain.Case
+	Query    app.CaseQuery
+	Next     string
+	Services []observeservice.InstanceStatus
+}
+
+type caseView struct {
+	app.CaseDetail
+	PreviewHold       string
+	ReviewNames       bool
+	ReviewReplacement bool
 }
 
 var caseStates = []domain.CaseState{
@@ -26,12 +36,13 @@ var caseStates = []domain.CaseState{
 func (c console) cases(w http.ResponseWriter, r *http.Request) {
 	params := r.URL.Query()
 	query := app.CaseQuery{
-		Instance: domain.InstanceID(params.Get("instance")),
-		State:    domain.CaseState(params.Get("state")),
-		Reason:   domain.ReasonCode(params.Get("cause")),
-		Search:   strings.TrimSpace(params.Get("q")),
-		After:    params.Get("after"),
-		Limit:    50,
+		ExcludeClosed: params.Get("exclude_closed") == "1",
+		Instance:      domain.InstanceID(params.Get("instance")),
+		State:         domain.CaseState(params.Get("state")),
+		Reason:        domain.ReasonCode(params.Get("cause")),
+		Search:        strings.TrimSpace(params.Get("q")),
+		After:         params.Get("after"),
+		Limit:         50,
 	}
 	if raw := params.Get("limit"); raw != "" {
 		limit, err := strconv.Atoi(raw)
@@ -44,8 +55,8 @@ func (c console) cases(w http.ResponseWriter, r *http.Request) {
 	if (query.Instance != "" && !localID(string(query.Instance))) ||
 		(query.Reason != "" && !localID(string(query.Reason))) ||
 		(query.State != "" && !slicesState(query.State)) ||
-		len(query.Search) > 200 || len(query.After) > 512 {
-		c.errorPage(w, r, http.StatusBadRequest, "cases", "Invalid case filters", "Remove the filters or start again from Cases.")
+		len(query.Search) > 128 || len(query.After) > 128 {
+		c.errorPage(w, r, http.StatusBadRequest, "cases", "Invalid queue filters", "Remove the filters or start again from the Recovery Queue.")
 		return
 	}
 	status, ok := c.loadStatus(w, r)
@@ -57,10 +68,17 @@ func (c console) cases(w http.ResponseWriter, r *http.Request) {
 		c.readError(w, r, err)
 		return
 	}
-	content := casesView{Cases: cases.Cases, Query: query, States: caseStates}
+	content := casesView{Cases: cases.Cases, Query: query}
+	if c.Connections != nil {
+		content.Services, err = c.Connections.Instances(r.Context())
+		if err != nil {
+			c.readError(w, r, err)
+			return
+		}
+	}
 	if cases.After != "" {
 		next := url.Values{}
-		for _, key := range []string{"instance", "state", "cause", "q", "limit"} {
+		for _, key := range []string{"instance", "state", "cause", "q", "limit", "exclude_closed"} {
 			if v := params.Get(key); v != "" {
 				next.Set(key, v)
 			}
@@ -68,7 +86,7 @@ func (c console) cases(w http.ResponseWriter, r *http.Request) {
 		next.Set("after", cases.After)
 		content.Next = c.BasePath + "/cases?" + next.Encode()
 	}
-	c.render(w, r, http.StatusOK, "cases", page{Title: "Cases", Active: "cases", Status: status, Body: content})
+	c.render(w, r, http.StatusOK, "cases", page{Title: "Recovery Queue", Active: "cases", Status: status, Body: content})
 }
 
 func slicesState(state domain.CaseState) bool {
@@ -95,7 +113,40 @@ func (c console) caseDetail(w http.ResponseWriter, r *http.Request) {
 		c.readError(w, r, err)
 		return
 	}
-	c.render(w, r, http.StatusOK, "case", page{Title: "Case " + id, Active: "cases", Status: status, Body: detail})
+	display := detail.Case.Display
+	body := caseView{CaseDetail: detail, PreviewHold: previewVersionHold(display)}
+	if detail.Case.Reason == domain.ReasonCode(observe.FindingNoEligibleFiles) && display.Product == domain.ProductSonarr {
+		body.ReviewReplacement = true
+		body.PreviewHold = ""
+		if !detail.Case.Job.CompleteSet {
+			body.PreviewHold = "Sonarr has not identified every episode in this download. Check the release in Sonarr before removing it."
+		}
+	}
+	if detail.Case.Reason == domain.ReasonCode(observe.FindingSeriesIDOnly) {
+		body.ReviewNames = len(detail.Case.Targets) == 1 && importflow.SupportsEpisodeNameReview(display.Product, display.Version)
+		if body.ReviewNames {
+			body.PreviewHold = ""
+		} else {
+			body.PreviewHold = "Open Manual Import in Sonarr to review this download."
+		}
+	}
+	c.render(w, r, http.StatusOK, "case", page{Title: caseTitle(detail.Case), Active: "cases", Status: status, Body: body})
+}
+
+func previewVersionHold(display domain.CaseDisplay) string {
+	switch display.Product {
+	case domain.ProductSonarr:
+		if display.Version != "" && display.Version != importflow.SonarrVersion {
+			return "This build can read the queue on Sonarr " + display.Version +
+				". Import preview is currently supported on Sonarr " + importflow.SonarrVersion + "."
+		}
+	case domain.ProductRadarr:
+		if display.Version != "" && display.Version != importflow.RadarrVersion {
+			return "This build can read the queue on Radarr " + display.Version +
+				". Import preview is currently supported on Radarr " + importflow.RadarrVersion + "."
+		}
+	}
+	return ""
 }
 
 func (c console) intent(w http.ResponseWriter, r *http.Request) {

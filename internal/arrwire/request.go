@@ -15,8 +15,9 @@ import (
 )
 
 const (
-	SonarrVersion = "4.0.20.3014"
-	RadarrVersion = "6.4.4.10685"
+	SonarrVersion             = "4.0.20.3014"
+	SonarrIDOnlyImportVersion = "5.0.0.2941"
+	RadarrVersion             = "6.4.4.10685"
 )
 
 var (
@@ -50,7 +51,13 @@ func (r Request) GoString() string { return r.String() }
 func Encode(instance domain.Instance, adapterRevision string, op domain.Operation, prepared domain.PreparedAction) (Request, error) {
 	switch instance.Product {
 	case domain.ProductSonarr:
-		if instance.UpstreamVersion != SonarrVersion {
+		switch instance.UpstreamVersion {
+		case SonarrVersion:
+		case SonarrIDOnlyImportVersion:
+			if op.Action != domain.ActionImport || len(op.Targets) != 1 {
+				return Request{}, ErrUnsupported
+			}
+		default:
 			return Request{}, ErrUnsupported
 		}
 	case domain.ProductRadarr:
@@ -74,7 +81,13 @@ func Encode(instance domain.Instance, adapterRevision string, op domain.Operatio
 
 	switch op.Action {
 	case domain.ActionImport:
-		return copyImport(instance.Product, prepared.Import)
+		if instance.UpstreamVersion == SonarrIDOnlyImportVersion {
+			file := prepared.Import.Files[0]
+			if file.ReleaseType != "singleEpisode" && file.ReleaseType != "unknown" {
+				return Request{}, ErrNativeShape
+			}
+		}
+		return copyImport(instance.Product, instance.UpstreamVersion, prepared.Import)
 	case domain.ActionReject:
 		return queueReject(prepared.Reject)
 	case domain.ActionSearch:

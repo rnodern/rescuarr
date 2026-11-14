@@ -21,7 +21,7 @@ Run the offline checks with `python3 -B -m unittest discover -s test/lab -p 'tes
 
 ## Optional effect scenarios
 
-Pass one of `sonarr/import`, `radarr/import`, `sonarr/reject-preserve`, `radarr/reject-preserve`, `sonarr/reject-remove`, `radarr/reject-remove`, `sonarr/reject-lost-response`, `radarr/reject-lost-response`, `sonarr/replace-terminal` or `radarr/replace-terminal` as the second argument. The effect runner also requires OpenSSL and FFmpeg. It generates disposable certificates and a video from filters, serves controlled metadata, search results and articles on the closed network, and exports scoped evidence. GitHub pull requests run the read probes and both isolated Sonarr 5 scenarios as separate jobs. Use the workflow dispatch input to run one effect scenario on an exact checked-out revision.
+Pass one of `sonarr/import`, `radarr/import`, `sonarr/reject-preserve`, `radarr/reject-preserve`, `sonarr/reject-remove`, `radarr/reject-remove`, `sonarr/reject-lost-response`, `radarr/reject-lost-response`, `sonarr/replace-terminal` or `radarr/replace-terminal` as the second argument. The effect runner also requires OpenSSL and FFmpeg. It generates disposable certificates and a video from filters, serves controlled metadata, search results and articles on the closed network, and exports scoped evidence. GitHub pull requests run the read probes and the isolated Sonarr 5 scenarios as separate jobs. Use the workflow dispatch input to run one effect scenario on an exact checked-out revision.
 
 The import scenario records whether the source was preserved as a separate result. The rejection scenarios exercise the Arr queue branch on a paused synthetic download. They do not establish terminal downloader failure, qualify automatic removal, or qualify the production replacement flow. A source-retaining trial can leave final import pending. Review each effect independently before drawing a capability conclusion.
 
@@ -40,6 +40,18 @@ Run `test/lab/run.sh /tmp/rescuarr-sonarr-v5-empty-pack.json sonarr/v5-empty-pac
 This scenario uses the pinned Sonarr 5 and SABnzbd Linux images. A native season search grabs a synthetic pack. The runner waits for SABnzbd to report the exact job completed, moves its single synthetic video out of the download folder and stages it under episode 2 in the disposable library. A native library rescan must link that file to episode 2 only. The runner then enables completed-download handling and requires Sonarr's no-eligible-files warning on every alias of the original pack.
 
 The runner applies one native queue removal with blocklisting, client retention and immediate redownload suppressed. It checks failed history for both aliases, one matching blocklist row, queue absence through refresh, unchanged SABnzbd history, unchanged empty folder and no implicit search. It then searches only for the still-missing episode 1 and verifies a distinct job imported into its file link while the existing episode 2 file stayed unchanged. The scenario contributes Linux upstream evidence when executed successfully. A Windows path, deployment wiring, all-covered behavior and active alternative queue jobs require separate verification.
+
+### Sonarr 5 empty-pack Go adapter
+
+Run `test/lab/run.sh /tmp/rescuarr-sonarr-v5-adapter-pack.json sonarr/v5-adapter-pack` with the Go version pinned in `go.mod`. This scenario cross-compiles the exact checked-out Go adapter as a Linux amd64 probe and mounts it read-only into the isolated runner. The probe's transport accepts only the fixed lab Sonarr origin. It uses the lab credential via stdin and reports allowlisted outcomes.
+
+The Go probe performs preflight, sends the one scoped removal, checks its readback and submits the episode-only search. Python independently confirms the queue, blocklist, SAB history, source preservation, command completion and resulting library file. The report records the checkout SHA and pinned images. Fixture qualification is local to this lab process. A passing run provides Go adapter evidence for the pinned Linux environment. See the empty-pack scenario above for remaining Windows and product-runtime coverage.
+
+### Native Windows empty-pack lab
+
+The [Windows upstream workflow](../../.github/workflows/windows-upstream-lab.yml) runs the same empty-pack assertions with the native Windows x64 portable builds of Sonarr 5.0.0.2941 develop and SABnzbd 5.1.3. It launches both applications with fresh data directories on a disposable GitHub-hosted Windows Server 2025 runner. Sonarr and SABnzbd use separate loopback addresses and dedicated ports. The synthetic indexer, media and NNTP server stay on that runner. The workflow briefly directs Sonarr's metadata hostname to the synthetic fixture inside the runner and removes its generated trust certificate afterwards.
+
+The checkout-specific `sonarr-windows-v5-adapter-pack-evidence` artefact records the native queue and library results. A passing run contributes evidence for the native Windows adapter on a local drive. Windows service accounts, network library paths and the packaged Rescuarr background worker require additional evidence.
 
 ### Terminal replacement
 
