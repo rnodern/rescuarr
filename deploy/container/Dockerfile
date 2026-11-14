@@ -21,6 +21,7 @@ RUN addgroup -S -g 10001 rescuarr \
     && chown 10001:10001 /data \
     && test -s /etc/ssl/certs/ca-certificates.crt
 COPY --from=build --chmod=0555 /out/rescuarr /usr/local/bin/rescuarr
+COPY deploy/licenses /usr/local/share/licenses/rescuarr
 ARG RESCUARR_VERSION=dev
 ARG RESCUARR_REVISION=unknown
 LABEL org.opencontainers.image.source="https://github.com/rnodern/rescuarr" \

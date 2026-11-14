@@ -1,8 +1,11 @@
 package observe
 
 import (
+	"cmp"
 	"context"
+	"encoding/json"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/rnodern/rescuarr/internal/domain"
@@ -24,6 +27,14 @@ type LibraryFile struct {
 	FormatIDs           []int32
 	CustomFormatScore   *int32
 	QualityCutoffNotMet *bool
+	languages           []domain.ImportLanguage
+	audioLanguages      []string
+	audioComplete       bool
+}
+
+type fileLanguageWire struct {
+	resourceIDWire
+	Name json.RawMessage `json:"name"`
 }
 
 type FileQuality struct {
@@ -50,20 +61,21 @@ type fileQualityWire struct {
 
 func (a *Arr) libraryFile(ctx context.Context, ref domain.TargetRef, id int64, season *int32) (LibraryFile, error) {
 	var wire struct {
-		ID                  int64            `json:"id"`
-		SeriesID            int64            `json:"seriesId"`
-		MovieID             int64            `json:"movieId"`
-		SeasonNumber        *int32           `json:"seasonNumber"`
-		RelativePath        string           `json:"relativePath"`
-		Path                string           `json:"path"`
-		Size                *int64           `json:"size"`
-		DateAdded           *time.Time       `json:"dateAdded"`
-		Quality             fileQualityWire  `json:"quality"`
-		Edition             string           `json:"edition"`
-		Languages           []resourceIDWire `json:"languages"`
-		Formats             []resourceIDWire `json:"customFormats"`
-		CustomFormatScore   *int32           `json:"customFormatScore"`
-		QualityCutoffNotMet *bool            `json:"qualityCutoffNotMet"`
+		ID                  int64              `json:"id"`
+		SeriesID            int64              `json:"seriesId"`
+		MovieID             int64              `json:"movieId"`
+		SeasonNumber        *int32             `json:"seasonNumber"`
+		RelativePath        string             `json:"relativePath"`
+		Path                string             `json:"path"`
+		Size                *int64             `json:"size"`
+		DateAdded           *time.Time         `json:"dateAdded"`
+		Quality             fileQualityWire    `json:"quality"`
+		Edition             string             `json:"edition"`
+		Languages           []fileLanguageWire `json:"languages"`
+		Formats             []resourceIDWire   `json:"customFormats"`
+		CustomFormatScore   *int32             `json:"customFormatScore"`
+		QualityCutoffNotMet *bool              `json:"qualityCutoffNotMet"`
+		MediaInfo           json.RawMessage    `json:"mediaInfo"`
 	}
 	resource := "episodefile"
 	if ref.Kind == domain.TargetMovie {
@@ -77,10 +89,20 @@ func (a *Arr) libraryFile(ctx context.Context, ref domain.TargetRef, id int64, s
 		(ref.Kind == domain.TargetMovie && (wire.MovieID != ref.ID || wire.SeriesID != 0)) {
 		return LibraryFile{}, ErrResponse
 	}
+	var languageIDs []resourceIDWire
+	if wire.Languages != nil {
+		languageIDs = make([]resourceIDWire, 0, len(wire.Languages))
+		for _, item := range wire.Languages {
+			languageIDs = append(languageIDs, item.resourceIDWire)
+		}
+	}
+	audioLanguages, audioComplete := audioTrackLanguages(wire.MediaInfo)
 	out := LibraryFile{
 		ID: id, RelativePath: exactToken(wire.RelativePath, 4096), Path: exactToken(wire.Path, 4096), SizeBytes: nonnegative(wire.Size),
-		Quality: wire.Quality.project(a.reader.product), LanguageIDs: fileMetadataIDs(wire.Languages, 0),
+		Quality: wire.Quality.project(a.reader.product), LanguageIDs: fileMetadataIDs(languageIDs, 0),
 		FormatIDs: fileMetadataIDs(wire.Formats, 1), CustomFormatScore: wire.CustomFormatScore, QualityCutoffNotMet: wire.QualityCutoffNotMet,
+		languages:      nativeFileLanguages(wire.Languages),
+		audioLanguages: audioLanguages, audioComplete: audioComplete,
 	}
 	if wire.DateAdded != nil && !wire.DateAdded.IsZero() {
 		out.DateAdded = new(wire.DateAdded.UTC())
@@ -89,6 +111,55 @@ func (a *Arr) libraryFile(ctx context.Context, ref domain.TargetRef, id int64, s
 		out.Edition = exactToken(wire.Edition, 256)
 	}
 	return out, nil
+}
+
+func nativeFileLanguages(items []fileLanguageWire) []domain.ImportLanguage {
+	if len(items) == 0 || len(items) > maxFileItems {
+		return nil
+	}
+	result := make([]domain.ImportLanguage, 0, len(items))
+	seen := make(map[int32]bool, len(items))
+	for _, item := range items {
+		var name string
+		if json.Unmarshal(item.Name, &name) != nil {
+			return nil
+		}
+		name = boundedText(name, 64)
+		if item.ID == nil || *item.ID <= 0 || seen[*item.ID] || name == "" || strings.ContainsAny(name, `/\\`) {
+			return nil
+		}
+		seen[*item.ID] = true
+		result = append(result, domain.ImportLanguage{ID: int64(*item.ID), Name: name})
+	}
+	slices.SortFunc(result, func(left, right domain.ImportLanguage) int { return cmp.Compare(left.ID, right.ID) })
+	return result
+}
+
+// Sonarr joins one tag per audio stream with slashes. Keep observed tags for
+// positive checks even if the report cannot establish the absence of a language.
+func audioTrackLanguages(raw json.RawMessage) ([]string, bool) {
+	var media struct {
+		Languages string `json:"audioLanguages"`
+		Count     int    `json:"audioStreamCount"`
+	}
+	if json.Unmarshal(raw, &media) != nil {
+		return nil, false
+	}
+	if exactToken(media.Languages, 1024) == "" {
+		return nil, false
+	}
+	tags := strings.Split(media.Languages, "/")
+	if len(tags) > maxFileItems {
+		return nil, false
+	}
+	var languages []string
+	for _, tag := range tags {
+		tag = boundedText(tag, 32)
+		if tag != "" && !strings.ContainsAny(tag, `\\,:;`) {
+			languages = append(languages, tag)
+		}
+	}
+	return languages, len(languages) == len(tags) && len(languages) == media.Count
 }
 
 func (w fileQualityWire) project(product domain.Product) *FileQuality {
