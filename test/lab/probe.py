@@ -2,6 +2,7 @@
 
 import configparser
 import json
+import re
 import sys
 import time
 import urllib.error
@@ -16,6 +17,14 @@ TARGETS = {
     "radarr": (7878, "6.4.4.10685", "includeUnknownMovieItems"),
 }
 SAB_VERSION = "5.1.3"
+
+
+class ProbeFailure(RuntimeError):
+    def __init__(self, phase, category, http_status=None):
+        self.details = {"phase": phase, "category": category}
+        if http_status is not None:
+            self.details["httpStatus"] = http_status
+        super().__init__(phase, category)
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -43,9 +52,11 @@ def wait_for(observe, timeout=120):
     while True:
         try:
             return observe()
-        except (OSError, ValueError, ET.ParseError, configparser.Error, KeyError, TypeError):
+        except (ProbeFailure, OSError, ValueError, ET.ParseError, KeyError, TypeError) as error:
             if time.monotonic() >= deadline:
-                raise RuntimeError("Lab probe did not produce a usable response before its deadline") from None
+                if isinstance(error, ProbeFailure):
+                    raise error from None
+                raise ProbeFailure("read", "invalidResponseOrUnavailable") from None
             time.sleep(2)
 
 
@@ -78,19 +89,48 @@ def arr_snapshot(product, port, version, unknown_flag):
     }
 
 
+def sab_key(path=Path("/config/sab/sabnzbd.ini")):
+    # SAB's ConfigObj format places __version__ and __encoding__ before [misc].
+    # Give the preamble its own section so Python 3.12 can read the misc values.
+    parser = configparser.ConfigParser(interpolation=None, strict=False)
+    try:
+        with path.open(encoding="utf-8-sig") as contents:
+            text = contents.read(1_000_001)
+        if len(text) > 1_000_000:
+            raise ProbeFailure("config", "oversizedConfig")
+        parser.read_string("[preamble]\n" + text)
+    except OSError:
+        raise ProbeFailure("config", "configUnavailable") from None
+    except (configparser.Error, UnicodeError):
+        raise ProbeFailure("config", "invalidConfig") from None
+    api_key = parser.get("misc", "api_key", fallback="")
+    if len(api_key) >= 2 and api_key[0] == api_key[-1] and api_key[0] in "\"'":
+        api_key = api_key[1:-1]
+    if not re.fullmatch(r"[0-9a-f]{32}", api_key):
+        raise ProbeFailure("config", "missingOrInvalidKey")
+    return api_key
+
+
+def sab_read(phase, query):
+    try:
+        return get_json("http://sab:8080", "/api", query)
+    except urllib.error.HTTPError as error:
+        raise ProbeFailure(phase, "httpError", error.code) from None
+    except OSError:
+        raise ProbeFailure(phase, "unavailable") from None
+    except ValueError:
+        raise ProbeFailure(phase, "invalidResponse") from None
+
+
 def sab_snapshot():
-    origin = "http://sab:8080"
-    version = get_json(origin, "/api", {"mode": "version", "output": "json"})
-    if version.get("version") != SAB_VERSION:
-        raise ValueError("Unexpected installed SABnzbd version")
-    config = configparser.ConfigParser(interpolation=None, strict=False)
-    config.read("/config/sab/sabnzbd.ini")
-    api_key = config["misc"]["api_key"]
-    if not api_key:
-        raise ValueError("Lab API key is not available yet")
-    queue = get_json(origin, "/api", {"mode": "queue", "output": "json", "apikey": api_key})
-    if queue["queue"]["slots"] != []:
-        raise ValueError("The disposable SABnzbd service did not report an empty inventory")
+    version = sab_read("version", {"mode": "version", "output": "json"})
+    if not isinstance(version, dict) or version.get("version") != SAB_VERSION:
+        raise ProbeFailure("version", "unexpectedVersion")
+    queue = sab_read("queue", {"mode": "queue", "output": "json", "apikey": sab_key()})
+    if not isinstance(queue, dict) or not isinstance(queue.get("queue"), dict):
+        raise ProbeFailure("queue", "invalidResponse")
+    if queue["queue"].get("slots") != []:
+        raise ProbeFailure("queue", "unexpectedSlots")
     return {"product": "sabnzbd", "version": version["version"], "queueTotal": 0}
 
 
@@ -113,8 +153,9 @@ def main():
         started = time.monotonic()
         try:
             report["results"][product] = {"status": "verified", **wait_for(observe)}
-        except RuntimeError:
-            report["results"][product] = {"status": "failed", "reason": "probeDeadline"}
+        except ProbeFailure as error:
+            report["results"][product] = {"status": "failed", "reason": "probeDeadline", **error.details}
+            print(f"{product} probe failed: {json.dumps(error.details)}", file=sys.stderr)
             failed = True
         report["results"][product]["elapsedSeconds"] = round(time.monotonic() - started, 3)
     print(json.dumps(report, indent=2))
