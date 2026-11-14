@@ -20,6 +20,7 @@ CREATE TABLE observe_cases (
     instance_id TEXT NOT NULL REFERENCES observe_instances(id),
     epoch INTEGER NOT NULL CHECK (epoch > 0),
     correlation_key TEXT NOT NULL,
+    observation_only INTEGER NOT NULL CHECK (observation_only IN (0, 1)),
     fingerprint TEXT NOT NULL,
     state TEXT NOT NULL,
     reason TEXT NOT NULL,
@@ -32,6 +33,7 @@ CREATE TABLE observe_cases (
 ) STRICT;
 
 CREATE INDEX observe_cases_instance ON observe_cases(instance_id, id);
+CREATE INDEX observe_case_bucket ON observe_cases(instance_id, observation_only, id);
 CREATE INDEX observe_cases_state ON observe_cases(state, reason, id);
 CREATE INDEX observe_case_retention ON observe_cases(instance_id, state, updated_at);
 CREATE INDEX observe_cases_absence ON observe_cases(instance_id, epoch, missing_complete_scans, last_seen_generation);
