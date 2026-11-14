@@ -2,6 +2,7 @@ package prowl
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -60,6 +61,11 @@ func TestProviderResponseCategories(t *testing.T) {
 		{"misclassified html", 200, `<html>success</html>`, Uncertain},
 		{"misclassified http success", 503, `<prowl><success code="200" remaining="1"/></prowl>`, Uncertain},
 		{"malformed", 200, `<prowl><success`, Uncertain},
+		{"conflicting response", 200, `<prowl><success code="200"/><error code="401"/></prowl>`, Uncertain},
+		{"duplicate response", 200, `<prowl><success code="200"/><success code="200"/></prowl>`, Uncertain},
+		{"unknown response element", 200, `<prowl><success code="200"/><other/></prowl>`, Uncertain},
+		{"nested response", 200, `<prowl><success code="200"><error code="401"/></success></prowl>`, Uncertain},
+		{"trailing markup", 200, `<prowl><success code="200"/></prowl><prowl><success code="200"/></prowl>`, Uncertain},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -72,6 +78,26 @@ func TestProviderResponseCategories(t *testing.T) {
 				t.Fatalf("got %q want %q", got.Status, tt.want)
 			}
 		})
+	}
+}
+
+func TestRedirectDoesNotReplayCredentialedRequest(t *testing.T) {
+	requests := 0
+	hc := &http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
+		requests++
+		if requests > 1 {
+			t.Fatal("redirect replayed credentialed request")
+		}
+		if r.URL.String() != endpoint {
+			t.Fatalf("unexpected URL %s", r.URL)
+		}
+		res := response(http.StatusTemporaryRedirect, "")
+		res.Header.Set("Location", "https://attacker.invalid/collect")
+		return res, nil
+	})}
+	got, err := NewClient(hc).Send(context.Background(), "secret-test-key", Message{Application: "Rescuarr", Event: "Test"})
+	if err != nil || got.Status != Uncertain || requests != 1 {
+		t.Fatalf("got %+v, requests=%d, err=%v", got, requests, err)
 	}
 }
 
@@ -96,6 +122,45 @@ func TestWorkerMapsDeliveryStates(t *testing.T) {
 	}
 }
 
+type testOutbox struct {
+	delivery Delivery
+	complete bool
+	state    domain.OutboxState
+	reason   domain.ReasonCode
+}
+
+func (o *testOutbox) ClaimDue(context.Context, time.Time) (Delivery, bool, error) {
+	return o.delivery, true, nil
+}
+func (o *testOutbox) Complete(ctx context.Context, _ domain.OutboxID, state domain.OutboxState, _ time.Time, reason domain.ReasonCode) error {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if _, ok := ctx.Deadline(); !ok {
+		return errors.New("completion context has no bound")
+	}
+	o.complete, o.state, o.reason = true, state, reason
+	return nil
+}
+
+type testKeys struct{}
+
+func (testKeys) Resolve(context.Context, string) (string, error) { return "key", nil }
+
+func TestWorkerCompletesInvalidLocalMessageAfterCancellation(t *testing.T) {
+	o := &testOutbox{delivery: Delivery{Item: domain.OutboxItem{ID: "outbox-1"}, KeyRef: "ref", Message: Message{}}}
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	w := Worker{Outbox: o, Keys: testKeys{}, Client: NewClient(&http.Client{Transport: roundTrip(func(*http.Request) (*http.Response, error) {
+		t.Fatal("invalid local message reached transport")
+		return nil, nil
+	})})}
+	processed, err := w.RunOne(canceled)
+	if err != nil || !processed || !o.complete || o.state != domain.OutboxFailed || o.reason != "notification_invalid_request" {
+		t.Fatalf("processed=%v err=%v outbox=%+v", processed, err, o)
+	}
+}
+
 func TestDroppedResponseIsUncertainAndRateLimitBounded(t *testing.T) {
 	c := NewClient(&http.Client{Transport: roundTrip(func(*http.Request) (*http.Response, error) { return nil, io.ErrUnexpectedEOF })})
 	got, err := c.Send(context.Background(), "key", Message{Application: "Rescuarr", Event: "Notice"})
@@ -109,7 +174,7 @@ func TestDroppedResponseIsUncertainAndRateLimitBounded(t *testing.T) {
 
 func TestRequestValidation(t *testing.T) {
 	c := NewClient(&http.Client{Transport: roundTrip(func(*http.Request) (*http.Response, error) { t.Fatal("request should not be sent"); return nil, nil })})
-	for _, m := range []Message{{Priority: 3, Event: "x"}, {Priority: 0}, {Priority: 0, Event: "x", URL: "https://user:pass@example.test/x"}} {
+	for _, m := range []Message{{Priority: 3, Event: "x"}, {Priority: 0}} {
 		if _, err := c.Send(context.Background(), "key", m); err == nil {
 			t.Fatalf("expected validation error for %+v", m)
 		}

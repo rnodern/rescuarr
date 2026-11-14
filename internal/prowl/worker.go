@@ -49,14 +49,20 @@ func (w Worker) RunOne(ctx context.Context) (bool, error) {
 	}
 	key, err := w.Keys.Resolve(ctx, delivery.KeyRef)
 	if err != nil {
-		return true, w.Outbox.Complete(ctx, delivery.Item.ID, domain.OutboxDelayed, now().Add(time.Minute), domain.ReasonCode("notification_key_unavailable"))
+		return true, w.complete(ctx, delivery.Item.ID, domain.OutboxDelayed, now().Add(time.Minute), domain.ReasonCode("notification_key_unavailable"))
 	}
 	result, err := w.Client.Send(ctx, key, delivery.Message)
 	if err != nil {
-		return true, err
+		return true, w.complete(ctx, delivery.Item.ID, domain.OutboxFailed, time.Time{}, domain.ReasonCode("notification_invalid_request"))
 	}
 	state, retryAt, reason := outcome(result, now())
-	return true, w.Outbox.Complete(ctx, delivery.Item.ID, state, retryAt, reason)
+	return true, w.complete(ctx, delivery.Item.ID, state, retryAt, reason)
+}
+
+func (w Worker) complete(ctx context.Context, id domain.OutboxID, state domain.OutboxState, at time.Time, reason domain.ReasonCode) error {
+	completeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	return w.Outbox.Complete(completeCtx, id, state, at, reason)
 }
 
 func outcome(r Result, now time.Time) (domain.OutboxState, time.Time, domain.ReasonCode) {

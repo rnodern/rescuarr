@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -42,7 +43,6 @@ type Message struct {
 	Event       string
 	Description string
 	Priority    int
-	URL         string
 }
 
 type Result struct {
@@ -62,7 +62,9 @@ func NewClient(httpClient *http.Client) *Client {
 	if httpClient == nil {
 		httpClient = &http.Client{Timeout: 10 * time.Second}
 	}
-	return &Client{http: httpClient}
+	copy := *httpClient
+	copy.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	return &Client{http: &copy}
 }
 
 func (c *Client) Send(ctx context.Context, key string, m Message) (Result, error) {
@@ -75,21 +77,12 @@ func (c *Client) Send(ctx context.Context, key string, m Message) (Result, error
 	if m.Event == "" && m.Description == "" {
 		return Result{}, errors.New("Prowl event or description is required")
 	}
-	if m.URL != "" {
-		u, err := url.Parse(m.URL)
-		if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
-			return Result{}, errors.New("invalid Prowl URL")
-		}
-	}
 	form := url.Values{"apikey": {key}, "application": {truncate(m.Application, maxApplication)}, "priority": {fmt.Sprint(m.Priority)}}
 	if m.Event != "" {
 		form.Set("event", truncate(m.Event, maxEvent))
 	}
 	if m.Description != "" {
 		form.Set("description", truncate(m.Description, maxDescription))
-	}
-	if m.URL != "" {
-		form.Set("url", m.URL)
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(form.Encode()))
 	if err != nil {
@@ -114,43 +107,33 @@ func (c *Client) Send(ctx context.Context, key string, m Message) (Result, error
 		result.Status = Quota
 		return result, nil
 	}
-	var envelope struct {
-		XMLName xml.Name `xml:"prowl"`
-		Success *struct {
-			Code      int   `xml:"code,attr"`
-			Remaining int   `xml:"remaining,attr"`
-			Reset     int64 `xml:"resetdate,attr"`
-		} `xml:"success"`
-		Error *struct {
-			Code int `xml:"code,attr"`
-		} `xml:"error"`
-	}
-	if err := xml.Unmarshal(bytes.TrimSpace(body), &envelope); err != nil || envelope.XMLName.Local != "prowl" {
+	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
 		result.Status = Uncertain
 		return result, nil
 	}
-	if envelope.Success != nil {
-		if envelope.Success.Code != 200 || resp.StatusCode < 200 || resp.StatusCode >= 300 {
+	envelope, valid := parseEnvelope(bytes.TrimSpace(body))
+	if !valid {
+		result.Status = Uncertain
+		return result, nil
+	}
+	if envelope.kind == "success" {
+		if envelope.code != 200 || resp.StatusCode < 200 || resp.StatusCode >= 300 {
 			result.Status = Uncertain
 			return result, nil
 		}
-		result.Status, result.Remaining = Accepted, envelope.Success.Remaining
-		if envelope.Success.Reset > 0 {
-			result.ResetAt = time.Unix(envelope.Success.Reset, 0).UTC()
+		result.Status, result.Remaining = Accepted, envelope.remaining
+		if envelope.reset > 0 {
+			result.ResetAt = time.Unix(envelope.reset, 0).UTC()
 		}
 		return result, nil
 	}
-	if envelope.Error == nil {
-		result.Status = Uncertain
-		return result, nil
-	}
-	result.ProviderCode = envelope.Error.Code
+	result.ProviderCode = envelope.code
 	switch {
-	case envelope.Error.Code == 401 || resp.StatusCode == http.StatusUnauthorized:
+	case envelope.code == 401:
 		result.Status = InvalidKey
-	case envelope.Error.Code == 406 || resp.StatusCode == http.StatusTooManyRequests:
+	case envelope.code == 406:
 		result.Status = Quota
-	case envelope.Error.Code == 500 || resp.StatusCode >= 500:
+	case envelope.code == 500 || resp.StatusCode >= 500:
 		result.Status = Transient
 	case resp.StatusCode >= 200 && resp.StatusCode < 300:
 		result.Status = Rejected
@@ -169,6 +152,125 @@ func truncate(s string, max int) string {
 		s = s[:len(s)-n]
 	}
 	return s
+}
+
+type providerEnvelope struct {
+	kind      string
+	code      int
+	remaining int
+	reset     int64
+}
+
+// parseEnvelope accepts exactly one recognised child under <prowl>, with no
+// trailing document content or unrecognised provider response elements.
+func parseEnvelope(body []byte) (providerEnvelope, bool) {
+	d := xml.NewDecoder(bytes.NewReader(body))
+	var out providerEnvelope
+	for {
+		tok, err := d.Token()
+		if err != nil {
+			return out, false
+		}
+		if start, ok := tok.(xml.StartElement); ok {
+			if start.Name.Local != "prowl" {
+				return out, false
+			}
+			break
+		}
+		if chars, ok := tok.(xml.CharData); ok && strings.TrimSpace(string(chars)) != "" {
+			return out, false
+		}
+	}
+	children := 0
+	for {
+		tok, err := d.Token()
+		if err != nil {
+			return out, false
+		}
+		switch tok := tok.(type) {
+		case xml.StartElement:
+			children++
+			if children != 1 {
+				return out, false
+			}
+			var code int
+			var remaining int
+			var reset int64
+			codeSeen := false
+			for _, attr := range tok.Attr {
+				var err error
+				switch attr.Name.Local {
+				case "code":
+					code, err = strconv.Atoi(attr.Value)
+					codeSeen = err == nil
+				case "remaining":
+					remaining, err = strconv.Atoi(attr.Value)
+				case "resetdate":
+					reset, err = strconv.ParseInt(attr.Value, 10, 64)
+				default:
+					return out, false
+				}
+				if err != nil {
+					return out, false
+				}
+			}
+			if !codeSeen {
+				return out, false
+			}
+			switch tok.Name.Local {
+			case "success":
+				out = providerEnvelope{kind: "success", code: code, remaining: remaining, reset: reset}
+			case "error":
+				if remaining != 0 || reset != 0 {
+					return out, false
+				}
+				out = providerEnvelope{kind: "error", code: code}
+			default:
+				return out, false
+			}
+			closed := false
+			for !closed {
+				child, err := d.Token()
+				if err != nil {
+					return out, false
+				}
+				switch child := child.(type) {
+				case xml.EndElement:
+					if child.Name != tok.Name {
+						return out, false
+					}
+					closed = true
+				case xml.CharData:
+					// Prowl's error response may include text; it is never surfaced.
+					if out.kind == "success" && strings.TrimSpace(string(child)) != "" {
+						return out, false
+					}
+				case xml.StartElement:
+					return out, false
+				}
+			}
+		case xml.EndElement:
+			if tok.Name.Local != "prowl" || children != 1 {
+				return out, false
+			}
+			for {
+				extra, err := d.Token()
+				if err == io.EOF {
+					return out, true
+				}
+				if err != nil {
+					return out, false
+				}
+				if chars, ok := extra.(xml.CharData); !ok || strings.TrimSpace(string(chars)) != "" {
+					return out, false
+				}
+			}
+		case xml.CharData:
+			if strings.TrimSpace(string(tok)) != "" {
+				return out, false
+			}
+		}
+	}
 }
 
 // Kept local so truncation is measured in UTF-8 bytes and never splits a rune.
