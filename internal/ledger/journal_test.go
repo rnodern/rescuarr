@@ -468,12 +468,15 @@ func TestPreparedDispatchUsesDurablePrivateSnapshot(t *testing.T) {
 	intent := authorisedFixture(t, journal, fixtureApproval(), fixtureTime)
 	operation := intent.Proposal.Operation
 	const selector = "/synthetic/private/complete/fixture.mkv"
+	resolution, flags := int64(1080), uint64(0)
 	prepared := &domain.PreparedAction{
 		Product: domain.ProductRadarr, Version: "fixture-1", AdapterRevision: "test",
 		ConnectionRevision: 1, OperationKey: operation.Key,
 		Import: &domain.PreparedImport{DownloadID: "private-job-selector", Files: []domain.PreparedImportFile{{
 			Path: selector, FolderName: "fixture", Targets: operation.Targets,
-			QualityID: 1, Quality: domain.ImportQualityRevision{Version: 1}, Languages: []int64{1},
+			QualityID: 1, QualityName: "fixture", QualitySource: "tv", QualityResolution: &resolution, QualityModifier: "none",
+			Quality:   domain.ImportQualityRevision{Version: 1, Observed: true},
+			Languages: []domain.ImportLanguage{{ID: 1, Name: "English"}}, IndexerFlags: &flags,
 		}}},
 	}
 	calls := 0

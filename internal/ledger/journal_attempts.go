@@ -84,8 +84,12 @@ func readAttempt(ctx context.Context, tx *sql.Tx, row journalIntent, id domain.A
 	}
 	a.attempt.Operation = row.intent.Proposal.Operation
 	var proof Preflight
-	if err := json.Unmarshal([]byte(preflight), &proof); err != nil ||
-		(proof.Prepared != nil && !proof.Prepared.Binds(a.attempt.Operation)) {
+	if len(preflight) > 0 && preflight[0] == '[' {
+		err = json.Unmarshal([]byte(preflight), &proof.Evidence)
+	} else {
+		err = json.Unmarshal([]byte(preflight), &proof)
+	}
+	if err != nil || (proof.Prepared != nil && !proof.Prepared.Binds(a.attempt.Operation)) {
 		return journalAttempt{}, ErrJournal
 	}
 	a.attempt.Preflight, a.attempt.Prepared = proof.Evidence, proof.Prepared
