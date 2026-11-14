@@ -47,6 +47,12 @@ func classify(pattern Fingerprint, candidate Candidate, now time.Time) SampleRes
 	if pattern.Signature.Family == IncidentCause {
 		return classifyIncident(result, candidate, now)
 	}
+	// The current outcome contract cannot prove a protected, exact join from
+	// this search to a new grab and its later import. Keep replacement evidence
+	// visible but excluded until the action ledger supplies that binding.
+	if pattern.Signature.Family == Replacement {
+		return result.excluding("replacement_chain_binding_missing")
+	}
 	if !boundPlan(pattern, candidate, now) {
 		return result.excluding("plan_unverified")
 	}
@@ -87,20 +93,7 @@ func classify(pattern Fingerprint, candidate Candidate, now time.Time) SampleRes
 		}
 		return result.including(SampleSuccess)
 	}
-	if !validJob(candidate.FollowupJob, candidate.Sample.Job.Instance) || candidate.FollowupJob == candidate.Sample.Job ||
-		!separateProof(candidate.ReplacementGrab, candidate.MediaAssociation, outcome.ObservedAt, now) ||
-		!proofTargets(candidate.ReplacementGrab, candidate.FollowupJob, candidate.Sample.Target) ||
-		!hasEffect(outcome, domain.EffectSearchDispatch, candidate.Sample.Target, candidate.ReplacementGrab.Evidence) ||
-		candidate.ReplacementGrab.Observed.Before(outcome.ObservedAt) ||
-		!proofTargets(candidate.MediaAssociation, candidate.FollowupJob, candidate.Sample.Target) ||
-		candidate.MediaAssociation.Observed.Before(candidate.ReplacementGrab.Observed) ||
-		candidate.MediaAssociation.Observed.After(candidate.StartedAt.Add(ReplacementWindow)) ||
-		!separateProof(candidate.MediaAssociation, candidate.ImportHistory, candidate.ReplacementGrab.Observed, now) ||
-		!proofTargets(candidate.ImportHistory, candidate.FollowupJob, candidate.Sample.Target) ||
-		candidate.ImportHistory.Observed.After(candidate.StartedAt.Add(ReplacementWindow)) {
-		return result.excluding("replacement_evidence_missing")
-	}
-	return result.including(SampleSuccess)
+	return result.excluding("unsupported_learning_family")
 }
 
 func validSample(pattern Fingerprint, c Candidate, now time.Time) bool {

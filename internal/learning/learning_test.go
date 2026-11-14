@@ -171,26 +171,19 @@ func failedCandidate(c *Candidate) {
 	}
 }
 
-func TestReplacementAndIncidentNeedSeparateProof(t *testing.T) {
+func TestReplacementSamplesWaitForLedgerBinding(t *testing.T) {
 	pattern := testPattern(t, Replacement)
 	c := testCandidate(pattern, 1, clock.Add(-time.Hour))
-	if got := Classify(pattern, c, clock); got.State != SampleSuccess {
-		t.Fatalf("qualified replacement did not count: %+v", got)
+	got := Classify(pattern, c, clock)
+	if got.State != SampleNeutral || got.Sample.Eligible || got.Sample.Exclusion != "replacement_chain_binding_missing" {
+		t.Fatalf("replacement fixture counted without ledger binding: %+v", got)
 	}
-	c.FollowupJob = c.Sample.Job
-	if got := Classify(pattern, c, clock); got.State != SampleNeutral {
-		t.Fatalf("replacement credited original job: %+v", got)
+	failedCandidate(&c)
+	got = Classify(pattern, c, clock)
+	if got.State != SampleNeutral || got.Sample.Eligible || got.Sample.Exclusion != "replacement_chain_binding_missing" {
+		t.Fatalf("replacement failure counted without ledger binding: %+v", got)
 	}
-	c = testCandidate(pattern, 1, clock.Add(-time.Hour))
-	c.MediaAssociation = Proof{}
-	if got := Classify(pattern, c, clock); got.State != SampleNeutral {
-		t.Fatalf("replacement grab alone counted: %+v", got)
-	}
-	c = testCandidate(pattern, 1, clock.Add(-time.Hour))
-	c.Sample.Outcome.Effects[0].Evidence = []domain.EvidenceID{"unrelated-search-evidence"}
-	if got := Classify(pattern, c, clock); got.State != SampleNeutral {
-		t.Fatalf("replacement counted without exact search-to-grab evidence: %+v", got)
-	}
+
 	incident := testPattern(t, IncidentCause)
 	c = testCandidate(incident, 1, clock.Add(-time.Hour))
 	if got := Classify(incident, c, clock); got.State != SampleSuccess {
