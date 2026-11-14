@@ -15,8 +15,11 @@ import (
 
 	"github.com/rnodern/rescuarr/internal/access"
 	"github.com/rnodern/rescuarr/internal/config"
+	"github.com/rnodern/rescuarr/internal/domain"
 	"github.com/rnodern/rescuarr/internal/ledger"
 	"github.com/rnodern/rescuarr/internal/observeservice"
+	"github.com/rnodern/rescuarr/internal/prowl"
+	"github.com/rnodern/rescuarr/internal/prowloutbox"
 	"github.com/rnodern/rescuarr/internal/store"
 )
 
@@ -56,11 +59,44 @@ func TestBrowserUsesOwnerSessionAndLocalState(t *testing.T) {
 		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/json"}},
 			Body: io.NopCloser(strings.NewReader(body)), ContentLength: int64(len(body))}, nil
 	}))
-	recoveryPause, err := ledger.NewJournal(local, holdUnqualifiedRecovery)
+	const prowlKey = "0123456789abcdef0123456789abcdef01234567"
+	privateDir := filepath.Join(cfg.DataDir, "secrets")
+	if err := os.Mkdir(privateDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(privateDir, "prowl-fixture"), []byte(prowlKey+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	deliveries := 0
+	provider := prowl.NewClient(&http.Client{Transport: browserTransport(func(req *http.Request) (*http.Response, error) {
+		deliveries++
+		if req.Method != http.MethodPost || req.URL.String() != "https://api.prowlapp.com/publicapi/add" {
+			t.Fatal("unexpected fake notification endpoint")
+		}
+		body, err := io.ReadAll(req.Body)
+		if err != nil {
+			return nil, err
+		}
+		fields, err := url.ParseQuery(string(body))
+		if err != nil || fields.Get("apikey") != prowlKey || fields.Get("application") != "Rescuarr" ||
+			fields.Get("event") == "" || strings.Contains(string(body), "127.0.0.1") || fields.Get("url") != "" {
+			t.Fatal("notification payload contains unexpected data")
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(
+			`<prowl><success code="200" remaining="25"/></prowl>`))}, nil
+	})})
+	notifications := prowloutbox.New(local, nil, provider, true)
+	notificationRoute, err := notifications.Configure(t.Context(), prowloutbox.ConfigureRoute{
+		Route: prowloutbox.Route{Enabled: true, Categories: prowloutbox.Pause}, KeyRef: "prowl-fixture", Actor: "owner",
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler := browserHandler(cfg, auth, local, observations, nil, recoveryPause)
+	recoveryPause, err := ledger.NewJournal(local, holdUnqualifiedRecovery, notifications.Append)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := browserHandler(cfg, auth, local, observations, notifications, recoveryPause)
 	request := func(method, path, token, origin string, form url.Values) *httptest.ResponseRecorder {
 		t.Helper()
 		request := httptest.NewRequest(method, "http://127.0.0.1:8787"+path, strings.NewReader(form.Encode()))
@@ -135,6 +171,17 @@ func TestBrowserUsesOwnerSessionAndLocalState(t *testing.T) {
 	if err != nil || !paused || revision == 0 {
 		t.Fatalf("pause not committed with an audit revision: %v", err)
 	}
+	record, err := notifications.Recent(t.Context(), notificationRoute.ID, 5)
+	if err != nil || len(record) != 1 || record[0].State != domain.OutboxPending || record[0].Category != "pause" || deliveries != 0 {
+		t.Fatalf("pause did not queue exactly one separate notification: %v", err)
+	}
+	if ran, err := notifications.RunOne(t.Context()); err != nil || !ran || deliveries != 1 {
+		t.Fatalf("notification worker did not accept the fake endpoint response: %v", err)
+	}
+	record, err = notifications.Recent(t.Context(), notificationRoute.ID, 5)
+	if err != nil || len(record) != 1 || record[0].State != domain.OutboxAccepted {
+		t.Fatalf("notification result not committed: %v", err)
+	}
 	control.Set("revision", fmt.Sprint(revision))
 	if response := request(http.MethodPost, controlPath+"resume", session.Token, controlOrigin, control); response.Code != http.StatusSeeOther {
 		t.Fatalf("resume returned %d", response.Code)
@@ -156,10 +203,6 @@ func TestBrowserUsesOwnerSessionAndLocalState(t *testing.T) {
 		}
 	}
 	const origin = "http://127.0.0.1:8787"
-	privateDir := filepath.Join(cfg.DataDir, "secrets")
-	if err := os.Mkdir(privateDir, 0o700); err != nil {
-		t.Fatal(err)
-	}
 	if err := os.WriteFile(filepath.Join(privateDir, keyFile), []byte(key+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
