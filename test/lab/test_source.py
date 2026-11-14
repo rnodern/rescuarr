@@ -17,6 +17,7 @@ from source import (
     TVDB_ID,
     article_id,
     movie_metadata,
+    metadata_path_kind,
     news_article,
     nzb,
     releases,
@@ -60,6 +61,12 @@ class SyntheticSourceTest(unittest.TestCase):
         example = io.BytesIO(b'[{"errorMessage":"Unable to connect to http://private.invalid/?apikey=secret"}]')
         self.assertEqual(validation_category(example), "cannotConnect")
         self.assertEqual(validation_category(io.BytesIO(b'{}')), "validationUnknown")
+
+    def test_metadata_diagnostics_use_fixed_buckets(self):
+        self.assertEqual(metadata_path_kind(f"/v1/tvdb/shows/en/{TVDB_ID}"), "sonarrSeries")
+        self.assertEqual(metadata_path_kind(f"/v1/movie/{TMDB_IDS[0]}"), "radarrMovie")
+        self.assertEqual(metadata_path_kind("/v1/other/private-id"), "unmatchedMetadata")
+        self.assertIsNone(metadata_path_kind("/sonarr/api"))
 
     def test_index_item_binds_a_scoped_nzb(self):
         caps = ET.fromstring(CAPABILITIES)
