@@ -165,6 +165,8 @@ func TestRejectSeparatesPartialEffects(t *testing.T) {
 	}{
 		{"queue only has partial pack scope", func(in *RejectInput) { in.Queue.Value = in.Queue.Value[:1] }, domain.EffectQueueRemoval},
 		{"blocklist not written", func(in *RejectInput) { in.After.Value = nil }, domain.EffectBlocklist},
+		{"blocklist timestamp is before send", func(in *RejectInput) { in.After.Value[0].At = in.Attempt.SentAt.Add(-time.Second) }, domain.EffectBlocklist},
+		{"blocklist timestamp is after read", func(in *RejectInput) { in.After.Value[0].At = in.After.Observation.ObservedAt.Add(time.Second) }, domain.EffectBlocklist},
 		{"blocklist existed before send", func(in *RejectInput) {
 			in.Before.Observation.State = domain.ObservationKnown
 			in.Before.Value = slices.Clone(in.After.Value)

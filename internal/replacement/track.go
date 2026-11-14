@@ -114,15 +114,15 @@ func trackSearch(in SearchInput, explicit bool) SearchProgress {
 	if !sameTargets(certifiedTargets, a.Operation.Targets) {
 		return out
 	}
-	var completedAt time.Time
+	var completedCommand domain.Observation
 	if explicit && qualifiedCommand(in) {
 		out.Command = in.Command.Value.State
 		if out.Command == CommandCompleted {
-			completedAt = in.Command.Observation.ObservedAt
+			completedCommand = in.Command.Observation
 		}
 	}
 	for _, target := range in.Targets {
-		out.Targets = append(out.Targets, trackTarget(o, a, target, in.Now, completedAt))
+		out.Targets = append(out.Targets, trackTarget(o, a, target, in.Now, completedCommand))
 	}
 	return out
 }
@@ -162,12 +162,12 @@ func qualifiedCommand(in SearchInput) bool {
 	case CommandPending, CommandCompleted, CommandFailed:
 		return scopedObservation(observation, domain.Scope{Kind: domain.ScopeInstance, Instance: in.Origin.Job.Ref.Instance},
 			domain.Source(in.Origin.Product), CommandReadback, domain.ObservationKnown, command.Reference, in.Now) &&
-			sameReadContract(observation, in.Origin.Grab.Observation)
+			sameReadContract(observation, in.Origin.Grab.Observation) && uniqueEvidence(observation, in.Origin.Grab.Observation)
 	}
 	return false
 }
 
-func trackTarget(o Original, a domain.Attempt, t SearchTarget, now, completedAt time.Time) TargetProgress {
+func trackTarget(o Original, a domain.Attempt, t SearchTarget, now time.Time, completedCommand domain.Observation) TargetProgress {
 	out := TargetProgress{Target: t.Target, Import: domain.EffectResult{
 		Effect: domain.Effect{Kind: domain.EffectLibraryImport, Target: t.Target}, Verification: domain.VerificationUnresolved,
 	}}
@@ -177,9 +177,9 @@ func trackTarget(o Original, a domain.Attempt, t SearchTarget, now, completedAt 
 	if !postSend(gobs, a) {
 		return out
 	}
-	if !completedAt.IsZero() && !gobs.ObservedAt.Before(completedAt) && len(t.Grabs.Value) == 0 &&
+	if len(t.Grabs.Value) == 0 && !gobs.ObservedAt.Before(completedCommand.ObservedAt) &&
 		scopedObservation(gobs, arrScope, source, ReplacementGrab, domain.ObservationAbsent, targetRecord, now) &&
-		sameReadContract(gobs, o.Grab.Observation) {
+		sameReadContract(gobs, o.Grab.Observation) && uniqueEvidence(o.Grab.Observation, completedCommand, gobs) {
 		out.Grab.Observation = gobs
 		return out
 	}
@@ -187,7 +187,7 @@ func trackTarget(o Original, a domain.Attempt, t SearchTarget, now, completedAt 
 		!scopedObservation(gobs, arrScope, source, ReplacementGrab, domain.ObservationKnown, targetRecord, now) ||
 		!scopedObservation(pobs, arrScope, source, ReplacementProfile, domain.ObservationKnown, targetRecord, now) ||
 		pobs.ObservedAt.Before(gobs.ObservedAt) || !sameReadContract(gobs, o.Grab.Observation) || !sameReadContract(pobs, gobs) ||
-		!uniqueEvidence(gobs, pobs) {
+		!uniqueEvidence(o.Grab.Observation, gobs, pobs) {
 		return out
 	}
 	grab := t.Grabs.Value[0]
@@ -213,7 +213,7 @@ func trackTarget(o Original, a domain.Attempt, t SearchTarget, now, completedAt 
 		!scopedObservation(iobs, arrScope, source, ReplacementImport, domain.ObservationKnown, grab.DownloadID, now) ||
 		!scopedObservation(fobs, arrScope, source, ReplacementFile, domain.ObservationKnown, targetRecord, now) ||
 		!sameReadContract(iobs, gobs) || !sameReadContract(fobs, gobs) || pobs.ObservedAt.Before(fobs.ObservedAt) ||
-		!uniqueEvidence(gobs, pobs, iobs, fobs) {
+		!uniqueEvidence(o.Grab.Observation, gobs, pobs, iobs, fobs) {
 		return out
 	}
 	out.Import.Verification = domain.VerificationExternal

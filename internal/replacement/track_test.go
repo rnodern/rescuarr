@@ -92,6 +92,8 @@ func TestTrackSearchSeparatesCommandGrabAndImport(t *testing.T) {
 		}, CommandCompleted, "", domain.VerificationUnresolved},
 		{"profile drift", func(in *SearchInput) { in.Targets[0].Profile.Value++ }, CommandCompleted, "", domain.VerificationUnresolved},
 		{"profile belongs to another target", func(in *SearchInput) { in.Targets[0].Profile.Observation.SourceRecord = "episode:87" }, CommandCompleted, "", domain.VerificationUnresolved},
+		{"grab reuses original evidence", func(in *SearchInput) { in.Targets[0].Grabs.Observation.ID = in.Origin.Grab.Observation.ID }, CommandCompleted, "", domain.VerificationUnresolved},
+		{"import reuses original evidence", func(in *SearchInput) { in.Targets[0].Imports.Observation.ID = in.Origin.Grab.Observation.ID }, CommandCompleted, domain.ObservationKnown, domain.VerificationUnresolved},
 		{"repeated failed release", func(in *SearchInput) { in.Targets[0].Grabs.Value[0].Signature = in.Origin.Grab.Value[0].Signature }, CommandCompleted, "", domain.VerificationUnresolved},
 		{"grab visible without an import", func(in *SearchInput) { in.Targets[0].Imports.Value = nil }, CommandCompleted, domain.ObservationKnown, domain.VerificationUnresolved},
 		{"existing file left in place", func(in *SearchInput) { in.Targets[0].PriorFileID = in.Targets[0].CurrentFileID.Value }, CommandCompleted, domain.ObservationKnown, domain.VerificationUnresolved},
@@ -160,6 +162,10 @@ func TestTrackSearchAbsenceRequiresCompletedCommand(t *testing.T) {
 		{"uncertain dispatch", func(in *SearchInput) { in.Attempt.Acknowledgement.State = domain.DispatchUncertain }},
 		{"pending command", func(in *SearchInput) { in.Command.Value.State = CommandPending }},
 		{"different command", func(in *SearchInput) { in.Command.Value.Reference = "192" }},
+		{"wrong instance scope", func(in *SearchInput) { in.Command.Observation.Scope.Instance.Epoch++ }},
+		{"command capture before send", func(in *SearchInput) { in.Command.Observation.ObservedAt = in.Attempt.SentAt.Add(-time.Second) }},
+		{"command reuses original evidence", func(in *SearchInput) { in.Command.Observation.ID = in.Origin.Grab.Observation.ID }},
+		{"absence reuses command evidence", func(in *SearchInput) { in.Targets[0].Grabs.Observation.ID = in.Command.Observation.ID }},
 		{"absence read before completion", func(in *SearchInput) {
 			in.Targets[0].Grabs.Observation.ObservedAt = in.Command.Observation.ObservedAt.Add(-time.Second)
 		}},
