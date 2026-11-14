@@ -2,9 +2,9 @@
 
 **No download left behind.**
 
-Rescuarr is a planned, self-hosted download recovery assistant for **Sonarr**, **Radarr**, and **SABnzbd**. It aims to explain why completed downloads are stuck awaiting manual intervention, salvage valid media where safe, and blocklist/retry truly unusable releases.
+Rescuarr is a self-hosted download recovery assistant for **Sonarr**, **Radarr**, and **SABnzbd**. The Go preview lets an owner sign in, add Arr connections, check queues and review saved cases.
 
-> **Project status:** Pre-alpha bootstrap. The working API only checks connectivity. It cannot import, delete, blocklist, or retry downloads yet.
+> **Project status** · Observe preview. Recovery actions are held pending end-to-end qualification.
 
 ## Principles
 
@@ -18,34 +18,30 @@ Rescuarr is a planned, self-hosted download recovery assistant for **Sonarr**, *
 
 | Mode | Behaviour |
 | --- | --- |
-| Observe | Classify failures and suggest actions; read-only |
+| Observe | Check queues and review saved cases |
 | Assist | Review and approve an eligible recovery action |
 | Autonomous | Apply explicitly enabled recovery policies with retry limits and auditing |
 
-## Quick start (connectivity prototype)
+## Run the Observe preview
 
-Requires Python 3.11+.
+Use the [native and container install instructions](docs/INSTALL.md) for a checked package. From a source checkout with Go 1.27.4, or a recent Docker Compose v2 with support for `include`, choose one of these commands.
 
-```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -e '.[dev]'
-cp .env.example .env
-# Edit .env with your own local URLs and API keys.
-set -a && source .env && set +a
-uvicorn rescuarr.app:app --host 127.0.0.1 --port 8787
+```sh
+go run ./cmd/rescuarr serve
 ```
 
-Then open `http://127.0.0.1:8787/docs` or `http://127.0.0.1:8787/api/connections`.
+```sh
+docker compose up --build -d
+```
 
-Alternatively, once you have edited `.env`, run `docker compose up --build -d`. The compose file publishes only on local loopback by default.
-
-**Security:** Keep API keys private. Never commit `.env`, logs, download paths, or media content. The prototype has no user authentication; do not expose port 8787 to the internet.
+Open `http://127.0.0.1:8787`. Read the private `setup-token` file from the data directory, or run `docker compose exec -T rescuarr cat /data/setup-token`. Set an owner password and sign in. To check an Arr queue, put its API key on one line in a private file under the data directory’s `secrets` folder. In **Connections**, enter the filename and the Arr base URL, then select **Check queue**.
 
 ## Repository layout
 
-- `src/rescuarr/` — connectivity API bootstrap
-- `tests/` — basic tests
+- `cmd/rescuarr/` and `internal/` — Go application
+- `deploy/` — native service examples and container build
+- `test/lab/` — disposable compatibility scenarios
+- `src/rescuarr/`, `tests/` and `legacy/` — historical Python connectivity prototype
 - [Product and system design](docs/ARCHITECTURE.md)
 - [Recovery and deterministic learning](docs/RECOVERY_DESIGN.md)
 - [Service integration contracts](docs/INTEGRATIONS_DESIGN.md)
