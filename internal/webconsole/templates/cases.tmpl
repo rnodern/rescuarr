@@ -47,6 +47,7 @@
   <section class="panel">
     <h2>Diagnosis</h2>
     <p>{{reason .Body.Case.Reason}}</p>
+    {{if eq .Body.Case.Reason "series_matched_by_id"}}<p>If you’ve checked the episode, open Sonarr → Activity → Queue and choose Manual Import for this download. Check the series and episode in the import dialog.</p>{{end}}
     <dl><dt>Service</dt><dd>{{serviceLabel .Body.Case.Display.Service .Body.Case.Display.Product}}{{if .Body.Case.Display.Version}} {{.Body.Case.Display.Version}}{{end}}</dd>
     {{if and .Body.Case.Display.Title .Body.Case.Display.Release}}<dt>Download release</dt><dd>{{.Body.Case.Display.Release}}</dd>{{end}}
     <dt>Next check</dt><dd>{{when .Body.Case.NextCheckAt}}</dd>

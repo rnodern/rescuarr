@@ -300,11 +300,12 @@ func markMissing(ctx context.Context, tx *sql.Tx, instance domain.InstanceRef, g
 }
 
 func summarise(rows []observe.QueueRecord) (domain.CaseState, domain.ReasonCode) {
-	active, failed, noEligible, warning, complete := false, false, false, false, false
+	active, failed, noEligible, seriesIDOnly, warning, complete := false, false, false, false, false, false
 	for _, row := range rows {
 		active = active || row.Status == "downloading" || row.Status == "queued" || row.TrackedState == "importing"
 		failed = failed || row.Status == "failed" || row.TrackedState == "downloadFailed"
 		noEligible = noEligible || slices.Contains(row.Findings, observe.FindingNoEligibleFiles)
+		seriesIDOnly = seriesIDOnly || slices.Contains(row.Findings, observe.FindingSeriesIDOnly)
 		warning = warning || len(row.Findings) > 0 || row.TrackedStatus == "warning" || row.TrackedStatus == "error"
 		complete = complete || row.Status == "completed" || row.TrackedState == "importPending"
 	}
@@ -315,6 +316,8 @@ func summarise(rows []observe.QueueRecord) (domain.CaseState, domain.ReasonCode)
 		return domain.CaseHeld, "download_failed"
 	case noEligible:
 		return domain.CaseHeld, "no_eligible_files"
+	case seriesIDOnly:
+		return domain.CaseHeld, domain.ReasonCode(observe.FindingSeriesIDOnly)
 	case warning:
 		return domain.CaseHeld, "upstream_intervention_required"
 	case complete:

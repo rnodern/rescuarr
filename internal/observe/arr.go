@@ -91,6 +91,7 @@ type QueueFinding string
 
 const (
 	FindingNoEligibleFiles QueueFinding = "no_eligible_files"
+	FindingSeriesIDOnly    QueueFinding = "series_matched_by_id"
 	FindingOtherMessage    QueueFinding = "unclassified_message"
 )
 
@@ -216,10 +217,7 @@ func (a *Arr) queueRecord(row queueWire) QueueRecord {
 	seen := make(map[QueueFinding]bool)
 	for _, message := range row.Messages {
 		for _, line := range message.Messages {
-			finding := FindingOtherMessage
-			if strings.EqualFold(strings.TrimSpace(line), "No files found are eligible for import") {
-				finding = FindingNoEligibleFiles
-			}
+			finding := queueFinding(a.reader.product, line)
 			if !seen[finding] {
 				seen[finding] = true
 				findings = append(findings, finding)
@@ -260,6 +258,19 @@ func (a *Arr) queueRecord(row queueWire) QueueRecord {
 		}
 	}
 	return record
+}
+
+func queueFinding(product domain.Product, message string) QueueFinding {
+	line := strings.ToLower(strings.TrimSpace(message))
+	switch {
+	case strings.TrimSuffix(line, ".") == "no files found are eligible for import":
+		return FindingNoEligibleFiles
+	case product == domain.ProductSonarr &&
+		strings.HasPrefix(line, "found matching series via grab history, but release was matched to series by id. automatic import is not possible"):
+		return FindingSeriesIDOnly
+	default:
+		return FindingOtherMessage
+	}
 }
 
 func (a *Arr) target(seriesID, episodeID, movieID int64) domain.TargetRef {
