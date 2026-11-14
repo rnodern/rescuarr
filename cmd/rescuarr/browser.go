@@ -7,12 +7,11 @@ import (
 	"github.com/rnodern/rescuarr/internal/app"
 	"github.com/rnodern/rescuarr/internal/config"
 	"github.com/rnodern/rescuarr/internal/observeservice"
-	"github.com/rnodern/rescuarr/internal/prowloutbox"
 	"github.com/rnodern/rescuarr/internal/store"
 	"github.com/rnodern/rescuarr/internal/webconsole"
 )
 
-func browserHandler(cfg config.Config, auth *access.Auth, local *store.Store, observations *observeservice.Service, notifications *prowloutbox.Service) http.Handler {
+func browserHandler(cfg config.Config, auth *access.Auth, local *store.Store, observations *observeservice.Service, notifications webconsole.NotificationService) http.Handler {
 	browser := webconsole.New(webconsole.Options{
 		BasePath:      cfg.BasePath,
 		Read:          observations,

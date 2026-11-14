@@ -74,6 +74,7 @@ func New(options Options) http.Handler {
 		mux.HandleFunc("GET "+base+"/notifications", c.notifications)
 		mux.HandleFunc("POST "+base+"/notifications", c.configureNotification)
 		mux.HandleFunc("POST "+base+"/notifications/{id}/test", c.testNotification)
+		mux.HandleFunc("POST "+base+"/notifications/{id}/disable", c.disableNotification)
 	}
 	assets, err := fs.Sub(files, "assets")
 	if err != nil {

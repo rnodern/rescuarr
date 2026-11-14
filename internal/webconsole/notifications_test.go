@@ -14,8 +14,9 @@ import (
 )
 
 type notificationFixture struct {
-	saved  []prowloutbox.ConfigureRoute
-	queued int
+	saved    []prowloutbox.ConfigureRoute
+	queued   int
+	disabled int
 }
 
 func (f *notificationFixture) Routes(context.Context) ([]prowloutbox.Route, error) {
@@ -33,6 +34,14 @@ func (f *notificationFixture) Configure(_ context.Context, input prowloutbox.Con
 		return prowloutbox.Route{}, app.ErrConflict
 	}
 	return input.Route, nil
+}
+
+func (f *notificationFixture) Disable(_ context.Context, route domain.RouteID, revision domain.Revision, actor domain.ActorID) (prowloutbox.Route, error) {
+	if route != "route-1" || revision != 2 || actor != "owner" {
+		return prowloutbox.Route{}, app.ErrConflict
+	}
+	f.disabled++
+	return prowloutbox.Route{ID: route, Revision: 3}, nil
 }
 
 func (f *notificationFixture) QueueTest(_ context.Context, route domain.RouteID, revision domain.Revision, actor domain.ActorID) (domain.OutboxID, error) {
@@ -59,6 +68,10 @@ func TestNotificationRoutesAreOwnerOnlyAndExplicit(t *testing.T) {
 	expect(t, request(handler, http.MethodPost, route, "owner", origin, validTest), http.StatusConflict)
 	if backend.queued != 0 {
 		t.Fatal("disabled delivery allowed a test")
+	}
+	expect(t, request(handler, http.MethodPost, "/notifications/route-1/disable", "owner", origin, validTest), http.StatusSeeOther)
+	if backend.disabled != 1 {
+		t.Fatal("owner cannot disable a route without its key")
 	}
 	options.ProwlDelivery = true
 	handler = New(options)

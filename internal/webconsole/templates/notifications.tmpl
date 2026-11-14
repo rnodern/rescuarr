@@ -15,6 +15,12 @@
     {{template "notification-fields" .Route}}
     <button type="submit">Save route</button>
   </form>
+  {{if .Enabled}}<form class="section" method="post" action="{{$.Base}}/notifications/{{.ID}}/disable">
+    <input type="hidden" name="csrf" value="{{$.CSRF}}">
+    <input type="hidden" name="revision" value="{{.Revision}}">
+    <button type="submit">Disable route</button>
+    <p>A message already queued for transmission may complete.</p>
+  </form>{{end}}
   {{if $.Body.Delivery}}{{if and .Enabled (not .Paused)}}<form class="section" method="post" action="{{$.Base}}/notifications/{{.ID}}/test">
     <input type="hidden" name="csrf" value="{{$.CSRF}}">
     <input type="hidden" name="revision" value="{{.Revision}}">

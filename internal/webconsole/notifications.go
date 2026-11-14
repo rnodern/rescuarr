@@ -18,6 +18,7 @@ import (
 type NotificationService interface {
 	Routes(context.Context) ([]prowloutbox.Route, error)
 	Configure(context.Context, prowloutbox.ConfigureRoute) (prowloutbox.Route, error)
+	Disable(context.Context, domain.RouteID, domain.Revision, domain.ActorID) (prowloutbox.Route, error)
 	Recent(context.Context, domain.RouteID, int) ([]prowloutbox.Status, error)
 	QueueTest(context.Context, domain.RouteID, domain.Revision, domain.ActorID) (domain.OutboxID, error)
 }
@@ -99,6 +100,19 @@ func (c console) configureNotification(w http.ResponseWriter, r *http.Request) {
 			Timezone: input.Get("timezone"), QuietStart: start, QuietEnd: end, Digest: digest == "true"},
 		KeyRef: input.Get("key_ref"), Actor: currentSession(r).Actor,
 	})
+	c.notificationResult(w, r, err)
+}
+
+func (c console) disableNotification(w http.ResponseWriter, r *http.Request) {
+	if !c.notificationForm(w, r, "revision") {
+		return
+	}
+	id, revision, valid := notificationIdentity(r.PathValue("id"), r.PostForm.Get("revision"))
+	if id == "" || !valid {
+		c.notificationError(w, r, http.StatusBadRequest, "Invalid notification route")
+		return
+	}
+	_, err := c.Notifications.Disable(r.Context(), id, revision, currentSession(r).Actor)
 	c.notificationResult(w, r, err)
 }
 
