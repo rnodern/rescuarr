@@ -172,7 +172,7 @@ func parseEnvelope(body []byte) (providerEnvelope, bool) {
 			return out, false
 		}
 		if start, ok := tok.(xml.StartElement); ok {
-			if start.Name.Local != "prowl" {
+			if start.Name != (xml.Name{Local: "prowl"}) || len(start.Attr) != 0 {
 				return out, false
 			}
 			break
@@ -190,14 +190,19 @@ func parseEnvelope(body []byte) (providerEnvelope, bool) {
 		switch tok := tok.(type) {
 		case xml.StartElement:
 			children++
-			if children != 1 {
+			if children != 1 || tok.Name.Space != "" {
 				return out, false
 			}
 			var code int
 			var remaining int
 			var reset int64
 			codeSeen := false
+			seenAttrs := make(map[string]bool, len(tok.Attr))
 			for _, attr := range tok.Attr {
+				if attr.Name.Space != "" || seenAttrs[attr.Name.Local] {
+					return out, false
+				}
+				seenAttrs[attr.Name.Local] = true
 				var err error
 				switch attr.Name.Local {
 				case "code":
@@ -250,7 +255,7 @@ func parseEnvelope(body []byte) (providerEnvelope, bool) {
 				}
 			}
 		case xml.EndElement:
-			if tok.Name.Local != "prowl" || children != 1 {
+			if tok.Name != (xml.Name{Local: "prowl"}) || children != 1 {
 				return out, false
 			}
 			for {

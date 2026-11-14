@@ -65,6 +65,10 @@ func TestProviderResponseCategories(t *testing.T) {
 		{"duplicate response", 200, `<prowl><success code="200"/><success code="200"/></prowl>`, Uncertain},
 		{"unknown response element", 200, `<prowl><success code="200"/><other/></prowl>`, Uncertain},
 		{"nested response", 200, `<prowl><success code="200"><error code="401"/></success></prowl>`, Uncertain},
+		{"foreign root namespace", 200, `<prowl xmlns="https://unexpected.invalid"><success code="200"/></prowl>`, Uncertain},
+		{"foreign child namespace", 200, `<prowl xmlns:x="https://unexpected.invalid"><x:success code="200"/></prowl>`, Uncertain},
+		{"namespaced code", 200, `<prowl xmlns:x="https://unexpected.invalid"><success x:code="200"/></prowl>`, Uncertain},
+		{"duplicate code", 200, `<prowl><success code="200" code="401"/></prowl>`, Uncertain},
 		{"trailing markup", 200, `<prowl><success code="200"/></prowl><prowl><success code="200"/></prowl>`, Uncertain},
 	}
 	for _, tt := range tests {
