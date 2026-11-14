@@ -35,7 +35,7 @@ func classify(pattern Fingerprint, candidate Candidate, now time.Time) SampleRes
 		proofTargets(candidate.SafetyEvidence, candidate.Sample.Job, candidate.Sample.Target) {
 		result.State, result.Reason = SampleContradiction, domain.ReasonCode(candidate.Safety)
 		result.Sample.Exclusion = result.Reason
-		result.Sample.RecordedAt = candidate.SafetyEvidence.Observed
+		result.Sample.RecordedAt = minTime(candidate.Sample.RecordedAt, candidate.SafetyEvidence.Observed)
 		return result
 	}
 	if candidate.Override {
@@ -54,6 +54,9 @@ func classify(pattern Fingerprint, candidate Candidate, now time.Time) SampleRes
 	if outcome.Verification == domain.VerificationExternal || outcome.Verification == domain.VerificationUnresolved {
 		return result.excluding("outcome_unattributed")
 	}
+	// Anchor sample age and UTC-day counting to the durable outcome observation,
+	// never to the later poll which happened to establish supporting evidence.
+	result.Sample.RecordedAt = minTime(candidate.Sample.RecordedAt, outcome.ObservedAt)
 	switch outcome.Verification {
 	case domain.VerificationPartial, domain.VerificationNoEffect:
 		if !verifiedFailure(candidate.Plan.Proposal.Operation, outcome) {
@@ -82,12 +85,13 @@ func classify(pattern Fingerprint, candidate Candidate, now time.Time) SampleRes
 			candidate.NoReversalThrough.Evidence == candidate.ImportHistory.Evidence {
 			return result.excluding("import_observation_pending")
 		}
-		result.Sample.RecordedAt = candidate.NoReversalThrough.Observed
 		return result.including(SampleSuccess)
 	}
 	if !validJob(candidate.FollowupJob, candidate.Sample.Job.Instance) || candidate.FollowupJob == candidate.Sample.Job ||
-		!separateProof(candidate.ReplacementGrab, candidate.MediaAssociation, candidate.StartedAt, now) ||
+		!separateProof(candidate.ReplacementGrab, candidate.MediaAssociation, outcome.ObservedAt, now) ||
 		!proofTargets(candidate.ReplacementGrab, candidate.FollowupJob, candidate.Sample.Target) ||
+		!hasEffect(outcome, domain.EffectSearchDispatch, candidate.Sample.Target, candidate.ReplacementGrab.Evidence) ||
+		candidate.ReplacementGrab.Observed.Before(outcome.ObservedAt) ||
 		!proofTargets(candidate.MediaAssociation, candidate.FollowupJob, candidate.Sample.Target) ||
 		candidate.MediaAssociation.Observed.Before(candidate.ReplacementGrab.Observed) ||
 		candidate.MediaAssociation.Observed.After(candidate.StartedAt.Add(ReplacementWindow)) ||
@@ -96,7 +100,6 @@ func classify(pattern Fingerprint, candidate Candidate, now time.Time) SampleRes
 		candidate.ImportHistory.Observed.After(candidate.StartedAt.Add(ReplacementWindow)) {
 		return result.excluding("replacement_evidence_missing")
 	}
-	result.Sample.RecordedAt = maxTime(outcome.ObservedAt, maxTime(candidate.MediaAssociation.Observed, candidate.ImportHistory.Observed))
 	return result.including(SampleSuccess)
 }
 
@@ -122,7 +125,7 @@ func classifyIncident(result SampleResult, c Candidate, now time.Time) SampleRes
 		c.IndependentRecovery.Observed.Before(c.HealthyDependency.Observed) {
 		return result.excluding("incident_resolution_unverified")
 	}
-	result.Sample.RecordedAt = c.IndependentRecovery.Observed
+	result.Sample.RecordedAt = minTime(c.Sample.RecordedAt, c.IndependentRecovery.Observed)
 	return result.including(SampleSuccess)
 }
 
@@ -236,7 +239,15 @@ func maxTime(a, b time.Time) time.Time {
 	return b
 }
 
+func minTime(a, b time.Time) time.Time {
+	if a.IsZero() || b.Before(a) {
+		return b
+	}
+	return a
+}
+
 func (r SampleResult) excluding(reason domain.ReasonCode) SampleResult {
+	r.Sample.Eligible = false
 	r.Sample.Exclusion, r.Reason = reason, reason
 	return r
 }

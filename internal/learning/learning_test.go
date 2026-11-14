@@ -66,6 +66,9 @@ func testCandidate(pattern Fingerprint, id int, at time.Time) Candidate {
 		if effect.Kind == domain.EffectLibraryImport {
 			id = media.Evidence
 		}
+		if effect.Kind == domain.EffectSearchDispatch {
+			id = proof("replacement-grab", started.Add(30*time.Minute), followup).Evidence
+		}
 		outcome.Effects = append(outcome.Effects, domain.EffectResult{Effect: effect, Verification: domain.VerificationEffect, Evidence: []domain.EvidenceID{id}})
 	}
 	if pattern.Signature.Family == IncidentCause {
@@ -133,6 +136,34 @@ func TestAttributionAndObservationWindows(t *testing.T) {
 	}
 }
 
+func TestDelayedPollingCannotMoveSampleTimestampOrEligibility(t *testing.T) {
+	pattern := testPattern(t, OriginalImport)
+	c := testCandidate(pattern, 1, clock.Add(-time.Hour))
+	c.Sample.RecordedAt = clock // simulate a poll many hours after the outcome
+	got := Classify(pattern, c, clock)
+	if got.State != SampleSuccess || !got.Sample.RecordedAt.Equal(c.Sample.Outcome.ObservedAt) ||
+		got.Sample.RecordedAt.UTC().Format("2006-01-02") == clock.UTC().Format("2006-01-02") {
+		t.Fatalf("delayed poll changed success age/day: %+v", got)
+	}
+
+	c = testCandidate(pattern, 2, clock.Add(-time.Hour))
+	failedCandidate(&c)
+	c.Sample.RecordedAt = clock
+	got = Classify(pattern, c, clock)
+	if got.State != SampleFailure || !got.Sample.RecordedAt.Equal(c.Sample.Outcome.ObservedAt) ||
+		got.Sample.RecordedAt.UTC().Format("2006-01-02") == clock.UTC().Format("2006-01-02") {
+		t.Fatalf("delayed poll changed failure age: %+v", got)
+	}
+
+	c = testCandidate(pattern, 3, clock.Add(-time.Hour))
+	c.Override = true
+	c.Sample.Eligible = true
+	got = Classify(pattern, c, clock)
+	if got.Sample.Eligible || got.Sample.Exclusion != "operator_override" {
+		t.Fatalf("exclusion retained eligible sample: %+v", got.Sample)
+	}
+}
+
 func failedCandidate(c *Candidate) {
 	c.Sample.Outcome.Verification = domain.VerificationNoEffect
 	for index := range c.Sample.Outcome.Effects {
@@ -154,6 +185,11 @@ func TestReplacementAndIncidentNeedSeparateProof(t *testing.T) {
 	c.MediaAssociation = Proof{}
 	if got := Classify(pattern, c, clock); got.State != SampleNeutral {
 		t.Fatalf("replacement grab alone counted: %+v", got)
+	}
+	c = testCandidate(pattern, 1, clock.Add(-time.Hour))
+	c.Sample.Outcome.Effects[0].Evidence = []domain.EvidenceID{"unrelated-search-evidence"}
+	if got := Classify(pattern, c, clock); got.State != SampleNeutral {
+		t.Fatalf("replacement counted without exact search-to-grab evidence: %+v", got)
 	}
 	incident := testPattern(t, IncidentCause)
 	c = testCandidate(incident, 1, clock.Add(-time.Hour))
