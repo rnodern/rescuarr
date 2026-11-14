@@ -188,6 +188,46 @@ type Case struct {
 	Reason      ReasonCode
 	Evidence    []EvidenceID
 	NextCheckAt time.Time
+	LastSeenAt  time.Time   `json:",omitzero"`
+	Display     CaseDisplay `json:",omitzero"`
+}
+
+// CaseDisplay contains operator-facing labels. Recovery decisions use typed
+// identities and evidence separately.
+type CaseDisplay struct {
+	Title        string
+	Release      string
+	Media        []CaseMedia
+	EpisodeCheck *CaseEpisodeCheck `json:",omitempty"`
+	Service      string            `json:"-"`
+	Product      Product           `json:"-"`
+	Version      string            `json:"-"`
+}
+
+// CaseEpisodeCheck is display evidence from a queue scan, keyed to the
+// connections and names inspected during that scan.
+type CaseEpisodeCheck struct {
+	EpisodeNameReview
+	CheckedAt        time.Time
+	InputFingerprint string
+}
+
+type EpisodeNameReview struct {
+	Series       string
+	Episode      string
+	EpisodeTitle string
+	Folder       string
+	Filename     string
+	TitleInNames bool
+	Matched      bool
+	Reason       string
+	ArrRejection bool
+}
+
+type CaseMedia struct {
+	Target  TargetRef
+	Title   string
+	Episode string
 }
 
 type Incident struct {

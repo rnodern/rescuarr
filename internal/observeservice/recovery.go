@@ -41,6 +41,12 @@ func (s *Service) FreshRecoveryQueue(ctx context.Context, id domain.CaseID, expe
 	if baseline.proof.Case.Revision != expected {
 		return RecoveryQueue{}, app.ErrConflict
 	}
+	instance := baseline.proof.Instance
+	release, err := s.HoldRecoveryConnection(ctx, instance)
+	if err != nil {
+		return RecoveryQueue{}, err
+	}
+	defer release()
 	// Share the service's global upstream read bound with background collection.
 	select {
 	case s.parallel <- struct{}{}:
@@ -52,8 +58,7 @@ func (s *Service) FreshRecoveryQueue(ctx context.Context, id domain.CaseID, expe
 	defer cancel()
 	at := s.clock.Now().UTC()
 	generation := baseline.generation + 1
-	instance := baseline.proof.Instance
-	queue, version, err := s.observe(ctx, instance, generation, at)
+	queue, version, _, _, err := s.observe(ctx, instance, generation, at, false)
 	if err != nil {
 		return RecoveryQueue{}, err
 	}
@@ -77,6 +82,35 @@ func (s *Service) FreshRecoveryQueue(ctx context.Context, id domain.CaseID, expe
 		baseline.proof.Case.Job.Members[index].SnapshotGeneration = generation
 	}
 	return baseline.proof, nil
+}
+
+// HoldRecoveryConnection prevents removal during a read of a current Arr connection.
+// The caller must release it when the read finishes.
+func (s *Service) HoldRecoveryConnection(ctx context.Context, instance domain.Instance) (func(), error) {
+	id := instance.Ref.ID
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var registered bool
+	err := s.store.Read(ctx, func(tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM observe_instances
+			WHERE id = ? AND epoch = ? AND connection_revision = ? AND health = 'available')`,
+			id, instance.Ref.Epoch, instance.ConnectionRevision).Scan(&registered)
+	})
+	if err != nil {
+		return nil, err
+	}
+	if !registered {
+		return nil, app.ErrConflict
+	}
+	s.recoveryReads[id]++
+	return func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		s.recoveryReads[id]--
+		if s.recoveryReads[id] == 0 {
+			delete(s.recoveryReads, id)
+		}
+	}, nil
 }
 
 func (s *Service) recoveryCase(ctx context.Context, id domain.CaseID) (caseAtConnection, error) {

@@ -27,7 +27,7 @@
     <button type="submit">Queue test message</button>
   </form>{{end}}{{end}}
   {{if .Recent}}<h3>Recent deliveries</h3><ul class="links">{{range .Recent}}<li>{{.Category}} · {{.State}}
-    <span>{{when .Scheduled}}{{if .Reason}} · {{reason .Reason}}{{end}} · {{.Attempts}} attempts</span></li>{{end}}</ul>{{end}}
+    <span>{{template "local-time" .Scheduled}}{{if .Reason}} · {{reason .Reason}}{{end}} · {{.Attempts}} attempts</span></li>{{end}}</ul>{{end}}
 </section>
 {{end}}
 <section class="panel section" aria-labelledby="new-prowl">

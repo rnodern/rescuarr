@@ -1,71 +1,157 @@
 {{define "cases"}}
 {{template "start" .}}
-<h1>Cases</h1>
+<h1>Recovery Queue</h1>
 {{$base := .Base}}
-<form class="panel filters" method="get" action="{{$base}}/cases">
-  <label>Search <input type="search" name="q" maxlength="200" value="{{.Body.Query.Search}}"></label>
-  <label>State <select name="state">
-    <option value="">All states</option>
-    {{range .Body.States}}<option value="{{.}}"{{if eq . $.Body.Query.State}} selected{{end}}>{{state .}}</option>{{end}}
-  </select></label>
-  <label>Instance ID <input name="instance" maxlength="128" value="{{.Body.Query.Instance}}"></label>
-  <label>Cause <input name="cause" maxlength="128" value="{{.Body.Query.Reason}}"></label>
+<form class="filters" method="get" action="{{$base}}/cases" data-queue-filters role="search" aria-label="Filter recovery queue">
+  <label>Search <input type="search" name="q" maxlength="128" placeholder="Title, episode or release" value="{{.Body.Query.Search}}"></label>
+  {{if .Body.Services}}<label>Service <select name="instance">
+    <option value="">All services</option>
+    {{range .Body.Services}}<option value="{{.ID}}"{{if eq .ID $.Body.Query.Instance}} selected{{end}}>{{serviceLabel .DisplayName .Product}}</option>{{end}}
+  </select></label>{{end}}
+  {{if .Body.Query.State}}<input type="hidden" name="state" value="{{.Body.Query.State}}">{{end}}
+  {{if .Body.Query.Reason}}<input type="hidden" name="cause" value="{{.Body.Query.Reason}}">{{end}}
   {{if ne .Body.Query.Limit 50}}<input type="hidden" name="limit" value="{{.Body.Query.Limit}}">{{end}}
-  <div class="filter-actions"><button type="submit">Apply filters</button><a href="{{$base}}/cases">Clear</a></div>
+  <label class="filter-checkbox"><input type="checkbox" name="exclude_closed" value="1"{{if .Body.Query.ExcludeClosed}} checked{{end}}> Exclude closed</label>
+  {{if .Body.Query.State}}<span class="chip active-filter">{{state .Body.Query.State}}</span>{{end}}
+  <a class="clear-filters" href="{{$base}}/cases">Clear</a>
+  <noscript><button type="submit">Filter</button></noscript>
 </form>
+<div data-queue-results aria-live="polite" aria-busy="false">
 {{if .Body.Cases}}
 <table class="panel">
-  <caption class="sr-only">Recovery cases</caption>
-  <thead><tr><th scope="col">Case</th><th scope="col">Instance</th><th scope="col">Targets</th><th scope="col">State</th><th scope="col">Cause</th></tr></thead>
+  <caption class="sr-only">Recovery Queue</caption>
+  <thead><tr><th scope="col">Download</th><th scope="col">Service</th><th scope="col">State</th><th scope="col">Why it’s here</th></tr></thead>
   <tbody>
     {{range .Body.Cases}}<tr>
-      <th scope="row"><a href="{{$base}}/cases/{{.ID}}">{{.ID}}</a></th>
-      <td data-label="Instance">{{if .Job.Ref.Instance.ID}}{{.Job.Ref.Instance.ID}}{{else}}Unknown{{end}}</td>
-      <td data-label="Targets">{{len .Targets}}</td>
+      <th scope="row"><a href="{{$base}}/cases/{{.ID}}">{{caseTitle .}}</a>
+        {{if and .Display.Title .Display.Release}}<span class="row-note">{{.Display.Release}}</span>{{end}}
+        {{if gt (len .Targets) 1}}<span class="row-note">{{len .Targets}} targets</span>{{end}}
+      </th>
+      <td data-label="Service">{{serviceLabel .Display.Service .Display.Product}}</td>
       <td data-label="State"><span class="chip{{if eq .State "held"}} hold{{end}}">{{state .State}}</span></td>
-      <td data-label="Cause">{{reason .Reason}}</td>
+      <td data-label="Why it’s here">{{reason .Reason}}
+        {{with .Display.EpisodeCheck}}{{if .Matched}}<span class="row-note">Likely episode match</span>{{else}}<span class="row-note">Filename check needs review</span>{{end}}{{end}}
+      </td>
     </tr>{{end}}
   </tbody>
 </table>
-{{else}}<p class="panel empty">No cases are available for these filters.</p>{{end}}
+{{else}}<p class="panel empty">No downloads match these filters.</p>{{end}}
 {{if .Body.Next}}<p><a class="next" rel="next" href="{{.Body.Next}}">Next page</a></p>{{end}}
+</div>
 {{template "end" .}}
 {{end}}
 
 {{define "case"}}
 {{template "start" .}}
 {{$base := .Base}}
-<p><a href="{{$base}}/cases">Back to cases</a></p>
-<h1>Case {{.Body.Case.ID}}</h1>
+<p><a href="{{$base}}/cases">Back to Recovery Queue</a></p>
+<h1>{{.Title}}</h1>
 <p><span class="chip{{if eq .Body.Case.State "held"}} hold{{end}}">{{state .Body.Case.State}}</span></p>
 <div class="case-grid">
   <section class="panel">
     <h2>Diagnosis</h2>
     <p>{{reason .Body.Case.Reason}}</p>
-    <dl><dt>Instance</dt><dd>{{if .Body.Case.Job.Ref.Instance.ID}}{{.Body.Case.Job.Ref.Instance.ID}}{{else}}Unknown{{end}}</dd>
-    <dt>Next check</dt><dd>{{when .Body.Case.NextCheckAt}}</dd>
+    <dl><dt>Service</dt><dd>{{serviceLabel .Body.Case.Display.Service .Body.Case.Display.Product}}{{if .Body.Case.Display.Version}} {{.Body.Case.Display.Version}}{{end}}</dd>
+    {{if and .Body.Case.Display.Title .Body.Case.Display.Release}}<dt>Download release</dt><dd>{{.Body.Case.Display.Release}}</dd>{{end}}
+    {{if ne .Body.Case.State "closed"}}<dt>Next check</dt><dd>{{template "local-time" .Body.Case.NextCheckAt}}</dd>{{end}}
     <dt>Affected incidents</dt><dd>{{len .Body.Case.Incidents}}</dd></dl>
-    {{if .Body.Case.Evidence}}<details><summary>Evidence references</summary><ul>{{range .Body.Case.Evidence}}<li>{{.}}</li>{{end}}</ul></details>{{end}}
+    <details><summary>Technical details</summary><p>Case ID <code>{{.Body.Case.ID}}</code></p>
+    {{if .Body.Case.Evidence}}<p>Evidence references</p><ul>{{range .Body.Case.Evidence}}<li>{{.}}</li>{{end}}</ul>{{end}}
+    </details>
   </section>
   <section class="panel">
-    <h2>Proposals</h2>
-    {{if .Body.Proposals}}<ul class="links">{{range .Body.Proposals}}<li><a href="{{$base}}/cases/{{.CaseID}}/review/{{.ID}}">Review {{action .Operation.Action}}</a><span>Expires {{when .ExpiresAt}}</span></li>{{end}}</ul>
-    {{else}}<p>No proposal is available.</p>{{end}}
+    <h2>Import and recovery</h2>
+    {{if eq .Body.Case.Reason "connection_removed"}}<p>The connection was removed. Rescuarr has stopped checking this download.</p>
+    {{else}}
+    {{if .Body.Proposals}}<ul class="links">{{range .Body.Proposals}}<li><a href="{{$base}}/cases/{{.CaseID}}/review/{{.ID}}">Review {{action .Operation.Action}}</a><span>Expires {{template "local-time" .ExpiresAt}}</span></li>{{end}}</ul>
+    {{else if .Body.ReviewReplacement}}<p>Check which episodes are already in the library, covered by another download, or still need a search.</p>
+    {{else if and (eq .Status.Mode "observe") .Body.ReviewNames}}<p>Rescuarr checks the filenames during queue scans. Automatic import is unavailable for this connection.</p>
+    {{else if eq .Status.Mode "observe"}}<p>Observe mode lets you inspect the download. Make any import or retry in Arr.</p>
+    {{else}}<p>No recovery proposal is available.</p>{{end}}
+    {{with .Body.Case.Display.EpisodeCheck}}
+      <p class="connection-meta">Filename check · {{template "local-time" .CheckedAt}}</p>
+      {{template "episode-check-result" .EpisodeNameReview}}
+    {{else}}{{if .Body.ReviewNames}}<p>Waiting for a filename check in a queue scan.</p>{{end}}{{end}}
+    {{if and .HasImportPreview .Body.PreviewHold}}<p class="notice">{{.Body.PreviewHold}}</p>
+    {{else if and .HasImportPreview .Body.Case.Job.CompleteSet .Body.Case.Revision (ne .Body.Case.State "closed")}}
+    <form method="post" action="{{$base}}/cases/{{.Body.Case.ID}}/import-preview">
+      <input type="hidden" name="csrf" value="{{.CSRF}}">
+      <input type="hidden" name="revision" value="{{.Body.Case.Revision}}">
+      <button type="submit">{{if .Body.ReviewNames}}{{if .Body.Case.Display.EpisodeCheck}}Recheck episode filename{{else}}Check episode filename{{end}}{{else if .Body.ReviewReplacement}}Check which episodes still need a search{{else}}Check Arr import candidates{{end}}</button>
+    </form>
+    {{end}}
+    {{end}}
   </section>
 </div>
 <section class="panel section">
   <h2>Targets</h2>
-  {{if .Body.Case.Targets}}<ul class="links">{{range .Body.Case.Targets}}<li>{{target .Ref}}</li>{{end}}</ul>{{else}}<p>Target mapping is unavailable.</p>{{end}}
+  {{if .Body.Case.Targets}}<ul class="links">{{range .Body.Case.Targets}}<li>{{caseTarget $.Body.Case .Ref}}</li>{{end}}</ul>{{else}}<p>Target mapping is unavailable.</p>{{end}}
 </section>
 {{if .Body.Outcomes}}
 <section class="panel section">
   <h2>Recorded outcomes</h2>
   {{range .Body.Outcomes}}
-    <details><summary>{{verification .Verification}} · {{when .ObservedAt}}</summary>
+    <details><summary>{{verification .Verification}} · {{template "local-time" .ObservedAt}}</summary>
     {{if .Effects}}<ul>{{range .Effects}}<li>{{effect .Effect.Kind}} · {{target .Effect.Target}} · {{verification .Verification}}</li>{{end}}</ul>{{else}}<p>Individual effect records are unavailable.</p>{{end}}
     </details>
   {{end}}
 </section>
 {{end}}
 {{template "end" .}}
+{{end}}
+
+{{define "import-preview"}}
+{{template "start" .}}
+<p><a href="{{.Base}}/cases/{{.Body.CaseID}}">Back to download</a></p>
+<h1>{{.Title}}</h1>
+{{if .Body.Result.Hold}}<p class="notice">{{.Body.Result.Hold}}</p>
+{{else if .Body.Result.Replacement}}
+{{template "replacement-preview" .Body.Result.Replacement}}
+{{else if .Body.Result.Episode}}
+<section class="panel">{{template "episode-check-result" .Body.Result.Episode}}</section>
+{{else}}
+<p>{{.Body.Summary}}</p>
+<dl>
+  <dt>Candidates returned by Arr</dt><dd>{{.Body.Result.Candidates}}</dd>
+  <dt>Eligible candidates in the preview</dt><dd>{{.Body.Result.Eligible}}</dd>
+</dl>
+<p>Review any import in the Arr application.</p>
+{{end}}
+{{template "end" .}}
+{{end}}
+
+{{define "episode-check-result"}}
+  {{if .Matched}}<h2>Likely episode match</h2>
+  <p>The folder and filename identify the same series and episode number as the Sonarr queue.{{if .ArrRejection}} Sonarr still reports an import rejection for this file.{{end}}</p>
+  {{else}}<h2>Match needs review</h2><p class="notice">{{.Reason}}</p>{{end}}
+  <dl>
+    {{if .Series}}<dt>Series</dt><dd>{{.Series}}</dd>{{end}}
+    {{if .Episode}}<dt>Episode</dt><dd>{{.Episode}}{{if .EpisodeTitle}} · {{.EpisodeTitle}}{{end}}</dd>{{end}}
+    {{if and .Matched .EpisodeTitle}}<dt>Episode title in the names</dt><dd>{{if .TitleInNames}}Matches Sonarr{{else}}Neither name includes the episode title{{end}}</dd>{{end}}
+    {{if .Folder}}<dt>Download folder</dt><dd>{{.Folder}}</dd>{{end}}
+    {{if .Filename}}<dt>Video file</dt><dd>{{.Filename}}</dd>{{end}}
+  </dl>
+  <p>In Sonarr, go to <strong>Activity → Queue → Manual Import</strong> for this download. Confirm the selected file, series and episode before importing.</p>
+{{end}}
+
+{{define "replacement-preview"}}
+<section class="panel">
+  {{if .Release}}<p><strong>Download release</strong> · {{.Release}}</p>{{end}}
+  {{if .UnclearCount}}
+  <p class="notice">Sonarr has queue entries whose episodes could not be identified. Confirm what they cover before starting a replacement search.</p>
+  {{end}}
+  {{if .SearchCount}}<p>{{.SearchCount}} {{if eq .SearchCount 1}}episode still needs{{else}}episodes still need{{end}} a search.</p>
+  {{else if not .UnclearCount}}<p>No episodes need a new search.</p>{{end}}
+  {{if not .UnclearCount}}
+  <p>If you’ve confirmed the pack has no usable files, remove this one download from the Sonarr queue and blocklist the release. Leave download-client removal and automatic search off.{{if .SearchCount}} Then check that each episode marked <strong>Search</strong> is still wanted in Sonarr before searching it.{{end}}</p>
+  {{end}}
+  <p>Preview only. Rescuarr has made no changes in Sonarr.</p>
+  <table>
+    <thead><tr><th scope="col">Episode</th><th scope="col">Recommendation</th></tr></thead>
+    <tbody>{{range .Episodes}}<tr>
+      <th scope="row">{{.Label}}</th>
+      <td data-label="Recommendation">{{if eq .Status "search"}}<strong>Search</strong>{{else if eq .Status "in_library"}}Already in library{{else if eq .Status "other_download"}}Another download in queue{{else if eq .Status "unmonitored"}}Unmonitored{{else if eq .Status "unaired"}}No confirmed past airing{{else}}Needs review{{end}}</td>
+    </tr>{{end}}</tbody>
+  </table>
+</section>
 {{end}}

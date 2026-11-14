@@ -106,7 +106,7 @@ def check_owner_workflow(base_url, data):
             with error:
                 if error.code == 401:
                     return
-        raise RuntimeError("Cases are accessible without an owner session")
+        raise RuntimeError("Recovery Queue is accessible without an owner session")
 
     anonymous_cases()
     password = "Rescuarr synthetic packaging password"
@@ -115,7 +115,7 @@ def check_owner_workflow(base_url, data):
     post("/setup", "/login", {"csrf": setup.csrf(), "token": token, "password": password})
     login = OwnerForm(get("/login", b"Sign in"), "/login")
     post("/login", "/", {"csrf": login.csrf(), "password": password})
-    get("/cases", b"<h1>Cases</h1>")
+    get("/cases", b"<h1>Recovery Queue</h1>")
     get("/connections", b"<h1>Connections</h1>")
     for suffix, media in (("css", "text/css"), ("js", "javascript")):
         path = "/assets/console." + suffix

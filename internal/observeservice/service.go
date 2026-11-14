@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -27,19 +28,22 @@ var (
 )
 
 const (
-	maxInstances = 32
-	maxCases     = 2_000
-	maxGroup     = 128
-	maxParallel  = 4
+	maxInstances      = 32
+	maxCases          = 2_000
+	maxGroup          = 128
+	maxParallel       = 4
+	removedConnection = "removed"
 )
 
 type Service struct {
-	store     *store.Store
-	clock     app.Clock
-	transport http.RoundTripper
-	parallel  chan struct{}
-	mu        sync.Mutex
-	active    map[domain.InstanceID]*pending
+	store         *store.Store
+	clock         app.Clock
+	transport     http.RoundTripper
+	parallel      chan struct{}
+	mu            sync.Mutex
+	active        map[domain.InstanceID]*pending
+	recoveryReads map[domain.InstanceID]int
+	episodeScans  atomic.Int32
 }
 
 type pending struct {
@@ -54,7 +58,8 @@ func New(db *store.Store, clock app.Clock, transport http.RoundTripper) *Service
 		clock = app.SystemClock{}
 	}
 	return &Service{store: db, clock: clock, transport: transport,
-		parallel: make(chan struct{}, maxParallel), active: make(map[domain.InstanceID]*pending)}
+		parallel: make(chan struct{}, maxParallel), active: make(map[domain.InstanceID]*pending),
+		recoveryReads: make(map[domain.InstanceID]int)}
 }
 
 type InstanceInput struct {
@@ -62,6 +67,7 @@ type InstanceInput struct {
 	DisplayName string
 	BaseURL     string
 	SecretRef   string
+	APIKey      string
 	Actor       domain.ActorID
 }
 
@@ -75,8 +81,9 @@ type InstanceStatus struct {
 	CheckedAt   time.Time
 }
 
-// AddInstance validates a private secret reference and saves the local
-// connection atomically with its audit event. It performs no network request.
+// AddInstance saves the connection and its audit event. A pasted key is stored
+// in a private file; existing file references remain supported. No network
+// request is made.
 func (s *Service) AddInstance(ctx context.Context, input InstanceInput) (domain.Instance, error) {
 	name := strings.TrimSpace(input.DisplayName)
 	rawURL := strings.TrimSpace(input.BaseURL)
@@ -100,20 +107,32 @@ func (s *Service) AddInstance(ctx context.Context, input InstanceInput) (domain.
 	if strings.Contains(rawURL, "#") {
 		return domain.Instance{}, ErrInvalid
 	}
-	key, err := s.store.ReadSecret(input.SecretRef)
-	if err != nil {
-		return domain.Instance{}, ErrInvalid
-	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	instance := domain.Instance{Ref: domain.InstanceRef{ID: domain.InstanceID(store.NewID()), Epoch: 1},
 		Product: input.Product, DisplayName: name, BaseURL: base.String(), SecretRef: input.SecretRef, ConnectionRevision: 1}
+	key := strings.TrimSpace(input.APIKey)
+	managed := input.APIKey != ""
+	if managed {
+		if input.SecretRef != "" || key == "" || len(key) > 1024 || strings.IndexFunc(key, func(r rune) bool { return r < '!' || r > '~' }) != -1 {
+			return domain.Instance{}, ErrInvalid
+		}
+		instance.SecretRef = connectionSecret(instance.Ref.ID)
+	} else {
+		key, err = s.store.ReadSecret(input.SecretRef)
+		if err != nil {
+			return domain.Instance{}, ErrInvalid
+		}
+	}
 	if _, err := observe.NewArr(observe.Config{Instance: instance, APIKey: key}, s.transport); err != nil {
 		return domain.Instance{}, ErrInvalid
 	}
 	now := s.clock.Now()
+	secretWritten := false
 	err = s.store.Write(ctx, func(tx *sql.Tx) error {
 		var count, found int
-		if err := tx.QueryRowContext(ctx, `SELECT count(*), count(*) FILTER (WHERE product = ? AND base_url = ?) FROM observe_instances`,
-			instance.Product, instance.BaseURL).Scan(&count, &found); err != nil {
+		if err := tx.QueryRowContext(ctx, `SELECT count(*), count(*) FILTER (WHERE product = ? AND base_url = ?)
+			FROM observe_instances WHERE health <> ?`, instance.Product, instance.BaseURL, removedConnection).Scan(&count, &found); err != nil {
 			return err
 		}
 		if found > 0 {
@@ -121,6 +140,12 @@ func (s *Service) AddInstance(ctx context.Context, input InstanceInput) (domain.
 		}
 		if count >= maxInstances {
 			return ErrLimit
+		}
+		if managed {
+			if err := s.store.WriteSecret(instance.SecretRef, key); err != nil {
+				return err
+			}
+			secretWritten = true
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO observe_instances (id, epoch, product, display_name, base_url, secret_ref, connection_revision)
 			VALUES (?, ?, ?, ?, ?, ?, ?)`, instance.Ref.ID, instance.Ref.Epoch, instance.Product, instance.DisplayName,
@@ -134,6 +159,9 @@ func (s *Service) AddInstance(ctx context.Context, input InstanceInput) (domain.
 		return bump(ctx, tx)
 	})
 	if err != nil {
+		if secretWritten {
+			err = errors.Join(err, s.store.RemoveSecret(instance.SecretRef))
+		}
 		return domain.Instance{}, err
 	}
 	return instance, nil
@@ -143,7 +171,7 @@ func (s *Service) Instances(ctx context.Context) ([]InstanceStatus, error) {
 	var instances []InstanceStatus
 	err := s.store.Read(ctx, func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx, `SELECT id, product, display_name, version, health, coverage, checked_at
-			FROM observe_instances ORDER BY display_name, id LIMIT ?`, maxInstances)
+			FROM observe_instances WHERE health <> ? ORDER BY display_name, id LIMIT ?`, removedConnection, maxInstances)
 		if err != nil {
 			return err
 		}

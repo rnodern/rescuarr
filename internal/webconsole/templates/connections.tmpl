@@ -3,20 +3,23 @@
 <h1>Connections</h1>
 {{if .Body}}
 <table class="panel">
-  <thead><tr><th scope="col">Connection</th><th scope="col">Version</th><th scope="col">Status</th><th scope="col">Queue coverage</th><th scope="col">Last checked</th><th scope="col">Action</th></tr></thead>
+  <thead><tr><th scope="col">Connection</th><th scope="col">Version</th><th scope="col">Status</th><th scope="col">Queue coverage</th><th scope="col">Last checked</th><th scope="col">Actions</th></tr></thead>
   <tbody>{{range .Body}}<tr>
-    <th scope="row">{{.DisplayName}} · {{connectionProduct .Product}}</th>
+    <th scope="row">{{serviceLabel .DisplayName .Product}}</th>
     <td data-label="Version">{{if .Version}}{{.Version}}{{else}}Unknown{{end}}</td>
     <td data-label="Status">{{connectionStatus .Status}}</td>
     <td data-label="Queue coverage">{{connectionCoverage .Coverage}}</td>
-    <td data-label="Last checked">{{if .CheckedAt.IsZero}}Never{{else}}{{when .CheckedAt}}{{end}}</td>
-    <td data-label="Action"><form method="post" action="{{$.Base}}/connections/{{.ID}}/check">
-      <input type="hidden" name="csrf" value="{{$.CSRF}}">
-      <button type="submit" aria-label="Check queue for {{.DisplayName}}">Check queue</button>
-    </form></td>
+    <td data-label="Last checked">{{if .CheckedAt.IsZero}}Never{{else}}{{template "local-time" .CheckedAt}}{{end}}</td>
+    <td data-label="Actions"><div class="connection-actions">
+      <form method="post" action="{{$.Base}}/connections/{{.ID}}/check">
+        <input type="hidden" name="csrf" value="{{$.CSRF}}">
+        <button type="submit" aria-label="Check queue for {{.DisplayName}}">Check queue</button>
+      </form>
+      <a class="button button-quiet" href="{{$.Base}}/connections/{{.ID}}/remove" aria-label="Remove {{.DisplayName}}">Remove</a>
+    </div></td>
   </tr>{{end}}</tbody>
 </table>
-{{else}}<p>Add a Sonarr or Radarr connection to check its queue for cases.</p>{{end}}
+{{else}}<p>Add Sonarr or Radarr to check its queue for downloads that need recovery.</p>{{end}}
 <section class="panel section" aria-labelledby="add-connection">
   <h2 id="add-connection">Add a connection</h2>
   <form method="post" action="{{.Base}}/connections">
@@ -25,9 +28,9 @@
       <label>Service <select name="product"><option value="sonarr">Sonarr</option><option value="radarr">Radarr</option></select></label>
       <label>Display name <input name="name" maxlength="80" required></label>
       <label>Service URL <input name="url" type="url" maxlength="1024" required></label>
-      <label>API key filename <input name="secret_ref" maxlength="128" autocomplete="off" aria-describedby="key-help" required></label>
+      <label>API key <input name="api_key" type="password" maxlength="1024" autocomplete="new-password" spellcheck="false" aria-describedby="key-help" required></label>
     </div>
-    <p id="key-help">Enter the filename of a private file in the Rescuarr data directory’s <code>secrets</code> folder. Put the API key on a single line inside that file.</p>
+    <p id="key-help">Copy the API key from your Sonarr or Radarr settings.</p>
     <button type="submit">Add connection</button>
   </form>
 </section>

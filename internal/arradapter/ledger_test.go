@@ -6,15 +6,22 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/rnodern/rescuarr/internal/app"
+	"github.com/rnodern/rescuarr/internal/app/apptest"
 	"github.com/rnodern/rescuarr/internal/arradapter"
 	"github.com/rnodern/rescuarr/internal/domain"
 	"github.com/rnodern/rescuarr/internal/ledger"
+	"github.com/rnodern/rescuarr/internal/recoveryservice"
 	"github.com/rnodern/rescuarr/internal/store"
+	"github.com/rnodern/rescuarr/internal/webconsole"
 )
 
 func TestFencedFixtureLostAcknowledgementReconcilesAfterRestart(t *testing.T) {
@@ -35,10 +42,7 @@ func TestFencedFixtureLostAcknowledgementReconcilesAfterRestart(t *testing.T) {
 			ExpiresAt: fixtureTime.Add(time.Minute),
 		},
 	}
-	intent, err := journal.Approve(t.Context(), approval, fixtureTime)
-	if err != nil {
-		t.Fatal(err)
-	}
+	intent := submitFixtureReview(t, journal, approval)
 	gate := fixtureGate(func(_ context.Context, current domain.Intent) (ledger.Preflight, error) {
 		p := current.Proposal
 		return ledger.Preflight{DecisionHash: p.DecisionHash, CaseRevision: p.CaseRevision, PolicyRevision: p.PolicyRevision,
@@ -106,6 +110,63 @@ func TestFencedFixtureLostAcknowledgementReconcilesAfterRestart(t *testing.T) {
 		len(outcome.Effects) != 2 || exchanges != 1 || reads != 1 {
 		t.Fatalf("unexpected reconciliation after %d exchanges and %d reads: %+v, %v", exchanges, reads, outcome, err)
 	}
+}
+
+type reviewedProposal ledger.Approval
+
+func (p reviewedProposal) FindApproval(context.Context, domain.CaseID, domain.ProposalID, domain.Revision, time.Time) (ledger.Approval, error) {
+	return ledger.Approval(p), nil
+}
+
+var approvalField = regexp.MustCompile(`name="(proposal_id|revision|request_key|csrf)" value="([^"]+)"`)
+
+func submitFixtureReview(t *testing.T, journal *ledger.Journal, approval ledger.Approval) domain.Intent {
+	t.Helper()
+	p := approval.Proposal
+	caseProjection := domain.Case{ID: p.CaseID, Revision: p.CaseRevision}
+	origin := "https://rescuarr.invalid"
+	browser := webconsole.New(webconsole.Options{
+		Read: &apptest.Console{
+			Dashboard: app.Overview{Mode: domain.ModeAssist},
+			Details: map[domain.CaseID]app.CaseDetail{
+				p.CaseID: {Case: caseProjection, Proposals: []domain.Proposal{p}},
+			},
+		},
+		Clock: fixtureClock(fixtureTime),
+		Commands: recoveryservice.Commands{
+			Journal: journal, Lookup: reviewedProposal(approval), Clock: fixtureClock(fixtureTime),
+		},
+		Authorize: func(*http.Request) webconsole.Session {
+			return webconsole.Session{Actor: approval.Actor, CSRF: "fixture-csrf", Origin: origin}
+		},
+	})
+	casePath := origin + "/cases/" + string(p.CaseID)
+	view := httptest.NewRecorder()
+	browser.ServeHTTP(view, httptest.NewRequest(http.MethodGet, casePath+"/review/"+string(p.ID), nil))
+	fields := url.Values{}
+	for _, f := range approvalField.FindAllStringSubmatch(view.Body.String(), -1) {
+		fields.Set(f[1], f[2])
+	}
+	if view.Code != http.StatusOK || len(fields) != 4 {
+		t.Fatal("owner review form did not render")
+	}
+	var location string
+	for range 2 {
+		submission := httptest.NewRequest(http.MethodPost, casePath+"/actions", strings.NewReader(fields.Encode()))
+		submission.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		submission.Header.Set("Origin", origin)
+		result := httptest.NewRecorder()
+		browser.ServeHTTP(result, submission)
+		if result.Code != http.StatusSeeOther || !strings.HasPrefix(result.Header().Get("Location"), "/actions/") {
+			t.Fatalf("owner approval returned HTTP %d", result.Code)
+		}
+		if next := result.Header().Get("Location"); location != "" && next != location {
+			t.Fatal("repeat submitted approval created a second intent")
+		} else {
+			location = next
+		}
+	}
+	return domain.Intent{ID: domain.IntentID(strings.TrimPrefix(location, "/actions/"))}
 }
 
 type fixtureGate func(context.Context, domain.Intent) (ledger.Preflight, error)

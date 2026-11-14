@@ -25,7 +25,8 @@ func TestConsoleSetupAuthenticationAndCSRF(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer local.Close()
-	auth := access.New(local, dir, time.Now)
+	now := time.Now()
+	auth := access.New(local, dir, func() time.Time { return now })
 	if err := auth.PrepareSetup(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -115,6 +116,17 @@ func TestConsoleSetupAuthenticationAndCSRF(t *testing.T) {
 	}
 	status(request(http.MethodPost, "/tools/logout", browserURL, url.Values{"csrf": {session.CSRF}}, owner), http.StatusSeeOther)
 	status(request(http.MethodGet, "/tools/", "", nil, owner), http.StatusSeeOther)
+
+	// A visible console can poll even while the owner is idle.
+	login = request(http.MethodGet, "/tools/login", "", nil)
+	preAuth = namedCookie(t, login, "rescuarr_form")
+	loggedIn = request(http.MethodPost, "/tools/login", browserURL, url.Values{"password": {password}, "csrf": {preAuth.Value}}, preAuth)
+	status(loggedIn, http.StatusSeeOther)
+	owner = namedCookie(t, loggedIn, "rescuarr_owner")
+	now = now.Add(25 * time.Minute)
+	status(request(http.MethodGet, "/tools/fragments/status", "", nil, owner), http.StatusOK)
+	now = now.Add(6 * time.Minute)
+	status(request(http.MethodGet, "/tools/fragments/status", "", nil, owner), http.StatusUnauthorized)
 
 	hostile := httptest.NewRequest(http.MethodGet, "http://container.example.test/tools/login", nil)
 	hostile.RemoteAddr = "198.51.100.21:29000"

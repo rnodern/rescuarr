@@ -55,7 +55,7 @@ func (s *Service) collect(ctx context.Context, id domain.InstanceID) error {
 	var generation, complete uint64
 	localErr := s.store.Read(ctx, func(tx *sql.Tx) error {
 		return tx.QueryRowContext(ctx, `SELECT epoch, product, display_name, base_url, secret_ref, connection_revision, version, generation, complete_scans
-			FROM observe_instances WHERE id = ?`, id).Scan(&instance.Ref.Epoch, &instance.Product, &instance.DisplayName, &instance.BaseURL,
+			FROM observe_instances WHERE id = ? AND health <> ?`, id, removedConnection).Scan(&instance.Ref.Epoch, &instance.Product, &instance.DisplayName, &instance.BaseURL,
 			&instance.SecretRef, &instance.ConnectionRevision, &instance.UpstreamVersion, &generation, &complete)
 	})
 	if errors.Is(localErr, sql.ErrNoRows) {
@@ -68,7 +68,7 @@ func (s *Service) collect(ctx context.Context, id domain.InstanceID) error {
 	cycle, cancel := context.WithTimeout(ctx, collectTimeout)
 	defer cancel()
 	observedAt := s.clock.Now().UTC()
-	snapshot, version, upstreamErr := s.observe(cycle, instance, domain.Revision(generation), observedAt)
+	snapshot, version, checks, imports, upstreamErr := s.observe(cycle, instance, domain.Revision(generation), observedAt, true)
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
@@ -107,7 +107,7 @@ func (s *Service) collect(ctx context.Context, id domain.InstanceID) error {
 			return err
 		}
 		if !upgrade {
-			if err := persistCases(ctx, tx, instance, snapshot, generation, observedAt, coverage); err != nil {
+			if err := persistCases(ctx, tx, instance, snapshot, generation, observedAt, coverage, checks, imports); err != nil {
 				return err
 			}
 		}
@@ -122,21 +122,28 @@ func (s *Service) collect(ctx context.Context, id domain.InstanceID) error {
 	return upstreamErr
 }
 
-func (s *Service) observe(ctx context.Context, instance domain.Instance, generation domain.Revision, now time.Time) (observe.QueueSnapshot, string, error) {
+func (s *Service) observe(ctx context.Context, instance domain.Instance, generation domain.Revision, now time.Time, checkNames bool) (observe.QueueSnapshot, string, map[int64]domain.EpisodeNameReview, map[domain.CaseID]domain.EvidenceID, error) {
 	key, err := s.store.ReadSecret(instance.SecretRef)
 	if err != nil {
-		return observe.QueueSnapshot{}, "", observe.ErrAccess
+		return observe.QueueSnapshot{}, "", nil, nil, observe.ErrAccess
 	}
 	arr, err := observe.NewArr(observe.Config{Instance: instance, APIKey: key}, s.transport)
 	if err != nil {
-		return observe.QueueSnapshot{}, "", err
+		return observe.QueueSnapshot{}, "", nil, nil, err
 	}
 	status, err := arr.Status(ctx)
 	if err != nil {
-		return observe.QueueSnapshot{}, "", err
+		return observe.QueueSnapshot{}, "", nil, nil, err
 	}
 	snapshot, err := arr.Queue(ctx, generation, now)
-	return snapshot, status.Version, err
+	var checks map[int64]domain.EpisodeNameReview
+	var imports map[domain.CaseID]domain.EvidenceID
+	if err == nil && checkNames && (instance.UpstreamVersion == "" || instance.UpstreamVersion == status.Version) {
+		instance.UpstreamVersion = status.Version
+		imports = s.verifyMissingEpisodeImports(ctx, instance, arr, snapshot, now)
+		checks = s.reviewEpisodeNames(ctx, observe.Config{Instance: instance, APIKey: key}, arr, snapshot, status, generation)
+	}
+	return snapshot, status.Version, checks, imports, err
 }
 
 func healthReason(err error) domain.ReasonCode {

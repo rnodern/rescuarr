@@ -13,8 +13,8 @@
   <p>Monitoring continues. Requests already sent may finish.</p>{{end}}
 </form>{{end}}
 <div class="metrics">
-  <a class="panel metric" href="{{.Base}}/cases"><span>Cases</span><strong>{{.Status.Cases}}</strong></a>
-  <a class="panel metric" href="{{.Base}}/cases?state=held"><span>Held cases</span><strong>{{.Status.HeldCases}}</strong></a>
+  <a class="panel metric" href="{{.Base}}/cases?exclude_closed=1"><span>Open recoveries</span><strong>{{.Status.Cases}}</strong></a>
+  <a class="panel metric" href="{{.Base}}/cases?state=held"><span>Held downloads</span><strong>{{.Status.HeldCases}}</strong></a>
   <div class="panel metric"><span>Open incidents</span><strong>{{.Status.OpenIncidents}}</strong></div>
 </div>
 {{template "end" .}}

@@ -14,6 +14,7 @@ import (
 
 	"github.com/rnodern/rescuarr/internal/domain"
 	"github.com/rnodern/rescuarr/internal/observe"
+	"github.com/rnodern/rescuarr/internal/store"
 )
 
 const (
@@ -47,7 +48,7 @@ type storedCase struct {
 }
 
 func persistCases(ctx context.Context, tx *sql.Tx, instance domain.Instance, snapshot observe.QueueSnapshot, generation uint64,
-	now time.Time, coverage domain.ObservationState) error {
+	now time.Time, coverage domain.ObservationState, checks map[int64]domain.EpisodeNameReview, imports map[domain.CaseID]domain.EvidenceID) error {
 	isComplete := coverage == domain.ObservationKnown
 	if isComplete {
 		if _, err := tx.ExecContext(ctx, `DELETE FROM observe_cases WHERE instance_id = ? AND state = ? AND updated_at < ?`,
@@ -88,7 +89,7 @@ func persistCases(ctx context.Context, tx *sql.Tx, instance domain.Instance, sna
 		if group.key.Scan != 0 {
 			bucket, limit = &observationCount, maxObservationCases
 		}
-		if err := persistGroup(ctx, tx, instance, group, snapshot.Evidence, generation, now, isComplete, bucket, limit); err != nil {
+		if err := persistGroup(ctx, tx, instance, group, snapshot.Evidence, generation, now, isComplete, bucket, limit, checks); err != nil {
 			return err
 		}
 	}
@@ -100,11 +101,11 @@ func persistCases(ctx context.Context, tx *sql.Tx, instance domain.Instance, sna
 	if !isComplete {
 		return nil
 	}
-	return markMissing(ctx, tx, instance.Ref, generation, now)
+	return markMissing(ctx, tx, instance.Ref, generation, now, imports)
 }
 
 func persistGroup(ctx context.Context, tx *sql.Tx, instance domain.Instance, group jobGroup, evidence domain.Observation,
-	generation uint64, now time.Time, isComplete bool, count *int, limit int) error {
+	generation uint64, now time.Time, isComplete bool, count *int, limit int, checks map[int64]domain.EpisodeNameReview) error {
 	key, err := hashJSON(group.key)
 	if err != nil {
 		return err
@@ -116,7 +117,7 @@ func persistGroup(ctx context.Context, tx *sql.Tx, instance domain.Instance, gro
 	if errors.Is(err, sql.ErrNoRows) && *count >= limit {
 		return nil
 	}
-	item := domain.Case{ID: previous.ID, Revision: previous.Revision, NextCheckAt: now.Add(45 * time.Second)}
+	item := domain.Case{ID: previous.ID, Revision: previous.Revision, LastSeenAt: now, NextCheckAt: now.Add(45 * time.Second)}
 	if len(previous.Payload) > 0 && !isComplete {
 		// Partial positives refresh visibility, never erase a known member set or
 		// provide absence. Keep the existing state and projection unchanged.
@@ -129,8 +130,8 @@ func persistGroup(ctx context.Context, tx *sql.Tx, instance domain.Instance, gro
 	}
 	slices.SortFunc(group.rows, func(a, b observe.QueueRecord) int { return cmp.Compare(a.ID, b.ID) })
 	caseGeneration := domain.Revision(1)
+	var old domain.Case
 	if len(previous.Payload) > 0 {
-		var old domain.Case
 		if err := json.Unmarshal([]byte(previous.Payload), &old); err != nil {
 			return err
 		}
@@ -145,6 +146,7 @@ func persistGroup(ctx context.Context, tx *sql.Tx, instance domain.Instance, gro
 			item.ID = domain.CaseID(newCaseID(instance.Ref, key+"-"+strconv.FormatUint(uint64(caseGeneration), 10)))
 			item.Revision = 1
 			previous = storedCase{}
+			old = domain.Case{}
 			if *count >= limit {
 				return nil
 			}
@@ -167,6 +169,12 @@ func persistGroup(ctx context.Context, tx *sql.Tx, instance domain.Instance, gro
 	}
 	seen := make(map[domain.TargetRef]bool)
 	for _, row := range group.rows {
+		if item.Display.Release == "" {
+			item.Display.Release = row.Release
+		}
+		if item.Display.Title == "" {
+			item.Display.Title = row.MediaTitle
+		}
 		item.Job.Members = append(item.Job.Members, domain.QueueMember{QueueID: row.ID, SnapshotGeneration: domain.Revision(generation), Target: row.Target})
 		if !row.Target.Valid() {
 			item.Job.CompleteSet = false
@@ -175,6 +183,9 @@ func persistGroup(ctx context.Context, tx *sql.Tx, instance domain.Instance, gro
 		if !seen[row.Target] {
 			seen[row.Target] = true
 			item.Targets = append(item.Targets, domain.Target{Ref: row.Target})
+			if row.EpisodeTitle != "" || row.Episode != "" {
+				item.Display.Media = append(item.Display.Media, domain.CaseMedia{Target: row.Target, Title: row.EpisodeTitle, Episode: row.Episode})
+			}
 		}
 	}
 	slices.SortFunc(item.Targets, func(a, b domain.Target) int {
@@ -182,6 +193,16 @@ func persistGroup(ctx context.Context, tx *sql.Tx, instance domain.Instance, gro
 	})
 	if !item.Job.CompleteSet && item.State != domain.CaseWaiting && caseGeneration == 1 {
 		item.State, item.Reason = domain.CaseHeld, "target_ambiguous"
+	}
+	if item.Reason == domain.ReasonCode(observe.FindingSeriesIDOnly) && item.Job.CompleteSet && len(group.rows) == 1 {
+		row := group.rows[0]
+		input := episodeCheckInput(instance.ConnectionRevision, row)
+		if result, checked := checks[row.ID]; checked {
+			item.Display.EpisodeCheck = &domain.CaseEpisodeCheck{EpisodeNameReview: result, CheckedAt: now, InputFingerprint: input}
+		} else if old.Display.EpisodeCheck != nil && old.Display.EpisodeCheck.InputFingerprint == input &&
+			!now.Before(old.Display.EpisodeCheck.CheckedAt) && now.Sub(old.Display.EpisodeCheck.CheckedAt) < episodeCheckMaxAge {
+			item.Display.EpisodeCheck = old.Display.EpisodeCheck
+		}
 	}
 	fingerprint, err := materialFingerprint(item)
 	if err != nil {
@@ -203,7 +224,11 @@ func persistGroup(ctx context.Context, tx *sql.Tx, instance domain.Instance, gro
 			revision = excluded.revision, payload = excluded.payload, last_seen_generation = excluded.last_seen_generation,
 			missing_complete_scans = 0, updated_at = excluded.updated_at`, item.ID,
 		instance.Ref.ID, instance.Ref.Epoch, key, group.key.Scan != 0, fingerprint, item.State, item.Reason, item.Revision, string(payload), generation, stamp(now))
-	return err
+	if err != nil || len(group.rows) != 1 {
+		return err
+	}
+	_, checked := checks[group.rows[0].ID]
+	return recordEpisodeCheck(ctx, tx, old, item, checked, now)
 }
 
 func loadGroup(ctx context.Context, tx *sql.Tx, instance domain.InstanceRef, key string) (storedCase, error) {
@@ -232,6 +257,7 @@ func contradictoryAliases(previous []domain.QueueMember, next []observe.QueueRec
 func retireConflictingGroup(ctx context.Context, tx *sql.Tx, detail domain.Case, key string, now time.Time) error {
 	detail.State, detail.Reason, detail.Revision = domain.CaseClosed, "job_identity_changed", detail.Revision+1
 	detail.Job.CompleteSet = false
+	detail.Display.EpisodeCheck = nil
 	payload, err := json.Marshal(detail)
 	if err != nil {
 		return err
@@ -241,9 +267,19 @@ func retireConflictingGroup(ctx context.Context, tx *sql.Tx, detail domain.Case,
 	return err
 }
 
-func markMissing(ctx context.Context, tx *sql.Tx, instance domain.InstanceRef, generation uint64, now time.Time) error {
+func markMissing(ctx context.Context, tx *sql.Tx, instance domain.InstanceRef, generation uint64, now time.Time, imports map[domain.CaseID]domain.EvidenceID) error {
+	verifiedIDs := make([]domain.CaseID, 0, len(imports))
+	for id := range imports {
+		verifiedIDs = append(verifiedIDs, id)
+	}
+	encoded, err := json.Marshal(verifiedIDs)
+	if err != nil {
+		return err
+	}
 	rows, err := tx.QueryContext(ctx, `SELECT id, payload, missing_complete_scans FROM observe_cases
-		WHERE instance_id = ? AND epoch = ? AND state <> 'closed' AND observation_only = 0 AND last_seen_generation < ? LIMIT ?`, instance.ID, instance.Epoch, generation, maxCases)
+		WHERE instance_id = ? AND epoch = ? AND (state <> 'closed' OR
+			(reason = 'queue_missing_unverified' AND id IN (SELECT value FROM json_each(?))))
+		AND observation_only = 0 AND last_seen_generation < ? LIMIT ?`, instance.ID, instance.Epoch, string(encoded), generation, maxCases)
 	if err != nil {
 		return err
 	}
@@ -267,12 +303,24 @@ func markMissing(ctx context.Context, tx *sql.Tx, instance domain.InstanceRef, g
 		if err := json.Unmarshal([]byte(item.Payload), &detail); err != nil {
 			return err
 		}
+		verified := imports[detail.ID]
+		if detail.State == domain.CaseClosed && verified == "" {
+			continue
+		}
 		state, reason := domain.CaseHeld, domain.ReasonCode("queue_presence_unknown")
 		if item.Misses >= 1 {
 			state, reason = domain.CaseClosed, "queue_missing_unverified"
 		}
+		if verified != "" {
+			state, reason = domain.CaseClosed, "sonarr_import_verified"
+			detail.Evidence = append(detail.Evidence, verified)
+		}
+		if detail.LastSeenAt.IsZero() && item.Misses == 0 {
+			detail.LastSeenAt = detail.NextCheckAt.Add(-45 * time.Second)
+		}
 		detail.State, detail.Reason, detail.Revision, detail.Job.CompleteSet = state, reason, detail.Revision+1, false
 		detail.NextCheckAt = now.Add(45 * time.Second)
+		detail.Display.EpisodeCheck = nil
 		payload, err := json.Marshal(detail)
 		if err != nil {
 			return err
@@ -286,16 +334,28 @@ func markMissing(ctx context.Context, tx *sql.Tx, instance domain.InstanceRef, g
 		if err != nil {
 			return err
 		}
+		kind := domain.EventKind("recovery_queue_missing")
+		if verified != "" {
+			kind = "recovery_external_import_verified"
+		}
+		if state == domain.CaseClosed {
+			if err := store.AppendEvent(ctx, tx, domain.Event{ID: domain.EventID(store.NewID()), Kind: kind,
+				Actor: "queue-worker", Reason: reason, Scope: domain.Scope{Kind: domain.ScopeInstance, Instance: instance},
+				CaseID: detail.ID, Evidence: detail.Evidence, OccurredAt: now}); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }
 
 func summarise(rows []observe.QueueRecord) (domain.CaseState, domain.ReasonCode) {
-	active, failed, noEligible, warning, complete := false, false, false, false, false
+	active, failed, noEligible, seriesIDOnly, warning, complete := false, false, false, false, false, false
 	for _, row := range rows {
 		active = active || row.Status == "downloading" || row.Status == "queued" || row.TrackedState == "importing"
 		failed = failed || row.Status == "failed" || row.TrackedState == "downloadFailed"
 		noEligible = noEligible || slices.Contains(row.Findings, observe.FindingNoEligibleFiles)
+		seriesIDOnly = seriesIDOnly || slices.Contains(row.Findings, observe.FindingSeriesIDOnly)
 		warning = warning || len(row.Findings) > 0 || row.TrackedStatus == "warning" || row.TrackedStatus == "error"
 		complete = complete || row.Status == "completed" || row.TrackedState == "importPending"
 	}
@@ -306,6 +366,8 @@ func summarise(rows []observe.QueueRecord) (domain.CaseState, domain.ReasonCode)
 		return domain.CaseHeld, "download_failed"
 	case noEligible:
 		return domain.CaseHeld, "no_eligible_files"
+	case seriesIDOnly:
+		return domain.CaseHeld, domain.ReasonCode(observe.FindingSeriesIDOnly)
 	case warning:
 		return domain.CaseHeld, "upstream_intervention_required"
 	case complete:
