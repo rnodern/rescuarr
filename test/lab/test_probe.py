@@ -6,6 +6,28 @@ from pathlib import Path
 from unittest.mock import patch
 
 import probe
+from scenarios import Arr, LabFailure
+
+
+class CommandProbeTest(unittest.TestCase):
+    def test_timed_out_command_read_polls_same_id_without_resending(self):
+        arr = Arr("sonarr", key="fixture-only")
+        complete = {"id": 7, "name": "EpisodeSearch", "status": "completed", "result": "successful"}
+        with patch("scenarios.call_json", side_effect=[(201, {"id": 7}), TimeoutError(), (200, complete)]) as api, patch(
+            "scenarios.time.sleep"
+        ):
+            self.assertEqual(arr.command_status("EpisodeSearch", episodeIds=[1]), {"responseStatus": 201, **complete})
+        self.assertEqual([call.args[1] for call in api.call_args_list], [
+            "/api/v3/command", "/api/v3/command/7", "/api/v3/command/7",
+        ])
+        self.assertEqual([call.kwargs["method"] for call in api.call_args_list], ["POST", "GET", "GET"])
+
+    def test_timed_out_command_send_is_never_retried(self):
+        arr = Arr("sonarr", key="fixture-only")
+        with patch("scenarios.call_json", side_effect=TimeoutError()) as api:
+            with self.assertRaisesRegex(LabFailure, "POST:command:timeout"):
+                arr.command_status("EpisodeSearch", episodeIds=[1])
+        api.assert_called_once()
 
 
 class SabProbeTest(unittest.TestCase):

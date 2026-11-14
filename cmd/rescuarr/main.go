@@ -46,11 +46,12 @@ func run(ctx context.Context, args []string) error {
 		command, args = args[0], args[1:]
 	}
 	if command == "help" || len(args) > 0 && (args[0] == "--help" || args[0] == "-h") {
-		fmt.Println("usage: rescuarr [serve|doctor|version|backup|restore|owner-recovery] [options]")
+		fmt.Println("usage: rescuarr [serve|doctor|version|backup|restore|owner-recovery|check-empty-pack] [options]")
 		fmt.Println("  --listen host:port  --data-dir path  --base-path /prefix")
 		fmt.Println("  --public-url URL    --trusted-proxies CIDR[,CIDR]")
 		fmt.Println("  --prowl-delivery true|false")
 		fmt.Println("  backup --output file   restore --input file")
+		fmt.Println("  check-empty-pack [--sonarr-connection ID]")
 		return nil
 	}
 	if command == "version" {
@@ -61,7 +62,7 @@ func run(ctx context.Context, args []string) error {
 		return nil
 	}
 	switch command {
-	case "serve", "doctor", "backup", "restore", "owner-recovery":
+	case "serve", "doctor", "backup", "restore", "owner-recovery", "check-empty-pack":
 	default:
 		return fmt.Errorf("unknown command %q", command)
 	}
@@ -74,6 +75,9 @@ func run(ctx context.Context, args []string) error {
 	}
 	if (command == "backup") != (cfg.Output != "") || (command == "restore") != (cfg.Input != "") {
 		return errors.New("backup requires --output and restore requires --input")
+	}
+	if cfg.SonarrConnection != "" && command != "check-empty-pack" {
+		return errors.New("--sonarr-connection is for check-empty-pack")
 	}
 	if command == "restore" {
 		previous, err := store.Restore(ctx, cfg.DataDir, cfg.Input, time.Now())
@@ -94,6 +98,9 @@ func run(ctx context.Context, args []string) error {
 		return err
 	}
 	defer local.Close()
+	if command == "check-empty-pack" {
+		return checkEmptyPackProfile(ctx, local, cfg.SonarrConnection, nil, os.Stdout)
+	}
 	if command == "backup" {
 		info, err := local.Backup(ctx, cfg.Output)
 		if err != nil {

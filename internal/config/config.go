@@ -19,15 +19,16 @@ import (
 const DefaultListen = "127.0.0.1:8787"
 
 type Config struct {
-	Listen         string
-	DataDir        string
-	BasePath       string
-	PublicURL      *url.URL
-	TrustedProxies []netip.Prefix
-	Input          string
-	Output         string
-	ProwlDelivery  bool
-	Sources        map[string]string
+	Listen           string
+	DataDir          string
+	BasePath         string
+	PublicURL        *url.URL
+	TrustedProxies   []netip.Prefix
+	Input            string
+	Output           string
+	ProwlDelivery    bool
+	SonarrConnection string
+	Sources          map[string]string
 }
 
 // Parse applies explicit flags over nonempty environment values and platform defaults.
@@ -51,6 +52,7 @@ func Parse(args []string, getenv func(string) string) (Config, error) {
 	prowl := flags.String("prowl-delivery", resolve("RESCUARR_PROWL_DELIVERY", "false"), "enable Prowl delivery (true or false)")
 	flags.StringVar(&cfg.Input, "input", "", "backup database to restore")
 	flags.StringVar(&cfg.Output, "output", "", "database backup destination")
+	flags.StringVar(&cfg.SonarrConnection, "sonarr-connection", "", "local Sonarr connection ID for recovery checks")
 	if err := flags.Parse(args); err != nil {
 		return Config{}, err
 	}
