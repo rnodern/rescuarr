@@ -11,6 +11,10 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+func makeDataDirectory(path string) error {
+	return os.MkdirAll(path, 0o700)
+}
+
 func secureDirectory(path string) error {
 	info, err := os.Lstat(path)
 	if err != nil {
