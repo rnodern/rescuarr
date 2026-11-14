@@ -30,7 +30,7 @@ def image_manifest(archive, architecture):
 
 
 def verify(architecture, version, revision, archive, project, scratch):
-    compose = ["docker", "compose", "--env-file", "/dev/null", "--file", "deploy/container/compose.yaml", "--project-name", project]
+    compose = ["docker", "compose", "--env-file", "/dev/null", "--file", "compose.yaml", "--project-name", project]
     run = [*compose, "exec", "-T", "rescuarr"]
     manifest_digest, config_digest = image_manifest(archive, architecture)
     container = command(*compose, "ps", "-q", "rescuarr")

@@ -22,7 +22,7 @@ unset COMPOSE_FILE COMPOSE_PROJECT_NAME COMPOSE_PROFILES COMPOSE_ENV_FILES COMPO
 
 scratch=$(mktemp -d)
 project="rescuarr-smoke-$architecture-$(basename "$scratch" | tr '[:upper:]' '[:lower:]' | tr -cd '[:alnum:]')"
-compose=(docker compose --env-file /dev/null --file deploy/container/compose.yaml --project-name "$project")
+compose=(docker compose --env-file /dev/null --file compose.yaml --project-name "$project")
 cleanup() {
   local status=$?
   "${compose[@]}" down --volumes --remove-orphans || status=1
