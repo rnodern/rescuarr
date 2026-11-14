@@ -3,6 +3,8 @@ package ledger
 import (
 	"context"
 	"errors"
+	"fmt"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -18,6 +20,10 @@ const fixtureAttempt = domain.AttemptID("attempt-1")
 type fixedClock struct{}
 
 func (fixedClock) Now() time.Time { return fixtureTime }
+
+type advancingClock struct{ time time.Time }
+
+func (c *advancingClock) Now() time.Time { return c.time }
 
 type gateFunc func(context.Context, domain.Intent) (Preflight, error)
 
@@ -41,7 +47,8 @@ func fixtureIntent() domain.Intent {
 func freshFacts(_ context.Context, intent domain.Intent) (Preflight, error) {
 	return Preflight{DecisionHash: intent.Proposal.DecisionHash, CaseRevision: intent.Proposal.CaseRevision,
 		PolicyRevision: intent.Proposal.PolicyRevision, CapabilityRevision: intent.Proposal.CapabilityRevision,
-		Evidence: []domain.EvidenceID{"fresh-evidence"}, ObservedAt: fixtureTime.Add(-time.Second), ExpiresAt: fixtureTime.Add(time.Second)}, nil
+		ArrOwnsImplicitSearch: intent.Proposal.Operation.Action == domain.ActionReject && slices.Contains(intent.Proposal.Operation.Effects, domain.Effect{Kind: domain.EffectSearchDispatch}),
+		Evidence:              []domain.EvidenceID{"fresh-evidence"}, ObservedAt: fixtureTime.Add(-time.Second), ExpiresAt: fixtureTime.Add(time.Second)}, nil
 }
 
 // The in-memory store exercises caller ordering and crash recovery across
@@ -53,10 +60,13 @@ type fixtureStore struct {
 	outcome         domain.Outcome
 	paused          bool
 	sendLeaseActive bool
+	sendLeaseExpiry time.Time
+	afterBegin      func()
 	failAudit       bool
 	failBegin       bool
 	invalidJournal  bool
 	cancelled       int
+	notSent         int
 	claimedReadback bool
 }
 
@@ -87,17 +97,17 @@ func (s *fixtureStore) CancelReserved(_ context.Context, _ Reservation, _ domain
 	return nil
 }
 
-func (s *fixtureStore) BeginSend(ctx context.Context, reservation Reservation, checked Preflight, now time.Time) (domain.Attempt, error) {
+func (s *fixtureStore) BeginSend(ctx context.Context, reservation Reservation, checked Preflight, now time.Time) (SendLease, error) {
 	s.Lock()
 	defer s.Unlock()
 	if s.failBegin {
-		return domain.Attempt{}, errors.New("synthetic disk full at write fence")
+		return SendLease{}, errors.New("synthetic disk full at write fence")
 	}
 	if s.paused || ctx.Err() != nil {
-		return domain.Attempt{}, ErrHeld
+		return SendLease{}, ErrHeld
 	}
 	if s.intent.State != domain.IntentReserved || reservation.Fence != 1 {
-		return domain.Attempt{}, ErrConflict
+		return SendLease{}, ErrConflict
 	}
 	s.intent.State = domain.IntentSending
 	s.sendLeaseActive = true
@@ -106,10 +116,32 @@ func (s *fixtureStore) BeginSend(ctx context.Context, reservation Reservation, c
 	if s.invalidJournal {
 		returned.Operation.Key = "wrong-operation"
 	}
-	return returned, nil
+	expiry := s.sendLeaseExpiry
+	if expiry.IsZero() {
+		expiry = now.Add(time.Minute)
+	}
+	if s.afterBegin != nil {
+		s.afterBegin()
+	}
+	return SendLease{Attempt: returned, Fence: 3, ExpiresAt: expiry}, nil
 }
 
-func (s *fixtureStore) RecordDispatch(ctx context.Context, id domain.AttemptID, ack domain.Acknowledgement, _ time.Time) error {
+func (s *fixtureStore) RecordNotSent(ctx context.Context, lease SendLease, _ domain.ReasonCode, _ time.Time) error {
+	s.Lock()
+	defer s.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if s.attempt.ID != lease.Attempt.ID || lease.Fence != 3 || s.intent.State != domain.IntentSending || !s.sendLeaseActive {
+		return ErrConflict
+	}
+	s.intent.State = domain.IntentCancelled
+	s.sendLeaseActive = false
+	s.notSent++
+	return nil
+}
+
+func (s *fixtureStore) RecordDispatch(ctx context.Context, lease SendLease, ack domain.Acknowledgement, _ time.Time) error {
 	s.Lock()
 	defer s.Unlock()
 	if err := ctx.Err(); err != nil {
@@ -118,7 +150,7 @@ func (s *fixtureStore) RecordDispatch(ctx context.Context, id domain.AttemptID, 
 	if s.failAudit {
 		return errors.New("synthetic disk full")
 	}
-	if s.attempt.ID != id || s.intent.State != domain.IntentSending {
+	if s.attempt.ID != lease.Attempt.ID || lease.Fence != 3 || s.intent.State != domain.IntentSending {
 		return ErrConflict
 	}
 	s.attempt.Acknowledgement = ack
@@ -137,7 +169,7 @@ func (s *fixtureStore) RecordDispatch(ctx context.Context, id domain.AttemptID, 
 func (s *fixtureStore) BeginReconcile(_ context.Context, id domain.AttemptID, _ time.Time) (Reconciliation, error) {
 	s.Lock()
 	defer s.Unlock()
-	if s.attempt.ID != id || s.sendLeaseActive || s.claimedReadback || s.intent.State == domain.IntentCompleted {
+	if s.attempt.ID != id || s.sendLeaseActive || s.claimedReadback || s.intent.State == domain.IntentCompleted || s.intent.State == domain.IntentCancelled {
 		return Reconciliation{}, ErrConflict
 	}
 	s.claimedReadback = true
@@ -304,5 +336,105 @@ func TestOutcomeRequiresExactAndEvidencedEffects(t *testing.T) {
 	out = normaliseOutcome(attempt, domain.Outcome{AttemptID: attempt.ID, ObservedAt: fixtureTime, Effects: readback}, fixtureTime)
 	if out.Verification != domain.VerificationUnresolved || out.Effects[0].Verification != domain.VerificationUnresolved || out.Effects[1].Verification != domain.VerificationUnresolved {
 		t.Fatalf("foreign target was treated as verified: %+v", out)
+	}
+}
+
+func TestPostFenceExpiryRecordsDefiniteNoSend(t *testing.T) {
+	for _, name := range []string{"proposal", "preflight", "lease"} {
+		t.Run(name, func(t *testing.T) {
+			clock := &advancingClock{time: fixtureTime}
+			s := &fixtureStore{intent: fixtureIntent(), afterBegin: func() { clock.time = clock.time.Add(2 * time.Second) }}
+			if name == "proposal" {
+				s.intent.Proposal.ExpiresAt = fixtureTime.Add(time.Second)
+			}
+			if name == "lease" {
+				s.sendLeaseExpiry = fixtureTime.Add(operationTimeout + time.Second)
+			}
+			gate := gateFunc(func(ctx context.Context, intent domain.Intent) (Preflight, error) {
+				proof, err := freshFacts(ctx, intent)
+				if name != "preflight" {
+					proof.ExpiresAt = fixtureTime.Add(time.Minute)
+				}
+				return proof, err
+			})
+			adapter := fixtureAdapter{Send: func(context.Context, domain.Operation) (domain.Acknowledgement, error) {
+				t.Fatal("expired proof or lease reached adapter")
+				return domain.Acknowledgement{}, nil
+			}}
+			e, err := NewExecutor(s, adapter, gate, clock)
+			if err != nil {
+				t.Fatal(err)
+			}
+			id, err := e.Dispatch(t.Context(), s.intent.ID)
+			if id != fixtureAttempt || !errors.Is(err, ErrHeld) || s.notSent != 1 || s.intent.State != domain.IntentCancelled {
+				t.Fatalf("id %v, state %v, no send %d, err %v", id, s.intent.State, s.notSent, err)
+			}
+			if _, err := e.Reconcile(t.Context(), id); !errors.Is(err, ErrConflict) {
+				t.Fatalf("definitely unsent attempt should not need upstream reconciliation: %v", err)
+			}
+		})
+	}
+}
+
+func TestImplicitRejectSearchRequiresExactPreflightAuthority(t *testing.T) {
+	for _, authority := range []bool{false, true} {
+		s := &fixtureStore{intent: fixtureIntent()}
+		op := &s.intent.Proposal.Operation
+		op.Action = domain.ActionReject
+		op.Effects = []domain.Effect{{Kind: domain.EffectQueueRemoval}, {Kind: domain.EffectBlocklist}, {Kind: domain.EffectSourceRetained}, {Kind: domain.EffectSearchDispatch}}
+		calls := 0
+		e := executorFor(t, s, fixtureAdapter{Send: func(_ context.Context, op domain.Operation) (domain.Acknowledgement, error) {
+			calls++
+			if op.Action != domain.ActionReject {
+				t.Fatal("implicit search became an explicit dispatch")
+			}
+			return domain.Acknowledgement{State: domain.DispatchAcknowledged}, nil
+		}}, func(ctx context.Context, intent domain.Intent) (Preflight, error) {
+			proof, err := freshFacts(ctx, intent)
+			proof.ArrOwnsImplicitSearch = authority
+			return proof, err
+		})
+		_, err := e.Dispatch(t.Context(), s.intent.ID)
+		if (authority && (err != nil || calls != 1)) || (!authority && (!errors.Is(err, ErrHeld) || calls != 0)) {
+			t.Fatalf("authority %t, calls %d, error %v", authority, calls, err)
+		}
+	}
+}
+
+func TestPreflightEvidenceEnvelopeAllowsSeasonPacks(t *testing.T) {
+	intent := fixtureIntent()
+	proof, err := freshFacts(t.Context(), intent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < maxPreflightFacts-1; i++ {
+		proof.Evidence = append(proof.Evidence, domain.EvidenceID(fmt.Sprintf("pack-evidence-%d", i)))
+	}
+	if !eligible(intent.Proposal, proof, fixtureTime) {
+		t.Fatal("valid pack evidence within the bounded envelope was refused")
+	}
+	proof.Evidence = append(proof.Evidence, "too-many")
+	if eligible(intent.Proposal, proof, fixtureTime) {
+		t.Fatal("unbounded evidence was accepted")
+	}
+}
+
+func TestOperationRejectNeedsExactCompatibleEffects(t *testing.T) {
+	op := fixtureIntent().Proposal.Operation
+	op.Action = domain.ActionReject
+	base := []domain.Effect{{Kind: domain.EffectQueueRemoval}, {Kind: domain.EffectBlocklist}}
+	for _, effects := range [][]domain.Effect{
+		append(slices.Clone(base), domain.Effect{Kind: domain.EffectDataRemoval}),
+		append(slices.Clone(base), domain.Effect{Kind: domain.EffectClientRemoval}, domain.Effect{Kind: domain.EffectSourceRetained}),
+		{{Kind: domain.EffectSourceRetained}},
+	} {
+		op.Effects = effects
+		if validOperation(op) {
+			t.Fatalf("unexpected effect combination allowed: %+v", effects)
+		}
+	}
+	op.Effects = append(slices.Clone(base), domain.Effect{Kind: domain.EffectDataRemoval}, domain.Effect{Kind: domain.EffectClientRemoval})
+	if !validOperation(op) {
+		t.Fatal("complete reject-and-remove effect set refused")
 	}
 }
