@@ -82,7 +82,11 @@ jobs:
           $hosts = "$env:SystemRoot/System32/drivers/etc/hosts"
           $originalHosts = [IO.File]::ReadAllBytes($hosts)
           Write-Host 'Trusting the disposable metadata certificate'
-          $certificate = Import-Certificate -FilePath "$dir/tls/root.cer" -CertStoreLocation 'Cert:/CurrentUser/Root'
+          $certificate = [Security.Cryptography.X509Certificates.X509Certificate2]::new("$dir/tls/root.cer")
+          # The GitHub-hosted VM is disposable and runs this step as an administrator.
+          # Machine root import avoids a current-user trust confirmation dialog.
+          certutil.exe -f -addstore Root "$dir/tls/root.cer"
+          if ($LASTEXITCODE -ne 0) { throw 'Could not trust the disposable metadata certificate.' }
           try {
             Add-Content -LiteralPath $hosts -Value "`r`n127.0.0.1 skyhook.sonarr.tv" -Encoding ascii
             Clear-DnsClientCache
@@ -95,7 +99,7 @@ jobs:
           } finally {
             [IO.File]::WriteAllBytes($hosts, $originalHosts)
             Clear-DnsClientCache
-            Remove-Item -LiteralPath ("Cert:/CurrentUser/Root/" + $certificate.Thumbprint)
+            Remove-Item -LiteralPath ("Cert:/LocalMachine/Root/" + $certificate.Thumbprint)
           }
       - name: Attach sanitised Windows evidence
         if: always()
