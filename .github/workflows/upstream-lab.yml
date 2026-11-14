@@ -19,6 +19,7 @@ on:
           - sonarr/v5-id-import
           - sonarr/v5-empty-pack
           - sonarr/v5-adapter-pack
+          - sonarr/v5-language-pack
           - radarr/import
           - sonarr/reject-preserve
           - radarr/reject-preserve
@@ -88,7 +89,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        scenario: [v5-id-import, v5-empty-pack, v5-adapter-pack]
+        scenario: [v5-id-import, v5-empty-pack, v5-adapter-pack, v5-language-pack]
     steps:
       - name: Check out the exact source
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
