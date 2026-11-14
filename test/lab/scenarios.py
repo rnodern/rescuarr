@@ -9,7 +9,16 @@ import urllib.error
 from pathlib import Path
 from urllib.parse import urlencode
 
-from probe import SONARR_V5_ID_IMPORT, TARGETS as ARR_BUILDS, arr_key, call_json, get_json, sab_key, wait_for
+from probe import (
+    SONARR_V5_EMPTY_PACK,
+    SONARR_V5_ID_IMPORT,
+    TARGETS as ARR_BUILDS,
+    arr_key,
+    call_json,
+    get_json,
+    sab_key,
+    wait_for,
+)
 from source import ID_ONLY_PHASE, ID_ONLY_TARGET, SEED, SOURCE, SONARR_TITLE, TARGETS, TMDB_IDS, TVDB_ID, releases
 
 SAB = "http://sab:8080"
@@ -824,7 +833,11 @@ def run_scenarios(report, scenario):
         result["stage"] = "mediaSetup"
         targets = arr.media(profile["id"])
         result["stage"] = "exercise"
-        if scenario == SONARR_V5_ID_IMPORT:
+        if scenario == SONARR_V5_EMPTY_PACK:
+            # Import lazily to keep the specialised fixture out of other scenarios.
+            from empty_pack import empty_pack_replacement
+            empty_pack_replacement(arr, targets[0], targets[1], result)
+        elif scenario == SONARR_V5_ID_IMPORT:
             id_only_import(arr, targets[0], targets[1], result)
         elif case == "import":
             original_import(arr, targets[0], result)
@@ -833,7 +846,7 @@ def run_scenarios(report, scenario):
         else:
             reject_replace(arr, targets[0], targets[1], result, remove=case == "reject-remove",
                            lose_response=case == "reject-lost-response")
-        if case == "import" or terminal_case or scenario == SONARR_V5_ID_IMPORT:
+        if case == "import" or terminal_case or scenario in (SONARR_V5_ID_IMPORT, SONARR_V5_EMPTY_PACK):
             result.update(status="observed", stage="complete", qualification="awaitingIndependentReview")
         else:
             result.update(status="observed", stage="complete", qualification="terminalOriginalUnproven")

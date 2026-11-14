@@ -21,7 +21,7 @@ Run the offline checks with `python3 -B -m unittest discover -s test/lab -p 'tes
 
 ## Optional effect scenarios
 
-Pass one of `sonarr/import`, `radarr/import`, `sonarr/reject-preserve`, `radarr/reject-preserve`, `sonarr/reject-remove`, `radarr/reject-remove`, `sonarr/reject-lost-response`, `radarr/reject-lost-response`, `sonarr/replace-terminal` or `radarr/replace-terminal` as the second argument. The effect runner also requires OpenSSL and FFmpeg. It generates disposable certificates and a video from filters, serves controlled metadata, search results and articles on the closed network, and exports scoped evidence. GitHub pull requests run the read probes plus the isolated Sonarr 5 ID-only scenario as a separate job. Use the workflow dispatch input to run one effect scenario on an exact checked-out revision.
+Pass one of `sonarr/import`, `radarr/import`, `sonarr/reject-preserve`, `radarr/reject-preserve`, `sonarr/reject-remove`, `radarr/reject-remove`, `sonarr/reject-lost-response`, `radarr/reject-lost-response`, `sonarr/replace-terminal` or `radarr/replace-terminal` as the second argument. The effect runner also requires OpenSSL and FFmpeg. It generates disposable certificates and a video from filters, serves controlled metadata, search results and articles on the closed network, and exports scoped evidence. GitHub pull requests run the read probes and both isolated Sonarr 5 scenarios as separate jobs. Use the workflow dispatch input to run one effect scenario on an exact checked-out revision.
 
 The import scenario records whether the source was preserved as a separate result. The rejection scenarios exercise the Arr queue branch on a paused synthetic download. They do not establish terminal downloader failure, qualify automatic removal, or qualify the production replacement flow. A source-retaining trial can leave final import pending. Review each effect independently before drawing a capability conclusion.
 
@@ -32,6 +32,14 @@ Run `test/lab/run.sh /tmp/rescuarr-sonarr-v5-id.json sonarr/v5-id-import` for th
 An episode search grabs a synthetic release with an abbreviated series title and the exact TVDB ID. The scenario requires Sonarr's own grab history to report an ID match and its completed queue row to carry the series-ID import warning. Completed-download handling stays on so Sonarr publishes the completed row. Completed-file removal stays off. It checks the one staged file, submits the exact series, season and episode to native reprocessing, and checks the native rejections before sending one Copy import command.
 
 The evidence records the imported file ID, contents, matching history and disappearance of the exact queue row. It independently compares the original folder inventory and bytes, downloader state and the neighbouring episode before and after. The scenario exercises the upstream path in the lab. Runtime approval and effects in the Rescuarr application require their own evidence.
+
+### Sonarr 5 completed season pack with no eligible files
+
+Run `test/lab/run.sh /tmp/rescuarr-sonarr-v5-empty-pack.json sonarr/v5-empty-pack`, or dispatch the workflow with `-f scenario=sonarr/v5-empty-pack` on a ref containing this scenario. The PR job also runs on the exact PR head and uploads `sonarr-v5-empty-pack-evidence`.
+
+This scenario uses the pinned Sonarr 5 and SABnzbd Linux images. A native season search grabs a synthetic pack. The runner waits for SABnzbd to report the exact job completed, moves its single synthetic video out of the download folder and stages it under episode 2 in the disposable library. A native library rescan must link that file to episode 2 only. The runner then enables completed-download handling and requires Sonarr's no-eligible-files warning on every alias of the original pack.
+
+The runner applies one native queue removal with blocklisting, client retention and immediate redownload suppressed. It checks failed history for both aliases, one matching blocklist row, queue absence through refresh, unchanged SABnzbd history, unchanged empty folder and no implicit search. It then searches only for the still-missing episode 1 and verifies a distinct job imported into its file link while the existing episode 2 file stayed unchanged. The scenario contributes Linux upstream evidence when executed successfully. A Windows path, deployment wiring, all-covered behavior and active alternative queue jobs require separate verification.
 
 ### Terminal replacement
 

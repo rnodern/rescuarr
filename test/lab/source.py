@@ -22,6 +22,8 @@ TMDB_IDS = (92000001, 92000002)
 SONARR_TITLE = "Rescuarr Synthetic Series"
 ID_ONLY_PHASE = "series-id-original"
 ID_ONLY_TARGET = "episode1"
+EMPTY_PACK_TARGET = "season1"
+EMPTY_PACK_PHASE = "empty-pack-original"
 RADARR_TITLES = ("Rescuarr Synthetic Film", "Rescuarr Synthetic Sequel")
 NEWS_GROUP = "alt.binaries.rescuarr-lab"
 NEWS_DOMAIN = "rescuarr.invalid"
@@ -32,16 +34,18 @@ RELEASE_GROUPS = {
     "original": "LABORIGINAL",
     "terminal-original": "LABORIGINAL",
     ID_ONLY_PHASE: "LABIDMATCH",
+    EMPTY_PACK_PHASE: "LABEMPTYPACK",
     "replacement": "LABREPLACEMENT",
 }
 ARTICLE_ID = re.compile(
-    rb"<" + re.escape(SEED.encode("ascii")) + rb"\.(episode[12]|movie[12])\."
-    rb"(original|terminal-original|replacement|series-id-original)\.(\d{1,5})@" + re.escape(NEWS_DOMAIN.encode("ascii")) + rb">"
+    rb"<" + re.escape(SEED.encode("ascii")) + rb"\.(episode[12]|movie[12]|season1)\."
+    rb"(original|terminal-original|replacement|series-id-original|empty-pack-original)\.(\d{1,5})@" + re.escape(NEWS_DOMAIN.encode("ascii")) + rb">"
 )
 
 # Each target can select its release fixture through the lab control route.
 TARGETS = {
     "episode1": ("sonarr", f"{SONARR_TITLE.replace(' ', '.')}.S01E01", 5040),
+    EMPTY_PACK_TARGET: ("sonarr", f"{SONARR_TITLE.replace(' ', '.')}.S01", 5040),
     "episode2": ("sonarr", f"{SONARR_TITLE.replace(' ', '.')}.S01E02", 5040),
     "movie1": ("radarr", f"{RADARR_TITLES[0].replace(' ', '.')}.2020", 2040),
     "movie2": ("radarr", f"{RADARR_TITLES[1].replace(' ', '.')}.2020", 2040),
@@ -100,7 +104,9 @@ def movie_metadata(index):
 
 
 def valid_phase(target, phase):
-    return phase in RELEASE_GROUPS and (phase != ID_ONLY_PHASE or target == ID_ONLY_TARGET)
+    if target == EMPTY_PACK_TARGET or phase == EMPTY_PACK_PHASE:
+        return target == EMPTY_PACK_TARGET and phase == EMPTY_PACK_PHASE
+    return target in TARGETS and phase in RELEASE_GROUPS and (phase != ID_ONLY_PHASE or target == ID_ONLY_TARGET)
 
 
 def releases(target, phase):
@@ -121,8 +127,11 @@ def search_targets(product, query):
     if product == "sonarr" and kind == "tvsearch":
         if tvdb not in ("", str(TVDB_ID)) or (not tvdb and "rescuarrsyntheticseries" not in title):
             return []
-        if season in ("1", "01") and episode in ("1", "2"):
-            return [f"episode{episode}"]
+        if season in ("1", "01"):
+            if episode in ("1", "2"):
+                return [f"episode{episode}"]
+            if not episode:
+                return [EMPTY_PACK_TARGET]
     if product == "radarr" and kind in ("movie", "search"):
         for index, movie_id in enumerate(TMDB_IDS):
             if tmdb == str(movie_id) or (not tmdb and re.sub("[^a-z]", "", RADARR_TITLES[index].lower()) in title):
@@ -305,7 +314,7 @@ class Source(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urlsplit(self.path).path
-        match = re.fullmatch(r"/lab/feed/(episode[12]|movie[12])/([a-z-]+)", path)
+        match = re.fullmatch(r"/lab/feed/(episode[12]|movie[12]|season1)/([a-z-]+)", path)
         if not match or not valid_phase(*match.groups()):
             self.send_error(404)
             return
@@ -346,7 +355,7 @@ class Source(BaseHTTPRequestHandler):
             ])
         elif path == "/lab/media":
             self.write(self.server.media_fingerprint)
-        elif (match := re.fullmatch(r"/nzb/(episode[12]|movie[12])/([a-z-]+)", path)) and valid_phase(*match.groups()):
+        elif (match := re.fullmatch(r"/nzb/(episode[12]|movie[12]|season1)/([a-z-]+)", path)) and valid_phase(*match.groups()):
             self.write(nzb(*match.groups(), self.server.media), ENCLOSURE_TYPE)
         else:
             self.send_error(404)
@@ -365,6 +374,8 @@ class Source(BaseHTTPRequestHandler):
                                              "episode": query.get("ep", [""])[0]})
                 for target in scope:
                     phase = self.server.phases.get(target, "original")
+                    if not valid_phase(target, phase):
+                        continue
                     stamp = self.server.started - (60 if phase == "replacement" else 3600)
                     items.append((target, phase, stamp))
             # Validation needs a parseable recent item. It remains outside the
