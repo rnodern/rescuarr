@@ -163,7 +163,7 @@ def main():
     targets = dict(TARGETS)
     if scenario == [SONARR_V5_ID_IMPORT]:
         port, _, unknown_flag = targets["sonarr"]
-        targets["sonarr"] = (port, SONARR_V5_VERSION, unknown_flag)
+        targets = {"sonarr": (port, SONARR_V5_VERSION, unknown_flag)}
     observers = {
         product: lambda product=product, args=args: arr_snapshot(product, *args)
         for product, args in targets.items()

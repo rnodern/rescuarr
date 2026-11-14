@@ -53,24 +53,33 @@ if [[ -n "$scenario" ]]; then
   bash "$lab_dir/seed.sh" "$run_dir" >&2
   export RESCUARR_LAB_RUN_DIR="$run_dir"
   compose+=(--file "$lab_dir/compose.scenarios.yaml")
-  services+=(source)
   if [[ "$scenario" == "sonarr/v5-id-import" ]]; then
     compose+=(--file "$lab_dir/compose.sonarr-v5.yaml")
+    services=(sonarr sab)
   fi
   scenario_args+=("$scenario")
 fi
-images="$("${compose[@]}" config --images)"
-for delay in 3 12 0; do
-  if "${compose[@]}" pull >"$run_dir/pull.log" 2>&1; then
+# The source fixture uses the probe's pinned image. Pull it once. Fetch each
+# required image separately so throttling one registry cannot interrupt others.
+pull_services=(probe "${services[@]}")
+images="$("${compose[@]}" config --images "${pull_services[@]}")"
+for service in "${pull_services[@]}"; do
+  for delay in 5 20 45 0; do
+    if "${compose[@]}" pull --policy missing "$service" >"$run_dir/pull.log" 2>&1; then
+      cat "$run_dir/pull.log" >&2
+      break
+    fi
     cat "$run_dir/pull.log" >&2
-    break
-  fi
-  cat "$run_dir/pull.log" >&2
-  if [[ "$delay" == 0 ]] || ! grep -qiE 'toomanyrequests|too many requests' "$run_dir/pull.log"; then
-    exit 1
-  fi
-  sleep "$delay"
+    if [[ "$delay" == 0 ]] || ! grep -qiE 'toomanyrequests|too many requests' "$run_dir/pull.log"; then
+      exit 1
+    fi
+    printf 'Registry throttled the %s image. Retrying in %s seconds.\n' "$service" "$delay" >&2
+    sleep "$delay"
+  done
 done
-"${compose[@]}" up -d --no-build "${services[@]}" >&2
+if [[ -n "$scenario" ]]; then
+  services+=(source)
+fi
+"${compose[@]}" up -d --no-build --pull never "${services[@]}" >&2
 (set -o noclobber
- "${compose[@]}" run --rm --no-deps -T probe python -B probe.py "$source_sha" "$images" ${scenario_args[@]+"${scenario_args[@]}"} > "$1")
+ "${compose[@]}" run --rm --no-deps --pull never -T probe python -B probe.py "$source_sha" "$images" ${scenario_args[@]+"${scenario_args[@]}"} > "$1")

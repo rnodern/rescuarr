@@ -44,6 +44,8 @@ class SonarrV5LabTest(unittest.TestCase):
             ), patch("scenarios.run_scenarios", return_value=True) as run:
                 self.assertEqual(probe.main(), 0)
                 snapshot.assert_any_call("sonarr", 8989, version, "includeUnknownSeriesItems")
+                self.assertEqual([call.args[0] for call in snapshot.call_args_list],
+                                 ["sonarr"] if scenario == probe.SONARR_V5_ID_IMPORT else ["sonarr", "radarr"])
                 self.assertEqual(run.call_args.args[1], scenario)
                 self.assertEqual(json.loads(output.getvalue())["sourceSHA"], "fixture-sha")
 

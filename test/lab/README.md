@@ -27,7 +27,7 @@ The import scenario records whether the source was preserved as a separate resul
 
 ### Sonarr 5 series-ID import
 
-Run `test/lab/run.sh /tmp/rescuarr-sonarr-v5-id.json sonarr/v5-id-import` for the isolated [Sonarr 5.0.0.2941 prerelease](https://github.com/Sonarr/Sonarr/releases/tag/v5.0.0.2941) image. The other scenarios keep the Sonarr 4 pin.
+Run `test/lab/run.sh /tmp/rescuarr-sonarr-v5-id.json sonarr/v5-id-import` for the isolated [Sonarr 5.0.0.2941 prerelease](https://github.com/Sonarr/Sonarr/releases/tag/v5.0.0.2941) image with SABnzbd. The other scenarios keep the Sonarr 4 pin.
 
 An episode search grabs a synthetic release with an abbreviated series title and the exact TVDB ID. The scenario requires Sonarr's own grab history to report an ID match and its completed queue row to carry the series-ID import warning. Completed-download handling stays on so Sonarr publishes the completed row. Completed-file removal stays off. It checks the one staged file, submits the exact series, season and episode to native reprocessing, and checks the native rejections before sending one Copy import command.
 
