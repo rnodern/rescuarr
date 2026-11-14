@@ -40,7 +40,14 @@ func TestConsoleSetupAuthenticationAndCSRF(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler := ConsoleHandler(cfg, auth, local)
+	browser := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		session := CurrentBrowserSession(r)
+		if session.Actor != access.Owner || session.Origin != browserURL || session.CSRF == "" {
+			t.Errorf("incorrect browser session: %v", session.Actor)
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+	handler := ConsoleHandler(cfg, auth, local, browser)
 
 	request := func(method, path, origin string, form url.Values, cookies ...*http.Cookie) *httptest.ResponseRecorder {
 		t.Helper()
@@ -96,6 +103,9 @@ func TestConsoleSetupAuthenticationAndCSRF(t *testing.T) {
 		t.Fatalf("incorrect session attributes: %+v", owner)
 	}
 	status(request(http.MethodGet, "/tools/", "", nil, owner), http.StatusOK)
+	status(request(http.MethodGet, "/tools/cases", "", nil, owner), http.StatusOK)
+	status(request(http.MethodGet, "/tools/fragments/status", "", nil), http.StatusUnauthorized)
+	status(request(http.MethodPost, "/tools/cases/example/actions", browserURL, nil), http.StatusUnauthorized)
 	status(request(http.MethodGet, "/tools/", "", nil), http.StatusSeeOther)
 	status(request(http.MethodPost, "/tools/logout", browserURL, nil), http.StatusUnauthorized)
 	status(request(http.MethodPost, "/tools/logout", browserURL, url.Values{"csrf": {access.BrowserToken()}}, owner), http.StatusForbidden)

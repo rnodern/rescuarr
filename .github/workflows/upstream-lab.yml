@@ -37,6 +37,13 @@ jobs:
           persist-credentials: false
       - name: Check offline fixtures
         run: python3 -B -m unittest discover -s test/lab -p 'test_*.py'
+      - name: Install synthetic media tools
+        if: github.event_name == 'workflow_dispatch' && inputs.scenario != 'reads'
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y --no-install-recommends ffmpeg openssl
+          ffmpeg -version
+          openssl version
       - name: Run isolated upstream lab
         env:
           RESCUARR_SCENARIO: ${{ inputs.scenario || 'reads' }}
