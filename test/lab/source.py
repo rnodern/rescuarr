@@ -24,6 +24,7 @@ ID_ONLY_PHASE = "series-id-original"
 ID_ONLY_TARGET = "episode1"
 EMPTY_PACK_TARGET = "season1"
 EMPTY_PACK_PHASE = "empty-pack-original"
+LANGUAGE_PACK_PHASE = "language-pack-original"
 RADARR_TITLES = ("Rescuarr Synthetic Film", "Rescuarr Synthetic Sequel")
 NEWS_GROUP = "alt.binaries.rescuarr-lab"
 NEWS_DOMAIN = "rescuarr.invalid"
@@ -35,11 +36,13 @@ RELEASE_GROUPS = {
     "terminal-original": "LABORIGINAL",
     ID_ONLY_PHASE: "LABIDMATCH",
     EMPTY_PACK_PHASE: "LABEMPTYPACK",
+    LANGUAGE_PACK_PHASE: "LABLANGUAGEPACK",
     "replacement": "LABREPLACEMENT",
 }
 ARTICLE_ID = re.compile(
     rb"<" + re.escape(SEED.encode("ascii")) + rb"\.(episode[12]|movie[12]|season1)\."
-    rb"(original|terminal-original|replacement|series-id-original|empty-pack-original)\.(\d{1,5})@" + re.escape(NEWS_DOMAIN.encode("ascii")) + rb">"
+    rb"(original|terminal-original|replacement|series-id-original|empty-pack-original|language-pack-original)"
+    rb"\.(\d{1,5})@" + re.escape(NEWS_DOMAIN.encode("ascii")) + rb">"
 )
 
 # Each target can select its release fixture through the lab control route.
@@ -104,8 +107,9 @@ def movie_metadata(index):
 
 
 def valid_phase(target, phase):
-    if target == EMPTY_PACK_TARGET or phase == EMPTY_PACK_PHASE:
-        return target == EMPTY_PACK_TARGET and phase == EMPTY_PACK_PHASE
+    pack_phases = (EMPTY_PACK_PHASE, LANGUAGE_PACK_PHASE)
+    if target == EMPTY_PACK_TARGET or phase in pack_phases:
+        return target == EMPTY_PACK_TARGET and phase in pack_phases
     return target in TARGETS and phase in RELEASE_GROUPS and (phase != ID_ONLY_PHASE or target == ID_ONLY_TARGET)
 
 
@@ -153,7 +157,7 @@ def recent_index_targets(product, query):
     return [sample]
 
 
-def rss(items, product, size, origin=SOURCE):
+def rss(items, product, size, origin=SOURCE, *, language_pack_size=0):
     root = ET.Element("rss", version="2.0", attrib={"xmlns:newznab": NEWZNAB_NS})
     channel = ET.SubElement(root, "channel")
     ET.SubElement(channel, "title").text = "Rescuarr synthetic indexer"
@@ -161,6 +165,7 @@ def rss(items, product, size, origin=SOURCE):
     ET.SubElement(channel, "description").text = "Disposable test releases"
     ET.SubElement(channel, "newznab:response", offset="0", total=str(len(items)))
     for target, phase, timestamp in items:
+        item_size = language_pack_size if phase == LANGUAGE_PACK_PHASE else size
         url = f"{origin}/nzb/{target}/{phase}"
         item = ET.SubElement(channel, "item")
         ET.SubElement(item, "title").text = releases(target, phase)
@@ -168,8 +173,8 @@ def rss(items, product, size, origin=SOURCE):
         ET.SubElement(item, "link").text = url
         ET.SubElement(item, "comments").text = url
         ET.SubElement(item, "pubDate").text = email.utils.formatdate(timestamp, usegmt=True)
-        ET.SubElement(item, "enclosure", url=url, length=str(size), type=ENCLOSURE_TYPE)
-        attributes = {"category": str(TARGETS[target][2]), "size": str(size)}
+        ET.SubElement(item, "enclosure", url=url, length=str(item_size), type=ENCLOSURE_TYPE)
+        attributes = {"category": str(TARGETS[target][2]), "size": str(item_size)}
         if product == "sonarr":
             attributes["tvdbid"] = str(TVDB_ID)
         else:
@@ -183,17 +188,25 @@ def article_id(target, phase, number):
     return f"{SEED}.{target}.{phase}.{number}@{NEWS_DOMAIN}"
 
 
-def nzb(target, phase, media):
-    name = releases(target, phase) + ".mkv"
+def article_filename(target, phase):
+    if phase == LANGUAGE_PACK_PHASE:
+        return f"{TARGETS[target][1]}.720p.WEB-DL.x264-{RELEASE_GROUPS[phase]}.mkv"
+    return releases(target, phase) + ".mkv"
+
+
+def nzb(target, phase, media, *, hebrew=None):
     root = ET.Element("nzb", xmlns="http://www.newzbin.com/DTD/2003/nzb")
     date = str(int(datetime.now(timezone.utc).timestamp()))
-    file = ET.SubElement(root, "file", poster=f"Rescuarr <lab@{NEWS_DOMAIN}>", date=date,
-                         subject=f'"{name}" yEnc')
-    ET.SubElement(ET.SubElement(file, "groups"), "group").text = NEWS_GROUP
-    segments = ET.SubElement(file, "segments")
-    for number, offset in enumerate(range(0, len(media), SEGMENT_BYTES), 1):
-        ET.SubElement(segments, "segment", bytes=str(len(media[offset:offset + SEGMENT_BYTES])),
-                      number=str(number)).text = article_id(target, phase, number)
+    files = (("episode1", hebrew), ("episode2", media)) if phase == LANGUAGE_PACK_PHASE else ((target, media),)
+    for file_target, data in files:
+        name = article_filename(file_target, phase)
+        file = ET.SubElement(root, "file", poster=f"Rescuarr <lab@{NEWS_DOMAIN}>", date=date,
+                             subject=f'"{name}" yEnc')
+        ET.SubElement(ET.SubElement(file, "groups"), "group").text = NEWS_GROUP
+        segments = ET.SubElement(file, "segments")
+        for number, offset in enumerate(range(0, len(data), SEGMENT_BYTES), 1):
+            ET.SubElement(segments, "segment", bytes=str(len(data[offset:offset + SEGMENT_BYTES])),
+                          number=str(number)).text = article_id(file_target, phase, number)
     return ET.tostring(root, encoding="utf-8", xml_declaration=True)
 
 
@@ -217,7 +230,7 @@ def news_article(target, phase, number, media):
     piece = media[offset:offset + SEGMENT_BYTES]
     if number < 1 or not piece:
         return None
-    name = releases(target, phase) + ".mkv"
+    name = article_filename(target, phase)
     parts = (len(media) + SEGMENT_BYTES - 1) // SEGMENT_BYTES
     crc = f"{binascii.crc32(piece):08x}"
     total_crc = f" crc32={binascii.crc32(media):08x}" if number == parts else ""
@@ -265,11 +278,18 @@ class News(socketserver.StreamRequestHandler):
             self.line(b"430 No such synthetic article")
             return
         target, phase, number = (value.decode("ascii") for value in match.groups())
-        if not valid_phase(target, phase):
+        if phase == LANGUAGE_PACK_PHASE:
+            if target not in ("episode1", "episode2") or self.server.hebrew is None:
+                self.line(b"430 No such synthetic article")
+                return
+            media = self.server.hebrew if target == "episode1" else self.server.media
+        elif valid_phase(target, phase):
+            media = self.server.media
+        else:
             self.line(b"430 No such synthetic article")
             return
         number = int(number)
-        article = news_article(target, phase, number, self.server.media)
+        article = news_article(target, phase, number, media)
         if article is None:
             self.line(b"430 No such synthetic article")
         elif phase == "terminal-original":
@@ -315,7 +335,7 @@ class Source(BaseHTTPRequestHandler):
     def do_POST(self):
         path = urlsplit(self.path).path
         match = re.fullmatch(r"/lab/feed/(episode[12]|movie[12]|season1)/([a-z-]+)", path)
-        if not match or not valid_phase(*match.groups()):
+        if not match or not valid_phase(*match.groups()) or (match[2] == LANGUAGE_PACK_PHASE and self.server.hebrew is None):
             self.send_error(404)
             return
         target, phase = match.groups()
@@ -355,8 +375,13 @@ class Source(BaseHTTPRequestHandler):
             ])
         elif path == "/lab/media":
             self.write(self.server.media_fingerprint)
+        elif path == "/lab/media/hebrew" and self.server.hebrew is not None:
+            self.write(media_fingerprint(self.server.hebrew))
         elif (match := re.fullmatch(r"/nzb/(episode[12]|movie[12]|season1)/([a-z-]+)", path)) and valid_phase(*match.groups()):
-            self.write(nzb(*match.groups(), self.server.media), ENCLOSURE_TYPE)
+            if match[2] == LANGUAGE_PACK_PHASE and self.server.hebrew is None:
+                self.send_error(404)
+                return
+            self.write(nzb(*match.groups(), self.server.media, hebrew=self.server.hebrew), ENCLOSURE_TYPE)
         else:
             self.send_error(404)
 
@@ -383,7 +408,8 @@ class Source(BaseHTTPRequestHandler):
             if not items:
                 items.extend((target, "original", self.server.started - 3600)
                              for target in recent_index_targets(product, query))
-        self.write(rss(items, product, len(self.server.media), self.server.index_origin), "application/rss+xml")
+        self.write(rss(items, product, len(self.server.media), self.server.index_origin,
+                       language_pack_size=len(self.server.media) + len(self.server.hebrew or b"")), "application/rss+xml")
 
 
 class NNTPServer(socketserver.ThreadingTCPServer):
@@ -391,8 +417,14 @@ class NNTPServer(socketserver.ThreadingTCPServer):
     daemon_threads = True
 
 
+def media_fingerprint(media):
+    return {"bytes": len(media), "sha256": hashlib.sha256(media).hexdigest()}
+
+
 def serve(media_path, cert, key, *, bind="0.0.0.0", index_origin=SOURCE):
     media = media_path.read_bytes()
+    hebrew_path = media_path.with_name("synthetic-hebrew.mkv")
+    hebrew = hebrew_path.read_bytes() if hebrew_path.is_file() else None
     plain = ThreadingHTTPServer((bind, 8081), Source)
     secure = ThreadingHTTPServer((bind, 443), Source)
     news = NNTPServer((bind, 8119), News)
@@ -400,7 +432,6 @@ def serve(media_path, cert, key, *, bind="0.0.0.0", index_origin=SOURCE):
     lock = threading.Lock()
     phases, searches = {}, []
     missing_articles = {target: set() for target in TARGETS}
-    media_fingerprint = {"bytes": len(media), "sha256": hashlib.sha256(media).hexdigest()}
     metadata = {"sonarrSeries": 0, "radarrMovie": 0, "unmatchedMetadata": 0}
     started = datetime.now(timezone.utc).timestamp()
     for server in (plain, secure):
@@ -409,13 +440,15 @@ def serve(media_path, cert, key, *, bind="0.0.0.0", index_origin=SOURCE):
         server.searches = searches
         server.metadata = metadata
         server.media = media
+        server.hebrew = hebrew
         server.index_origin = index_origin
-        server.media_fingerprint = media_fingerprint
+        server.media_fingerprint = media_fingerprint(media)
         server.missing_articles = missing_articles
         server.started = started
     news.lock = lock
     news.missing_articles = missing_articles
     news.media = media
+    news.hebrew = hebrew
     tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     tls.load_cert_chain(cert, key)
     secure.socket = tls.wrap_socket(secure.socket, server_side=True)
