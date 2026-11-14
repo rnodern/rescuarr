@@ -72,6 +72,16 @@ def exact_deletion(arr, episode, file, before_ids):
     return {**projection(event, SOURCE_KEYS), "reason": "Manual"}
 
 
+def pack_storage(path, title):
+    reported = safe_download_path(path)
+    if reported.name == title:
+        return reported
+    expected_files = {article_filename(target, LANGUAGE_PACK_PHASE) for target in ("episode1", "episode2")}
+    # Completed handling may already have moved the file into the library.
+    verify(reported.parent.name == title and reported.name in expected_files, "languagePackSABPathMismatch")
+    return reported.parent
+
+
 def language_pack_replacement(arr, wrong, retained, report):
     series_id = wrong["seriesId"]
     wrong_id, retained_id = wrong["id"], retained["id"]
@@ -101,8 +111,7 @@ def language_pack_replacement(arr, wrong, retained, report):
                           "grabs": [projection(row, SOURCE_KEYS) for row in grabs]}
     job = poll(lambda: completed_job(download_id), "languagePackSABCompletionMissing", timeout=150)
     verify(job.get("category") == CATEGORY["sonarr"] and job.get("name") == title, "languagePackSABScopeMismatch")
-    output = safe_download_path(job["storage"])
-    verify(output.name == title, "languagePackSABPathMismatch")
+    output = pack_storage(job["storage"], title)
     source = {episode_id: output / article_filename(target, LANGUAGE_PACK_PHASE)
               for episode_id, target in ((wrong_id, "episode1"), (retained_id, "episode2"))}
     arr.refresh()

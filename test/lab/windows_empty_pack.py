@@ -1,4 +1,4 @@
-"""Run the empty-pack lab with native disposable Windows Sonarr and SABnzbd."""
+"""Run recovery scenarios with native disposable Windows Sonarr and SABnzbd."""
 import argparse
 import hashlib
 import json
@@ -16,6 +16,7 @@ from unittest.mock import patch
 from xml.etree import ElementTree as ET
 
 import empty_pack
+import language_pack
 import scenarios
 from empty_pack import empty_pack_replacement, run_go_adapter
 from probe import SAB_VERSION, SONARR_V5_VERSION, get_json
@@ -25,6 +26,7 @@ SONARR = "http://127.0.0.1:18989"
 SAB = "http://127.1.1.1:18080"
 SOURCE = "http://127.0.0.1:8081"
 CASE = "sonarr/windows-v5-adapter-pack"
+LANGUAGE_CASE = "sonarr/windows-v5-language-pack"
 
 
 def stage(result, name):
@@ -72,6 +74,8 @@ def exercise(args, result):
     result["binaries"] = {}
     for name in ("sonarr", "sab", "adapter"):
         executable = getattr(args, name)
+        if executable is None:
+            continue
         with executable.open("rb") as handle:
             result["binaries"][name] = {"file": executable.name, "sha256": hashlib.file_digest(handle, "sha256").hexdigest()}
     with ExitStack() as stack:
@@ -87,11 +91,11 @@ def exercise(args, result):
             f"download_dir = {downloads / 'incomplete'}\ncomplete_dir = {downloads / 'complete'}\n"
             "permissions = \napi_warnings = 0\n", encoding="utf-8",
         )
-        adapter = partial(run_go_adapter, executable=args.adapter)
         for key, value in {"SAB": SAB, "SOURCE": SOURCE, "LIBRARY": library, "DOWNLOADS": downloads,
                            "sab_key": lambda: sab_key}.items():
             stack.enter_context(patch.object(scenarios, key, value))
         stack.enter_context(patch.object(empty_pack, "SOURCE", SOURCE))
+        stack.enter_context(patch.object(language_pack, "SOURCE", SOURCE))
 
         stage(result, "sourceStartup")
         fixture = start(stack, [sys.executable, "-B", __file__, "--fixture",
@@ -123,14 +127,18 @@ def exercise(args, result):
                             "docker": False, "emptyAtStartup": True}
 
         stage(result, "arrSetup")
-        profile = arr.setup()
+        profile = arr.setup(completed_handling=args.language_pack)
         result["settings"] = {"profileId": profile["id"], "cutoff": profile["cutoff"],
-                              "completedHandling": False, "removeCompletedDownloads": False,
+                              "completedHandling": args.language_pack, "removeCompletedDownloads": False,
                               "removeFailedDownloads": False, "automaticRedownloadFailed": True}
         stage(result, "mediaSetup")
         episodes = arr.media(profile["id"])
         stage(result, "exercise")
-        empty_pack_replacement(arr, episodes[0], episodes[1], result, adapter=adapter)
+        if args.language_pack:
+            language_pack.language_pack_replacement(arr, episodes[0], episodes[1], result)
+        else:
+            adapter = partial(run_go_adapter, executable=args.adapter)
+            empty_pack_replacement(arr, episodes[0], episodes[1], result, adapter=adapter)
         result["fixtureMetadata"] = get_json(SOURCE, "/lab/metadata")
         stage(result, "cleanup")
     result.update(status="observed", stage="complete", qualification="awaitingIndependentReview")
@@ -141,17 +149,21 @@ def main():
         serve(Path(sys.argv[2]), sys.argv[3], sys.argv[4], bind="127.0.0.1", index_origin=SOURCE)
         return 0
     parser = argparse.ArgumentParser(description=__doc__)
-    for arg in ("sonarr", "sab", "adapter", "media", "certificate", "key", "report"):
+    for arg in ("sonarr", "sab", "media", "certificate", "key", "report"):
         parser.add_argument(f"--{arg}", type=Path, required=True)
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--adapter", type=Path)
+    mode.add_argument("--language-pack", action="store_true")
     args = parser.parse_args()
-    for attr in vars(args):
-        setattr(args, attr, getattr(args, attr).resolve())
+    for attr, value in vars(args).items():
+        if isinstance(value, Path):
+            setattr(args, attr, value.resolve())
 
     result = {"status": "failed", "evidenceClass": "labObservation", "protocol": "usenet", "stage": "startup"}
     report = {"sourceSHA": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
               "measuredAt": datetime.now(timezone.utc).isoformat(), "fixtureSeed": SEED,
               "platform": {"system": platform.system(), "release": platform.release(), "arch": platform.machine()},
-              "scenarios": {CASE: result}}
+              "scenarios": {LANGUAGE_CASE if args.language_pack else CASE: result}}
     try:
         exercise(args, result)
     except scenarios.LabFailure as failure:
