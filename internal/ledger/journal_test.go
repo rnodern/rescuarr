@@ -4,13 +4,16 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/rnodern/rescuarr/internal/app"
 	"github.com/rnodern/rescuarr/internal/domain"
+	"github.com/rnodern/rescuarr/internal/prowloutbox"
 	"github.com/rnodern/rescuarr/internal/store"
 )
 
@@ -525,4 +528,51 @@ func TestPreparedDispatchUsesDurablePrivateSnapshot(t *testing.T) {
 	if err != nil || lease.Attempt.Prepared == nil || lease.Attempt.Prepared.Import.Files[0].Path != selector {
 		t.Fatalf("private selector unavailable after reopening: %v", err)
 	}
+}
+
+func TestVerifiedJournalOutcomeEnqueuesNotificationOnce(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "state")
+	local, _ := openJournal(t, dir, fixtureAuthorize)
+	setFixtureMode(t, local)
+	outbox := prowloutbox.New(local, app.FixedClock{At: fixtureTime}, nil, false)
+	if err := os.Mkdir(filepath.Join(dir, "secrets"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "secrets", "fixture"), []byte(strings.Repeat("a", 40)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	route, err := outbox.Configure(t.Context(), prowloutbox.ConfigureRoute{KeyRef: "fixture", Actor: "owner",
+		Route: prowloutbox.Route{Enabled: true, Categories: prowloutbox.Recovery}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal, err := NewJournal(local, fixtureAuthorize, outbox.Append)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent := authorisedFixture(t, journal, fixtureApproval(), fixtureTime)
+	_, send := beginFixture(t, journal, intent)
+	if err := journal.RecordDispatch(t.Context(), send, domain.Acknowledgement{State: domain.DispatchAcknowledged}, fixtureTime); err != nil {
+		t.Fatal(err)
+	}
+	lease, err := journal.BeginReconcile(t.Context(), send.Attempt.ID, fixtureTime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outcome := domain.Outcome{AttemptID: send.Attempt.ID, ObservedAt: fixtureTime}
+	for _, effect := range send.Attempt.Operation.Effects {
+		outcome.Effects = append(outcome.Effects, domain.EffectResult{Effect: effect,
+			Verification: domain.VerificationEffect, Evidence: []domain.EvidenceID{"fixture-readback"}})
+	}
+	if committed, err := journal.RecordOutcome(t.Context(), lease, outcome); err != nil || committed.Verification != domain.VerificationEffect {
+		t.Fatalf("verification did not commit: %v", err)
+	}
+	if _, err := journal.RecordOutcome(t.Context(), lease, outcome); !errors.Is(err, ErrConflict) {
+		t.Fatalf("completed outcome replay did not conflict: %v", err)
+	}
+	deliveries, err := outbox.Recent(t.Context(), route.ID, 8)
+	if err != nil || len(deliveries) != 1 || deliveries[0].State != domain.OutboxPending || deliveries[0].Category != "recovery" {
+		t.Fatalf("expected one durable notification, found %v: %v", deliveries, err)
+	}
+	assertActionAudit(t, local, "recovery_verified", 1)
 }

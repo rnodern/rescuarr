@@ -24,7 +24,7 @@ type reviewView struct {
 func (c console) review(w http.ResponseWriter, r *http.Request) {
 	id, proposalID := r.PathValue("caseID"), r.PathValue("proposalID")
 	if !localID(id) || !localID(proposalID) {
-		c.readError(w, app.ErrNotFound)
+		c.readError(w, r, app.ErrNotFound)
 		return
 	}
 	status, ok := c.loadStatus(w, r)
@@ -33,7 +33,7 @@ func (c console) review(w http.ResponseWriter, r *http.Request) {
 	}
 	detail, err := c.Read.Case(r.Context(), domain.CaseID(id))
 	if err != nil {
-		c.readError(w, err)
+		c.readError(w, r, err)
 		return
 	}
 	for _, proposal := range detail.Proposals {
@@ -47,10 +47,10 @@ func (c console) review(w http.ResponseWriter, r *http.Request) {
 			nonce := rand.Text()
 			content.RequestKey = nonce + "." + c.signedRequest(session, nonce, id, proposalID, strconv.FormatUint(uint64(proposal.CaseRevision), 10))
 		}
-		c.render(w, http.StatusOK, "review", page{Title: "Review " + actionLabel(proposal.Operation.Action), Active: "cases", Status: status, Body: content})
+		c.render(w, r, http.StatusOK, "review", page{Title: "Review " + actionLabel(proposal.Operation.Action), Active: "cases", Status: status, Body: content})
 		return
 	}
-	c.readError(w, app.ErrNotFound)
+	c.readError(w, r, app.ErrNotFound)
 }
 
 func (c console) approvalHold(status app.Overview, current domain.Case, proposal domain.Proposal) string {
@@ -91,26 +91,26 @@ func (c console) approvalHold(status app.Overview, current domain.Case, proposal
 func (c console) approve(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("caseID")
 	if !localID(id) {
-		c.readError(w, app.ErrNotFound)
+		c.readError(w, r, app.ErrNotFound)
 		return
 	}
 	session := currentSession(r)
 	if !sameOrigin(r, session.Origin) {
-		c.errorPage(w, http.StatusForbidden, "cases", "Request origin rejected", "Submit the approval from the console review page.")
+		c.errorPage(w, r, http.StatusForbidden, "cases", "Request origin rejected", "Submit the approval from the console review page.")
 		return
 	}
 	media, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	if err != nil || media != "application/x-www-form-urlencoded" {
-		c.errorPage(w, http.StatusBadRequest, "cases", "Invalid approval form", "Open the proposal and submit the review form again.")
+		c.errorPage(w, r, http.StatusBadRequest, "cases", "Invalid approval form", "Open the proposal and submit the review form again.")
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, 4096)
 	if err := r.ParseForm(); err != nil {
-		c.errorPage(w, http.StatusBadRequest, "cases", "Invalid approval form", "Open the proposal and submit the review form again.")
+		c.errorPage(w, r, http.StatusBadRequest, "cases", "Invalid approval form", "Open the proposal and submit the review form again.")
 		return
 	}
 	if !oneValue(r.PostForm, "csrf") || !equalSecret(r.PostForm.Get("csrf"), session.CSRF) {
-		c.errorPage(w, http.StatusForbidden, "cases", "Approval token rejected", "Sign in and reopen the review before approving.")
+		c.errorPage(w, r, http.StatusForbidden, "cases", "Approval token rejected", "Sign in and reopen the review before approving.")
 		return
 	}
 	proposal, revision, key := r.PostForm.Get("proposal_id"), r.PostForm.Get("revision"), r.PostForm.Get("request_key")
@@ -119,11 +119,11 @@ func (c console) approve(w http.ResponseWriter, r *http.Request) {
 	if len(r.PostForm) != 4 || !oneValue(r.PostForm, "proposal_id") || !oneValue(r.PostForm, "revision") ||
 		!oneValue(r.PostForm, "request_key") || !localID(proposal) || err != nil || value == 0 ||
 		!signed || !localID(nonce) || !equalSecret(signature, c.signedRequest(session, nonce, id, proposal, revision)) {
-		c.errorPage(w, http.StatusBadRequest, "cases", "Invalid approval form", "Open the proposal and submit the review form again.")
+		c.errorPage(w, r, http.StatusBadRequest, "cases", "Invalid approval form", "Open the proposal and submit the review form again.")
 		return
 	}
 	if c.Commands == nil {
-		c.errorPage(w, http.StatusServiceUnavailable, "cases", "Actions are unavailable", "This console has read-only access to recovery actions.")
+		c.errorPage(w, r, http.StatusServiceUnavailable, "cases", "Actions are unavailable", "This console has read-only access to recovery actions.")
 		return
 	}
 	intent, err := c.Commands.Approve(r.Context(), app.ApproveProposal{
@@ -132,17 +132,17 @@ func (c console) approve(w http.ResponseWriter, r *http.Request) {
 	})
 	switch {
 	case errors.Is(err, app.ErrConflict):
-		c.render(w, http.StatusConflict, "approval-error", page{
+		c.render(w, r, http.StatusConflict, "approval-error", page{
 			Title: "This proposal changed", Active: "cases", Body: id,
 		})
 	case errors.Is(err, app.ErrHeld):
-		c.render(w, http.StatusConflict, "approval-error", page{
+		c.render(w, r, http.StatusConflict, "approval-error", page{
 			Title: "The current policy is holding this action", Active: "cases", Body: id,
 		})
 	case err != nil:
-		c.readError(w, err)
+		c.readError(w, r, err)
 	case !localID(string(intent.ID)):
-		c.readError(w, errors.New("invalid local intent identity"))
+		c.readError(w, r, errors.New("invalid local intent identity"))
 	default:
 		http.Redirect(w, r, c.BasePath+"/actions/"+string(intent.ID), http.StatusSeeOther)
 	}

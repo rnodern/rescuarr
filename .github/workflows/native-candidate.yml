@@ -1,0 +1,56 @@
+name: Native candidate
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: ${{ matrix.os }}/${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {os: linux, arch: amd64, runner: ubuntu-24.04}
+          - {os: linux, arch: arm64, runner: ubuntu-24.04-arm}
+          - {os: darwin, arch: amd64, runner: macos-15-intel}
+          - {os: darwin, arch: arm64, runner: macos-15}
+          - {os: windows, arch: amd64, runner: windows-2025}
+          - {os: windows, arch: arm64, runner: windows-11-arm}
+    env:
+      GOTOOLCHAIN: local
+      CANDIDATE_VERSION: candidate
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13'
+      - name: Build, archive and run the extracted binary
+        run: python scripts/packaging/native.py --os ${{ matrix.os }} --arch ${{ matrix.arch }} --version "$CANDIDATE_VERSION" --output dist/native
+        if: runner.os != 'Windows'
+        shell: bash
+      - name: Build, archive and run the extracted Windows binary
+        if: runner.os == 'Windows'
+        run: python scripts/packaging/native.py --os windows --arch ${{ matrix.arch }} --version $env:CANDIDATE_VERSION --output dist/native
+        shell: pwsh
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: rescuarr-${{ github.event.pull_request.head.sha || github.sha }}-${{ matrix.os }}-${{ matrix.arch }}
+          path: dist/native/
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0

@@ -37,18 +37,28 @@ type AuthorizeLocal func(context.Context, *sql.Tx, Approval, time.Time) error
 
 // Journal implements the durable Store contract without a transport. It
 // persists private preflight separately from public Attempt projections.
+type EventWriter func(context.Context, *sql.Tx, domain.Event) error
+
 type Journal struct {
 	local     *store.Store
 	authorize AuthorizeLocal
+	notify    EventWriter
 }
 
 var _ Store = (*Journal)(nil)
 
-func NewJournal(local *store.Store, authorize AuthorizeLocal) (*Journal, error) {
+func NewJournal(local *store.Store, authorize AuthorizeLocal, notify ...EventWriter) (*Journal, error) {
 	if local == nil || authorize == nil {
 		return nil, ErrInvalid
 	}
-	return &Journal{local: local, authorize: authorize}, nil
+	journal := &Journal{local: local, authorize: authorize}
+	if len(notify) > 1 || (len(notify) == 1 && notify[0] == nil) {
+		return nil, ErrInvalid
+	}
+	if len(notify) == 1 {
+		journal.notify = notify[0]
+	}
+	return journal, nil
 }
 
 type journalIntent struct {
@@ -189,8 +199,15 @@ func (j *Journal) SetPaused(ctx context.Context, paused bool, actor domain.Actor
 		if paused {
 			kind = "action_pause"
 		}
-		return store.AppendEvent(ctx, tx, domain.Event{ID: domain.EventID(store.NewID()), Actor: actor, Kind: kind,
-			Scope: domain.Scope{Kind: domain.ScopeStore}, OccurredAt: now})
+		if err := store.AppendEvent(ctx, tx, domain.Event{ID: domain.EventID(store.NewID()), Actor: actor, Kind: kind,
+			Scope: domain.Scope{Kind: domain.ScopeStore}, OccurredAt: now}); err != nil {
+			return err
+		}
+		if paused && j.notify != nil {
+			return j.notify(ctx, tx, domain.Event{ID: domain.EventID(store.NewID()), Actor: actor,
+				Kind: "automation_paused", Scope: domain.Scope{Kind: domain.ScopeStore}, OccurredAt: now})
+		}
+		return nil
 	})
 }
 
