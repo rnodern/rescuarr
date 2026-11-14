@@ -1,0 +1,4 @@
+services:
+  probe:
+    volumes:
+      - ${RESCUARR_LAB_RUN_DIR:?run via test/lab/run.sh}/go-pack-probe:/lab-tools/go-pack-probe:ro

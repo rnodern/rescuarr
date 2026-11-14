@@ -12,6 +12,7 @@ from urllib.parse import urlencode
 
 from probe import (
     SONARR_V5_EMPTY_PACK,
+    SONARR_V5_ADAPTER_PACK,
     SONARR_V5_ID_IMPORT,
     TARGETS as ARR_BUILDS,
     arr_key,
@@ -207,6 +208,16 @@ class Arr:
         state = poll(terminal, "commandTimeout:" + name)
         verify(state["status"] == "completed", "commandFailed:" + name)
         return {"responseStatus": status, **projection(state, ("id", "name", "status", "result", "started", "ended"))}
+
+    def completed_command(self, command_id, expected_name):
+        command = self.read(f"command/{command_id}")
+        verify(command.get("id") == command_id and command.get("name") == expected_name, "unexpectedCommandIdentity")
+        verify(command.get("status") not in ("failed", "aborted", "cancelled", "orphaned"),
+               "commandFailed:" + expected_name)
+        if command.get("status") != "completed":
+            return None
+        verify(command.get("result") == "successful", "commandFailed:" + expected_name)
+        return projection(command, ("id", "name", "status", "result", "started", "ended"))
 
     def refresh(self):
         self.command_status("RefreshMonitoredDownloads")
@@ -864,10 +875,13 @@ def run_scenarios(report, scenario):
         result["stage"] = "mediaSetup"
         targets = arr.media(profile["id"])
         result["stage"] = "exercise"
-        if scenario == SONARR_V5_EMPTY_PACK:
+        if scenario in (SONARR_V5_EMPTY_PACK, SONARR_V5_ADAPTER_PACK):
             # Import lazily to keep the specialised fixture out of other scenarios.
             from empty_pack import empty_pack_replacement
-            empty_pack_replacement(arr, targets[0], targets[1], result)
+            if scenario == SONARR_V5_ADAPTER_PACK:
+                empty_pack_replacement(arr, targets[0], targets[1], result, go_adapter=True)
+            else:
+                empty_pack_replacement(arr, targets[0], targets[1], result)
         elif scenario == SONARR_V5_ID_IMPORT:
             id_only_import(arr, targets[0], targets[1], result)
         elif case == "import":
@@ -877,7 +891,7 @@ def run_scenarios(report, scenario):
         else:
             reject_replace(arr, targets[0], targets[1], result, remove=case == "reject-remove",
                            lose_response=case == "reject-lost-response")
-        if case == "import" or terminal_case or scenario in (SONARR_V5_ID_IMPORT, SONARR_V5_EMPTY_PACK):
+        if case == "import" or terminal_case or scenario in (SONARR_V5_ID_IMPORT, SONARR_V5_EMPTY_PACK, SONARR_V5_ADAPTER_PACK):
             result.update(status="observed", stage="complete", qualification="awaitingIndependentReview")
         else:
             result.update(status="observed", stage="complete", qualification="terminalOriginalUnproven")

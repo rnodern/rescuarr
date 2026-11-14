@@ -1,4 +1,6 @@
 import hashlib
+import json
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -105,3 +107,31 @@ class EmptyPackLabTest(unittest.TestCase):
             self.assertTrue(run_scenarios(evidence, probe.SONARR_V5_EMPTY_PACK))
             arr.return_value.setup.assert_called_once_with(automatic_redownload=True, completed_handling=False)
             run.assert_called_once_with(arr.return_value, {"id": 1}, {"id": 2}, evidence["scenarios"][probe.SONARR_V5_EMPTY_PACK])
+
+
+class GoPackProbeTest(unittest.TestCase):
+    def test_scope_and_credential_use_stdin(self):
+        arr = Mock(headers={"X-Api-Key": "test-only-credential"})
+        scope = {"QueueIDs": [6, 8], "DownloadID": "sealed-job", "Release": "lab-pack",
+                 "SeriesID": 2, "EpisodeIDs": [1, 2]}
+        with patch("empty_pack.subprocess.run", return_value=subprocess.CompletedProcess(
+            args=[], returncode=0, stdout='{"ok":true,"commandId":42}', stderr=""
+        )) as run:
+            self.assertEqual(empty_pack.run_go_adapter(arr, "search", scope, episodeIds=[1]), {"ok": True, "commandId": 42})
+            self.assertEqual(run.call_args.args, (["/lab-tools/go-pack-probe"],))
+            self.assertEqual(json.loads(run.call_args.kwargs["input"]), {
+                "operation": "search", "apiKey": "test-only-credential", "scope": scope, "episodeIds": [1],
+            })
+
+    def test_exports_only_known_error_categories(self):
+        arr = Mock(headers={"X-Api-Key": "test-only-credential"})
+        for reply, expected in (
+            ('{"ok":false,"reason":"reject:uncertainDispatch"}', "goPackProbe:reject:uncertainDispatch"),
+            ('{"ok":false,"reason":"private output path"}', "goPackProbeFailed"),
+            ('{"ok":false,"reason":[]}', "goPackProbeFailed"),
+            ('[]', "goPackProbeFailed"),
+        ):
+            with self.subTest(reply=reply), patch("empty_pack.subprocess.run", return_value=subprocess.CompletedProcess(
+                args=[], returncode=1, stdout=reply, stderr="private storage path"
+            )), self.assertRaisesRegex(LabFailure, "^" + expected + "$"):
+                empty_pack.run_go_adapter(arr, "reject", {})

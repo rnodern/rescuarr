@@ -4,6 +4,8 @@ on:
   pull_request:
     paths:
       - test/lab/**
+      - internal/arradapter/**
+      - internal/observe/**
       - .github/workflows/upstream-lab.yml
   workflow_dispatch:
     inputs:
@@ -16,6 +18,7 @@ on:
           - sonarr/import
           - sonarr/v5-id-import
           - sonarr/v5-empty-pack
+          - sonarr/v5-adapter-pack
           - radarr/import
           - sonarr/reject-preserve
           - radarr/reject-preserve
@@ -48,6 +51,10 @@ jobs:
           sudo apt-get install -y --no-install-recommends ffmpeg openssl
           ffmpeg -version
           openssl version
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        if: github.event_name == 'workflow_dispatch' && inputs.scenario == 'sonarr/v5-adapter-pack'
+        with:
+          go-version-file: go.mod
       - name: Run isolated upstream lab
         env:
           RESCUARR_SCENARIO: ${{ inputs.scenario || 'reads' }}
@@ -81,7 +88,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        scenario: [v5-id-import, v5-empty-pack]
+        scenario: [v5-id-import, v5-empty-pack, v5-adapter-pack]
     steps:
       - name: Check out the exact source
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -92,6 +99,10 @@ jobs:
         run: |
           sudo apt-get update -q
           sudo apt-get install -y --no-install-recommends ffmpeg openssl
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        if: matrix.scenario == 'v5-adapter-pack'
+        with:
+          go-version-file: go.mod
       - name: Run the isolated Sonarr 5 scenario
         env:
           RESCUARR_SCENARIO: ${{ matrix.scenario }}

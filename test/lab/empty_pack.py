@@ -1,7 +1,9 @@
 """Observe Sonarr's native queue and search effects for a completed empty pack."""
 
+import json
 import os
 import shutil
+import subprocess
 import time
 
 from scenarios import (
@@ -136,7 +138,27 @@ def grab_episode(arr, media, target, phase):
     return {"command": command, "searches": arr.search_scope(start, target), "grab": grab}
 
 
-def empty_pack_replacement(arr, missing, covered, report):
+def run_go_adapter(arr, operation, scope, **fields):
+    request = {"operation": operation, "apiKey": arr.headers["X-Api-Key"], "scope": scope, **fields}
+    try:
+        result = subprocess.run(
+            ["/lab-tools/go-pack-probe"], input=json.dumps(request),
+            capture_output=True, text=True, timeout=30, check=False,
+        )
+        proof = json.loads(result.stdout)
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        verify(False, "goPackProbeFailed")
+    verify(isinstance(proof, dict), "goPackProbeFailed")
+    if result.returncode != 0 or proof.get("ok") is not True:
+        reasons = {"qualificationUnavailable", "invalidScope", "unverifiedReadback", "uncertainDispatch", "failed"}
+        allowed = {f"{stage}:{reason}" for stage in ("preflight", "reject", "readback", "search") for reason in reasons}
+        reason = proof.get("reason")
+        verify(isinstance(reason, str), "goPackProbeFailed")
+        verify(False, f"goPackProbe:{reason}" if reason in allowed else "goPackProbeFailed")
+    return proof
+
+
+def empty_pack_replacement(arr, missing, covered, report, *, go_adapter=False):
     series_id = missing["seriesId"]
     targets = sorted([missing["id"], covered["id"]])
     verify(covered["seriesId"] == series_id and missing["seasonNumber"] == covered["seasonNumber"] == 1
@@ -205,8 +227,17 @@ def empty_pack_replacement(arr, missing, covered, report):
         "episodeFileIDs": before_links,
     }
     start = len(search_events())
-    report["operation"] = {"method": "DELETE", "queueId": rows[0]["id"], "query": RETAIN_FLAGS}
-    report["response"] = delete_queue(arr, rows[0], RETAIN_FLAGS, False)
+    queue_id = min(row["id"] for row in rows) if go_adapter else rows[0]["id"]
+    report["operation"] = {"method": "DELETE", "queueId": queue_id, "query": RETAIN_FLAGS}
+    if go_adapter:
+        scope = {"QueueIDs": [row["id"] for row in rows], "DownloadID": download_id,
+                 "Release": title, "SeriesID": series_id, "EpisodeIDs": targets}
+        removal = run_go_adapter(arr, "reject", scope)
+        verify(isinstance(removal.get("sentAt"), str), "goPackMissingSendTimestamp")
+        report["response"] = {"acknowledged": True}
+        report["goAdapter"] = {"preflight": True, "reject": True}
+    else:
+        report["response"] = delete_queue(arr, rows[0], RETAIN_FLAGS, False)
     arr.refresh()
     rejected = poll(lambda: rejected_pack(arr, missing, download_id, title, targets, grab[0]["quality"], previous_blocklist),
                     "packRejectReadbackMissing")
@@ -217,10 +248,25 @@ def empty_pack_replacement(arr, missing, covered, report):
     verify(sab_job(download_id) == client and output.is_dir() and not inventory(output, all_files=True)
            and inventory(arr.library, all_files=True) == before_library, "packRejectChangedIndependentState")
     report["afterReject"] = {**rejected, "client": client, "sourceInventory": [], "searchRequests": []}
+    if go_adapter:
+        proof = run_go_adapter(arr, "verify", scope, sentAt=removal["sentAt"])
+        verify(proof.get("verified") is True, "goPackRejectReadbackMissing")
+        report["goAdapter"]["verifiedRejection"] = True
 
     # The existing episode must remain covered and the requested episode still missing.
     verify(episode_disposition(arr, series_id, targets) == before_links, "packEpisodeDispositionChanged")
-    replacement = grab_episode(arr, missing, "episode1", "replacement")
+    if go_adapter:
+        call_json(SOURCE, "/lab/feed/episode1/replacement", method="POST")
+        search_start = len(search_events())
+        proof = run_go_adapter(arr, "search", scope, episodeIds=[missing["id"]])
+        command_id = proof.get("commandId")
+        verify(type(command_id) is int and command_id > 0, "goPackMissingSearchCommand")
+        command = poll(lambda: arr.completed_command(command_id, "EpisodeSearch"), "goPackSearchCompletionMissing")
+        grabbed = poll(lambda: arr.find_grab(missing["id"], "episode1", "replacement"), "goPackReplacementGrabMissing")
+        replacement = {"command": command, "searches": arr.search_scope(search_start, "episode1"), "grab": grabbed}
+        report["goAdapter"]["searchCommandId"] = command_id
+    else:
+        replacement = grab_episode(arr, missing, "episode1", "replacement")
     new_id, new_title = replacement["grab"]["downloadId"], replacement["grab"]["sourceTitle"]
     verify(new_id != download_id, "replacementReusedExistingDownload")
     poll(lambda: completed_job(new_id), "packReplacementSABCompletionTimeout", timeout=150)
