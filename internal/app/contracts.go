@@ -51,6 +51,16 @@ type CaseDetail struct {
 	Outcomes  []domain.Outcome
 }
 
+type ImportPreview struct {
+	Reason     domain.ReasonCode
+	Candidates int
+	Eligible   int
+}
+
+type ImportPreviewReader interface {
+	ImportPreview(context.Context, domain.CaseID, domain.Revision) (ImportPreview, error)
+}
+
 type ConsoleReader interface {
 	Overview(context.Context) (Overview, error)
 	Cases(context.Context, CaseQuery) (CasePage, error)

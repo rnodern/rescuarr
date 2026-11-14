@@ -26,7 +26,11 @@ const (
 
 var arrVersion = regexp.MustCompile(`^[0-9]{1,6}(\.[0-9]{1,6}){3}$`)
 
-type Arr struct{ reader *reader }
+type Arr struct {
+	reader             *reader
+	upstreamVersion    string
+	connectionRevision domain.Revision
+}
 
 func NewArr(cfg Config, transport http.RoundTripper) (*Arr, error) {
 	if (cfg.Instance.Product != domain.ProductSonarr && cfg.Instance.Product != domain.ProductRadarr) || cfg.APIKey == "" {
@@ -36,7 +40,7 @@ func NewArr(cfg Config, transport http.RoundTripper) (*Arr, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Arr{reader: r}, nil
+	return &Arr{reader: r, upstreamVersion: cfg.Instance.UpstreamVersion, connectionRevision: cfg.Instance.ConnectionRevision}, nil
 }
 
 type SystemStatus struct {
@@ -45,6 +49,7 @@ type SystemStatus struct {
 	Branch    string
 	Package   string
 	OSFamily  string
+	PathOS    string
 	URLBase   string
 	StartedAt time.Time
 }
@@ -56,6 +61,9 @@ func (a *Arr) Status(ctx context.Context) (SystemStatus, error) {
 		Branch    string    `json:"branch"`
 		Package   string    `json:"packageVersion"`
 		OSName    string    `json:"osName"`
+		IsLinux   bool      `json:"isLinux"`
+		IsOSX     bool      `json:"isOsx"`
+		IsWindows bool      `json:"isWindows"`
 		URLBase   string    `json:"urlBase"`
 		StartedAt time.Time `json:"startTime"`
 	}
@@ -65,9 +73,16 @@ func (a *Arr) Status(ctx context.Context) (SystemStatus, error) {
 	if !strings.EqualFold(wire.Name, string(a.reader.product)) || !arrVersion.MatchString(wire.Version) {
 		return SystemStatus{}, ErrResponse
 	}
+	var pathOS string
+	switch {
+	case wire.IsWindows && !wire.IsLinux && !wire.IsOSX:
+		pathOS = "windows"
+	case !wire.IsWindows && wire.IsLinux != wire.IsOSX:
+		pathOS = "unix"
+	}
 	return SystemStatus{
 		Product: a.reader.product, Version: wire.Version, Branch: boundedText(wire.Branch, 64),
-		Package: boundedText(wire.Package, 128), OSFamily: boundedText(wire.OSName, 64),
+		Package: boundedText(wire.Package, 128), OSFamily: boundedText(wire.OSName, 64), PathOS: pathOS,
 		URLBase: boundedText(wire.URLBase, 512), StartedAt: wire.StartedAt,
 	}, nil
 }
@@ -215,12 +230,20 @@ func (a *Arr) target(seriesID, episodeID, movieID int64) domain.TargetRef {
 }
 
 func (a *Arr) observation(kind domain.ObservationKind, selector string, generation domain.Revision, at time.Time, records any, err error) domain.Observation {
-	value, ttl := domain.ObservationKnown, 2*time.Minute
+	value := domain.ObservationKnown
 	if err != nil {
-		value, ttl = domain.ObservationUnknown, 0
+		value = domain.ObservationUnknown
 	}
-	content, _ := json.Marshal(records) // The typed projections contain JSON-compatible primitives.
-	fingerprint := sha256.Sum256(content)
+	return a.observationState(kind, selector, generation, at, records, value)
+}
+
+func (a *Arr) observationState(kind domain.ObservationKind, selector string, generation domain.Revision, at time.Time, records any, value domain.ObservationState) domain.Observation {
+	complete := value == domain.ObservationKnown || value == domain.ObservationAbsent
+	var ttl time.Duration
+	if complete {
+		ttl = 2 * time.Minute
+	}
+	fingerprint := digestObservationContent(records)
 	contentHash := hex.EncodeToString(fingerprint[:])
 	ref := a.reader.instance
 	evidenceID := sha256.Sum256(fmt.Appendf(nil, "%q/%d/%s/%q/%d/%s/%s", ref.ID, ref.Epoch, kind, selector, generation, value, contentHash))
@@ -229,8 +252,13 @@ func (a *Arr) observation(kind domain.ObservationKind, selector string, generati
 		Scope:  domain.Scope{Kind: domain.ScopeInstance, Instance: a.reader.instance},
 		Source: domain.Source(a.reader.product), Kind: kind, AdapterRevision: AdapterRevision,
 		SchemaRevision: 1, SnapshotGeneration: generation, ObservedAt: at.UTC(), ExpiresAt: at.UTC().Add(ttl),
-		State: value, Complete: err == nil,
+		State: value, Complete: complete,
 	}
+}
+
+func digestObservationContent(value any) [sha256.Size]byte {
+	body, _ := json.Marshal(value) // Only projected JSON-compatible primitives enter the digest.
+	return sha256.Sum256(body)
 }
 
 func protocol(value string) domain.Protocol {

@@ -28,6 +28,7 @@ type Options struct {
 	Read          app.ConsoleReader
 	Commands      app.ConsoleCommands
 	Connections   ConnectionService
+	ImportPreview app.ImportPreviewReader
 	Notifications NotificationService
 	ProwlDelivery bool
 	Authorize     Authorize
@@ -61,6 +62,9 @@ func New(options Options) http.Handler {
 	mux.HandleFunc("GET "+base+"/{$}", c.overview)
 	mux.HandleFunc("GET "+base+"/cases", c.cases)
 	mux.HandleFunc("GET "+base+"/cases/{caseID}", c.caseDetail)
+	if c.ImportPreview != nil {
+		mux.HandleFunc("POST "+base+"/cases/{caseID}/import-preview", c.importPreview)
+	}
 	mux.HandleFunc("GET "+base+"/cases/{caseID}/review/{proposalID}", c.review)
 	mux.HandleFunc("POST "+base+"/cases/{caseID}/actions", c.approve)
 	mux.HandleFunc("GET "+base+"/actions/{intentID}", c.intent)
@@ -111,6 +115,7 @@ type page struct {
 	Base, Title, Active, CSRF string
 	Status                    app.Overview
 	HasConnections            bool
+	HasImportPreview          bool
 	HasNotifications          bool
 	Body                      any
 }
@@ -118,6 +123,7 @@ type page struct {
 func (c console) render(w http.ResponseWriter, r *http.Request, code int, name string, p page) {
 	p.Base = c.BasePath
 	p.HasConnections = c.Connections != nil
+	p.HasImportPreview = c.ImportPreview != nil
 	p.HasNotifications = c.Notifications != nil
 	session, _ := r.Context().Value(sessionKey{}).(Session)
 	p.CSRF = session.CSRF

@@ -51,6 +51,13 @@
     <h2>Proposals</h2>
     {{if .Body.Proposals}}<ul class="links">{{range .Body.Proposals}}<li><a href="{{$base}}/cases/{{.CaseID}}/review/{{.ID}}">Review {{action .Operation.Action}}</a><span>Expires {{when .ExpiresAt}}</span></li>{{end}}</ul>
     {{else}}<p>No proposal is available.</p>{{end}}
+    {{if and .HasImportPreview .Body.Case.Job.CompleteSet .Body.Case.Revision}}
+    <form method="post" action="{{$base}}/cases/{{.Body.Case.ID}}/import-preview">
+      <input type="hidden" name="csrf" value="{{.CSRF}}">
+      <input type="hidden" name="revision" value="{{.Body.Case.Revision}}">
+      <button type="submit">Check Arr import candidates</button>
+    </form>
+    {{end}}
   </section>
 </div>
 <section class="panel section">
@@ -67,5 +74,18 @@
   {{end}}
 </section>
 {{end}}
+{{template "end" .}}
+{{end}}
+
+{{define "import-preview"}}
+{{template "start" .}}
+<p><a href="{{.Base}}/cases/{{.Body.CaseID}}">Back to case</a></p>
+<h1>Import preview</h1>
+<p>{{.Body.Summary}}</p>
+<dl>
+  <dt>Candidates returned by Arr</dt><dd>{{.Body.Result.Candidates}}</dd>
+  <dt>Eligible candidates in the preview</dt><dd>{{.Body.Result.Eligible}}</dd>
+</dl>
+<p>Review any import in the Arr application.</p>
 {{template "end" .}}
 {{end}}
