@@ -136,6 +136,21 @@ button:disabled { opacity: .65; cursor: wait; }
 .button-quiet { border-color: var(--control-line); }
 .filter-actions, .connection-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; }
 
+.language-settings { max-width: 44rem; }
+.language-progress { margin: 0 0 .75rem; color: var(--muted); font-size: .85rem; }
+.language-step, .language-track-choice { min-inline-size: 0; border: 0; padding: 0; margin: 0; }
+.language-step + .language-step, .language-track-choice { margin-top: 1.2rem; }
+.language-step[hidden] + .language-step { margin-top: 0; }
+.language-step legend { padding: 0; margin-bottom: .5rem; font-weight: 700; }
+.language-step > p { margin-block: 0 .65rem; color: var(--muted); }
+.language-step select { margin-top: .4rem; width: min(100%, 20rem); }
+.language-choice { display: grid; grid-template-columns: 1rem minmax(0, 1fr); align-items: start; gap: .65rem; padding: .65rem .75rem; border: 1px solid var(--line); border-radius: .28rem; cursor: pointer; }
+.language-choice + .language-choice { margin-top: .4rem; }
+.language-choice input { min-height: 0; width: 1rem; height: 1rem; margin: .2rem 0 0; accent-color: var(--accent); }
+.language-summary { margin: 0 0 1rem; }
+.language-summary dt { margin-top: .7rem; }
+.language-summary dt:first-child { margin-top: 0; }
+
 table { width: 100%; border-spacing: 0; text-align: start; font-size: .875rem; }
 table.panel { padding: 0; background: var(--background); }
 th, td { text-align: start; vertical-align: top; padding: .6rem .75rem; border-bottom: 1px solid var(--line); }

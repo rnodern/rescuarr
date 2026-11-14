@@ -108,7 +108,11 @@
 {{else if .Body.Result.Replacement}}
 {{template "replacement-preview" .Body.Result.Replacement}}
 {{else if .Body.Result.Episode}}
-<section class="panel">{{template "episode-check-result" .Body.Result.Episode}}</section>
+<section class="panel">{{template "episode-check-result" .Body.Result.Episode}}
+  {{if or (not .Body.Result.Audio) (eq (index .Body.Result.Audio 0).Decision "accept")}}
+  <p>In Sonarr, go to <strong>Activity → Queue → Manual Import</strong> for this download. Confirm the selected file, series and episode before importing.</p>
+  {{end}}
+</section>
 {{else}}
 <p>{{.Body.Summary}}</p>
 <dl>
@@ -117,6 +121,7 @@
 </dl>
 <p>Review any import in the Arr application.</p>
 {{end}}
+{{range .Body.Result.Audio}}<section class="panel section">{{template "audio-language-review" .}}</section>{{end}}
 {{template "end" .}}
 {{end}}
 
@@ -131,14 +136,13 @@
     {{if .Folder}}<dt>Download folder</dt><dd>{{.Folder}}</dd>{{end}}
     {{if .Filename}}<dt>Video file</dt><dd>{{.Filename}}</dd>{{end}}
   </dl>
-  <p>In Sonarr, go to <strong>Activity → Queue → Manual Import</strong> for this download. Confirm the selected file, series and episode before importing.</p>
 {{end}}
 
 {{define "replacement-preview"}}
 <section class="panel">
   {{if .Release}}<p><strong>Download release</strong> · {{.Release}}</p>{{end}}
   {{with .Language}}{{template "pack-language-review" .}}{{end}}
-  {{if not .Language}}
+  {{if or (not .Language) (not .Language.NeedsReview)}}
   {{if .UnclearCount}}
   <p class="notice">Sonarr has queue entries whose episodes could not be identified. Confirm what they cover before starting a replacement search.</p>
   {{end}}
@@ -163,20 +167,47 @@
 {{define "pack-language-review"}}
 <h2>Release language</h2>
 <dl>
-  <dt>Release name</dt><dd>{{range $i, $lang := .FilenameLanguages}}{{if $i}}, {{end}}{{$lang}}{{end}}</dd>
+  <dt>Original language from Sonarr</dt><dd>{{if .OriginalLanguage}}{{.OriginalLanguage}}{{else}}Unverified{{end}}</dd>
+  <dt>Release name</dt><dd>{{template "audio-language-list" .FilenameLanguages}}</dd>
   <dt>Sonarr grab history</dt><dd>{{if .SonarrLanguages}}{{range $i, $lang := .SonarrLanguages}}{{if $i}}, {{end}}{{$lang}}{{end}}{{else}}Language unavailable{{end}}</dd>
 </dl>
 {{if .Agreement}}<p>Sonarr’s grab history agrees with the language in the release name. Check which current library files came from this download and what audio tracks Sonarr found.</p>
-{{else}}<p>Sonarr’s grab history could not confirm the language in the release name.</p>{{end}}
+{{else if .FilenameLanguages}}<p>Sonarr’s grab history could not confirm the language in the release name.</p>{{end}}
 {{if .Files}}
 <table>
-  <thead><tr><th scope="col">Episode</th><th scope="col">Current file</th><th scope="col">Download source</th><th scope="col">Audio tracks</th></tr></thead>
+  <thead><tr><th scope="col">Episode</th><th scope="col">Current file</th><th scope="col">Download source</th><th scope="col">Audio tracks</th><th scope="col">Audio decision</th></tr></thead>
   <tbody>{{range .Files}}<tr>
     <th scope="row">{{.Episode}}</th>
     <td data-label="Current file">{{if .Filename}}{{.Filename}}{{else}}Unavailable{{end}}</td>
     <td data-label="Download source">{{if eq .Origin "same_release"}}This download{{else if eq .Origin "other_release"}}Another download{{else}}Unverified{{end}}</td>
     <td data-label="Audio tracks">{{if .AudioLanguages}}{{range $i, $lang := .AudioLanguages}}{{if $i}}, {{end}}{{$lang}}{{end}}{{if not .AudioLanguagesComplete}} (partial){{end}}{{else}}Unverified{{end}}</td>
+    <td data-label="Audio decision">{{with .Audio}}{{template "audio-language-decision" .}}{{else}}—{{end}}</td>
   </tr>{{end}}</tbody>
 </table>
 {{end}}
+{{end}}
+
+{{define "audio-language-review"}}
+<h2>{{.Label}}</h2>
+<dl>
+  <dt>Original language from Arr</dt><dd>{{if .OriginalLanguage}}{{.OriginalLanguage}}{{else}}Unverified{{end}}</dd>
+  <dt>Preferred language</dt><dd>{{.PreferredLanguage}}</dd>
+  {{if .FilenameLanguages}}<dt>Release, folder and file names</dt><dd>{{template "audio-language-list" .FilenameLanguages}}</dd>{{end}}
+  {{if .ReleaseLanguages}}<dt>Release metadata</dt><dd>{{template "audio-language-list" .ReleaseLanguages}}</dd>{{end}}
+  <dt>Audio tracks</dt><dd>{{template "audio-language-list" .TrackLanguages}}</dd>
+  <dt>Audio decision</dt><dd>{{template "audio-language-decision" .}}</dd>
+</dl>
+{{end}}
+
+{{define "audio-language-list"}}
+{{- if .}}{{range $i, $name := .}}{{if $i}}, {{end}}{{$name}}{{end}}{{else}}Unverified{{end -}}
+{{end}}
+
+{{define "audio-language-decision"}}
+<strong>{{if eq .Decision "accept"}}Accept{{else if eq .Decision "reject"}}Reject{{else}}Review{{end}}</strong>
+{{- if .Preferred}} · preferred audio{{end}}
+{{- if eq .Reason "original_audio_present"}} · original audio present
+{{- else if eq .Reason "preferred_audio_present"}} · preferred-language audio present
+{{- else if eq .Reason "original_audio_absent"}} · original audio absent
+{{- else}} · audio unverified{{end}}
 {{end}}

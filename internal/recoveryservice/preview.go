@@ -21,10 +21,12 @@ type PreviewService struct {
 	transport http.RoundTripper
 	clock     app.Clock
 	slots     chan struct{}
+	languages app.LanguageSettingsService
 }
 
-func NewPreviewService(cases *observeservice.Service, secrets interface{ ReadSecret(string) (string, error) }, transport http.RoundTripper, clock app.Clock) *PreviewService {
-	return &PreviewService{cases: cases, secrets: secrets, transport: transport, clock: clock, slots: make(chan struct{}, 1)}
+func NewPreviewService(cases *observeservice.Service, secrets interface{ ReadSecret(string) (string, error) }, transport http.RoundTripper,
+	clock app.Clock, languages app.LanguageSettingsService) *PreviewService {
+	return &PreviewService{cases: cases, secrets: secrets, transport: transport, clock: clock, languages: languages, slots: make(chan struct{}, 1)}
 }
 
 // ImportPreview displays Arr's current assessment for the exact completed job.
@@ -111,8 +113,23 @@ func (s *PreviewService) ImportPreview(ctx context.Context, id domain.CaseID, re
 		if err != nil {
 			return app.ImportPreview{}, err
 		}
-		return app.ImportPreview{Episode: &match}, nil
+		view := app.ImportPreview{Episode: &match}
+		if s.languages != nil {
+			prefs, mode, err := s.languageContext(ctx)
+			if err != nil {
+				return app.ImportPreview{}, err
+			}
+			original, _ := arr.OriginalAudioLanguage(ctx, first.Target)
+			view.Audio = []app.AudioLanguageReview{reviewAudio(prefs, mode, original.Name, "Download audio", filenameLanguageHints(first.Release, match.Folder, match.Filename),
+				grabLanguageLabels(ctx, arr, proof, s.clock.Now()), nil, false)}
+		}
+		return view, nil
 	}
+	prefs, mode, err := s.languageContext(ctx)
+	if err != nil {
+		return app.ImportPreview{}, err
+	}
+	originalLanguages := make(map[domain.TargetRef]string)
 	job := importflow.Job{Ref: proof.Case.Job.Ref, DownloadID: first.DownloadID, OutputPath: first.OutputPath,
 		LibraryRoots: roots, PathStyle: style, Queue: proof.Queue, TrackingComplete: true}
 	for _, target := range proof.Case.Targets {
@@ -122,6 +139,16 @@ func (s *PreviewService) ImportPreview(ctx context.Context, id domain.CaseID, re
 		}
 		if err != nil {
 			return app.ImportPreview{}, err
+		}
+		if s.languages != nil {
+			original, _ := arr.OriginalAudioLanguage(ctx, target.Ref)
+			originalLanguages[target.Ref] = original.Name
+			if snapshot.File != nil {
+				tracks, complete := snapshot.File.AudioTracks()
+				view, err := heldPreview("The target already has a library file.")
+				view.Audio = []app.AudioLanguageReview{reviewAudio(prefs, mode, original.Name, "Current library audio", nil, nil, tracks, complete)}
+				return view, err
+			}
 		}
 		if !snapshot.Monitored.Value || snapshot.FileID.Observation.State != domain.ObservationAbsent {
 			return heldPreview("This preview covers monitored targets waiting for their first file. Check existing files and monitoring in Arr.")
@@ -140,11 +167,40 @@ func (s *PreviewService) ImportPreview(ctx context.Context, id domain.CaseID, re
 	}
 	view := app.ImportPreview{Reason: result.Reason, Candidates: len(result.Candidates)}
 	for _, candidate := range result.Candidates {
-		if candidate.State == importflow.Eligible {
+		accepted := candidate.State == importflow.Eligible
+		if s.languages != nil {
+			var native []string
+			for _, claim := range candidate.Languages {
+				native = append(native, claim.Name)
+			}
+			filename := filenameLanguageHints(first.Release, candidate.FolderName, candidate.Path)
+			for _, ref := range candidate.Targets {
+				original, inScope := originalLanguages[ref]
+				if !inScope {
+					continue
+				}
+				review := reviewAudio(prefs, mode, original, "Download audio", filename, native, nil, false)
+				view.Audio = append(view.Audio, review)
+				accepted = accepted && review.Decision == domain.AudioAccept
+			}
+		}
+		if accepted {
 			view.Eligible++
 		}
 	}
 	return view, nil
+}
+
+func (s *PreviewService) languageContext(ctx context.Context) (app.LanguagePreferences, domain.Mode, error) {
+	if s.languages == nil {
+		return app.DefaultLanguagePreferences(), domain.ModeObserve, nil
+	}
+	prefs, err := s.languages.LanguageSettings(ctx)
+	if err != nil {
+		return prefs, "", err
+	}
+	status, err := s.cases.Overview(ctx)
+	return prefs, status.Mode, err
 }
 
 func heldPreview(reason string) (app.ImportPreview, error) {

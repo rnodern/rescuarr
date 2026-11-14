@@ -79,7 +79,7 @@ func TestManualEmptyPackExecutesOnlyApprovedSearchAfterRestart(t *testing.T) {
 				ObservedAt: clock.At.Add(-time.Second), ExpiresAt: clock.At.Add(time.Minute)}, nil
 		}, clock.Now)
 	}
-	reviews := NewManualReviews(local, observations, NewPreviewService(observations, local, transport, clock),
+	reviews := NewManualReviews(local, observations, NewPreviewService(observations, local, transport, clock, nil),
 		transport, clock, factory)
 	if err := reviews.SetManualMode(ctx, true, "owner"); err != nil {
 		t.Fatal(err)
