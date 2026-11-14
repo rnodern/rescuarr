@@ -85,6 +85,7 @@ type Adapter struct {
 	qualify  Qualify
 	readback Readback
 	now      func() time.Time
+	route    Route
 }
 
 var _ ledger.PreparedAdapter = (*Adapter)(nil)
@@ -92,6 +93,10 @@ var _ ledger.PreparedAdapter = (*Adapter)(nil)
 // NewFixture builds an adapter for synthetic exchanges and readback. There is
 // no production transport or source of live route qualifications.
 func NewFixture(cfg Config, exchange FixtureTransport, qualify Qualify, readback Readback, now func() time.Time) (*Adapter, error) {
+	return newAdapter(cfg, exchange, qualify, readback, now, "")
+}
+
+func newAdapter(cfg Config, exchange FixtureTransport, qualify Qualify, readback Readback, now func() time.Time, route Route) (*Adapter, error) {
 	instance := cfg.Instance
 	base, ok := parseBase(instance.BaseURL)
 	if !ok || !instance.Ref.Valid() || instance.ConnectionRevision == 0 ||
@@ -101,7 +106,8 @@ func NewFixture(cfg Config, exchange FixtureTransport, qualify Qualify, readback
 	}
 	switch instance.Product {
 	case domain.ProductSonarr:
-		if instance.UpstreamVersion != arrwire.SonarrVersion {
+		if instance.UpstreamVersion != arrwire.SonarrVersion &&
+			(instance.UpstreamVersion != arrwire.SonarrIDOnlyImportVersion || route != RouteCopyImport) {
 			return nil, ErrConfiguration
 		}
 	case domain.ProductRadarr:
@@ -118,7 +124,7 @@ func NewFixture(cfg Config, exchange FixtureTransport, qualify Qualify, readback
 			ConnectionRevision: instance.ConnectionRevision, AdapterRevision: cfg.AdapterRevision,
 			SettingsFingerprint: cfg.SettingsFingerprint,
 		},
-		base: base, key: cfg.APIKey, exchange: exchange, qualify: qualify, readback: readback, now: now,
+		base: base, key: cfg.APIKey, exchange: exchange, qualify: qualify, readback: readback, now: now, route: route,
 	}, nil
 }
 
@@ -133,6 +139,9 @@ func (a *Adapter) DispatchPrepared(ctx context.Context, op domain.Operation, pre
 	}
 	binding := a.binding
 	binding.Route = actionRoute(op.Action, binding.Product, prepared)
+	if a.route != "" && binding.Route != a.route {
+		return domain.Acknowledgement{}, ErrQualification
+	}
 	ctx, cancel := context.WithTimeout(ctx, operationTimeout)
 	defer cancel()
 	if ctx.Err() != nil {
@@ -182,6 +191,9 @@ func (a *Adapter) Reconcile(ctx context.Context, attempt domain.Attempt) (domain
 		return domain.Outcome{}, ErrReadback
 	}
 	route := actionRoute(attempt.Operation.Action, a.binding.Product, *attempt.Prepared)
+	if a.route != "" && route != a.route {
+		return domain.Outcome{}, ErrReadback
+	}
 	ctx, cancel := context.WithTimeout(ctx, operationTimeout)
 	defer cancel()
 	if ctx.Err() != nil {

@@ -14,11 +14,12 @@ import (
 )
 
 const (
-	reserveLease      = 30 * time.Second
-	sendLease         = 30 * time.Second
-	readLease         = 30 * time.Second
-	maxJournalID      = 128
-	maxJournalPayload = 1 << 20
+	reserveLease                        = 30 * time.Second
+	sendLease                           = 30 * time.Second
+	readLease                           = 30 * time.Second
+	maxJournalID                        = 128
+	maxJournalPayload                   = 1 << 20
+	automaticImportActor domain.ActorID = "rescuarr-auto-import"
 )
 
 // Approval carries a server-side proposal and local, corroborated ownership
@@ -106,6 +107,44 @@ func (i journalIntent) approval() Approval {
 // Approve stores a one-shot proposal, returning an already committed intent
 // only when the actor, request key and immutable plan all match.
 func (j *Journal) Approve(ctx context.Context, approval Approval, now time.Time) (domain.Intent, error) {
+	if approval.Actor == automaticImportActor {
+		return domain.Intent{}, ErrInvalid
+	}
+	return j.approve(ctx, approval, now)
+}
+
+// AuthorizeAutomaticImport queues an already planned import. The local
+// authorizer must confirm the case, policy and capability before every send.
+func (j *Journal) AuthorizeAutomaticImport(ctx context.Context, approval Approval, now time.Time) (domain.Intent, error) {
+	if approval.Actor != "" || approval.RequestKey != "" || approval.Proposal.Operation.Action != domain.ActionImport {
+		return domain.Intent{}, ErrInvalid
+	}
+	approval.Actor = automaticImportActor
+	approval.RequestKey = string(approval.Proposal.ID)
+	return j.approve(ctx, approval, now)
+}
+
+// CanPlanAutomaticImport prevents upstream preparation while automation is
+// disabled, paused or waiting for the previous attempt's readback.
+func (j *Journal) CanPlanAutomaticImport(ctx context.Context) (bool, error) {
+	var ready bool
+	err := j.local.Read(ctx, func(tx *sql.Tx) error {
+		err := tx.QueryRowContext(ctx, `SELECT mode = 'autonomous' AND NOT reconcile_required AND NOT paused
+			AND NOT EXISTS (SELECT 1 FROM action_intents WHERE actor = ? AND state NOT IN ('completed', 'cancelled'))
+			FROM app_state JOIN action_pause USING (singleton) WHERE singleton = 1`, automaticImportActor).Scan(&ready)
+		return err
+	})
+	return ready, err
+}
+
+func automaticImportActive(ctx context.Context, tx *sql.Tx) (bool, error) {
+	var active bool
+	err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM action_intents WHERE actor = ?
+		AND state NOT IN ('completed', 'cancelled'))`, automaticImportActor).Scan(&active)
+	return active, err
+}
+
+func (j *Journal) approve(ctx context.Context, approval Approval, now time.Time) (domain.Intent, error) {
 	if !validApproval(approval) || now.IsZero() {
 		return domain.Intent{}, ErrInvalid
 	}
@@ -129,6 +168,15 @@ func (j *Journal) Approve(ctx context.Context, approval Approval, now time.Time)
 		}
 		if err := j.allowed(ctx, tx, approval, now); err != nil {
 			return err
+		}
+		if approval.Actor == automaticImportActor {
+			active, err := automaticImportActive(ctx, tx)
+			if err != nil {
+				return err
+			}
+			if active {
+				return ErrHeld
+			}
 		}
 		// A new browser request or proposal nonce does not make a previously
 		// sent semantic operation new. A fresh eligible replan must use a new
@@ -174,7 +222,8 @@ func (j *Journal) allowed(ctx context.Context, tx *sql.Tx, approval Approval, no
 	if err := tx.QueryRowContext(ctx, state).Scan(&mode, &reconcile, &paused); err != nil {
 		return err
 	}
-	if reconcile || paused || (mode != domain.ModeAssist && mode != domain.ModeAutonomous) {
+	if reconcile || paused || (mode != domain.ModeAssist && mode != domain.ModeAutonomous) ||
+		(approval.Actor == automaticImportActor && mode != domain.ModeAutonomous) {
 		return ErrHeld
 	}
 	return j.authorize(ctx, tx, approval, now)
