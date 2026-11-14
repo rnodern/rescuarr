@@ -35,9 +35,8 @@ type Approval struct {
 // the caller's SQLite transaction. It must not make any external requests.
 type AuthorizeLocal func(context.Context, *sql.Tx, Approval, time.Time) error
 
-// Journal implements the durable Store contract. It has no transport and does
-// not interpret upstream selectors. Wire only synthetic adapters until the
-// application supplies an independently qualified prepared-operation contract.
+// Journal implements the durable Store contract without a transport. It
+// persists private preflight separately from public Attempt projections.
 type Journal struct {
 	local     *store.Store
 	authorize AuthorizeLocal

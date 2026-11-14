@@ -58,6 +58,7 @@ type Preflight struct {
 	// permits and expects Arr to trigger its own search. It is readback-only.
 	ArrOwnsImplicitSearch bool
 	Evidence              []domain.EvidenceID
+	Prepared              *domain.PreparedAction
 	ObservedAt            time.Time
 	ExpiresAt             time.Time
 }
@@ -75,9 +76,9 @@ type Gate interface {
 // ErrHeld and ErrConflict denote a refusal to commit a change. Any other storage
 // error halts further dispatch by this Executor and is reconciled separately.
 //
-// A production implementation must also keep the exact typed upstream
-// selectors in the attempt before returning from BeginSend. Until that shared
-// contract exists, the executor is exercised with fixture adapters only.
+// A store must persist any prepared upstream selectors in the transaction that
+// commits the sending marker. The executor compares that committed snapshot with
+// preflight before invoking a prepared adapter.
 type Store interface {
 	// Reserve checks expiry, duplicate operation, current policy, pause, locks,
 	// concurrency and remaining durable budgets. It charges before reservation.
@@ -103,6 +104,13 @@ type Store interface {
 	// The returned outcome is the committed aggregate, including prior evidence
 	// and conflicts, which may differ from this reconciliation's observation.
 	RecordOutcome(context.Context, Reconciliation, domain.Outcome) (domain.Outcome, error)
+}
+
+// PreparedAdapter consumes the committed private selector. A real Arr sender
+// must implement this interface and enforce the qualified version and route.
+type PreparedAdapter interface {
+	domain.EffectAdapter
+	DispatchPrepared(context.Context, domain.Operation, domain.PreparedAction) (domain.Acknowledgement, error)
 }
 
 type Executor struct {
@@ -143,7 +151,9 @@ func (e *Executor) Dispatch(ctx context.Context, intentID domain.IntentID) (doma
 	checkedInTime := checkCtx.Err() == nil
 	cancel()
 	now := e.clock.Now()
-	if err != nil || !checkedInTime || !eligible(intent.Proposal, checked, now) || e.halted.Load() {
+	preparedAdapter, prepares := e.adapter.(PreparedAdapter)
+	if err != nil || !checkedInTime || !eligible(intent.Proposal, checked, now) ||
+		prepares != (checked.Prepared != nil) || e.halted.Load() {
 		if err := e.cancelReserved(ctx, reservation, "preflight_held"); err != nil {
 			return "", err
 		}
@@ -162,7 +172,8 @@ func (e *Executor) Dispatch(ctx context.Context, intentID domain.IntentID) (doma
 	}
 	attempt := lease.Attempt
 	if lease.Fence == 0 || !lease.ExpiresAt.After(now) || attempt.ID == "" || attempt.IntentID != intent.ID || attempt.SentAt.IsZero() || !attempt.SentAt.Equal(now) || attempt.Acknowledgement != (domain.Acknowledgement{}) ||
-		!reflect.DeepEqual(attempt.Operation, intent.Proposal.Operation) || !reflect.DeepEqual(attempt.Preflight, checked.Evidence) {
+		!reflect.DeepEqual(attempt.Operation, intent.Proposal.Operation) || !reflect.DeepEqual(attempt.Preflight, checked.Evidence) ||
+		!reflect.DeepEqual(attempt.Prepared, checked.Prepared) {
 		return attempt.ID, e.checkStore(ErrJournal)
 	}
 
@@ -182,7 +193,13 @@ func (e *Executor) Dispatch(ctx context.Context, intentID domain.IntentID) (doma
 
 	ack := domain.Acknowledgement{State: domain.DispatchUncertain, Reason: "dispatch_uncertain"}
 	sendCtx, cancelSend := context.WithTimeout(ctx, operationTimeout)
-	observed, sendErr := e.adapter.Dispatch(sendCtx, attempt.Operation)
+	var observed domain.Acknowledgement
+	var sendErr error
+	if prepares {
+		observed, sendErr = preparedAdapter.DispatchPrepared(sendCtx, attempt.Operation, *attempt.Prepared)
+	} else {
+		observed, sendErr = e.adapter.Dispatch(sendCtx, attempt.Operation)
+	}
 	sendInTime := sendCtx.Err() == nil
 	cancelSend()
 	if sendErr == nil && sendInTime && (observed.State == domain.DispatchAcknowledged || observed.State == domain.DispatchRejectedBeforeEffect) {
@@ -270,7 +287,8 @@ func eligible(proposal domain.Proposal, current Preflight, now time.Time) bool {
 		proposal.PolicyRevision != current.PolicyRevision || proposal.CapabilityRevision != current.CapabilityRevision ||
 		!now.Before(proposal.ExpiresAt) || !now.Before(current.ExpiresAt) || current.ObservedAt.IsZero() ||
 		now.Before(current.ObservedAt) || now.Sub(current.ObservedAt) > maxPreflightAge ||
-		len(current.Evidence) == 0 || len(current.Evidence) > maxPreflightFacts {
+		len(current.Evidence) == 0 || len(current.Evidence) > maxPreflightFacts ||
+		(current.Prepared != nil && !current.Prepared.Binds(proposal.Operation)) {
 		return false
 	}
 	implicitSearch := proposal.Operation.Action == domain.ActionReject && slices.Contains(proposal.Operation.Effects, domain.Effect{Kind: domain.EffectSearchDispatch})

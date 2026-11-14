@@ -30,12 +30,17 @@ func (j *Journal) BeginSend(ctx context.Context, reservation Reservation, proof 
 		if err := j.allowed(ctx, tx, row.approval(), now); err != nil {
 			return err
 		}
-		preflight, err := marshalJournal(proof.Evidence)
+		preflight, err := marshalJournal(proof)
 		if err != nil {
 			return err
 		}
 		attempt := domain.Attempt{ID: domain.AttemptID(store.NewID()), IntentID: row.intent.ID,
-			Operation: row.intent.Proposal.Operation, Preflight: slices.Clone(proof.Evidence), SentAt: now.UTC()}
+			Operation: row.intent.Proposal.Operation, SentAt: now.UTC()}
+		var storedProof Preflight
+		if err := json.Unmarshal([]byte(preflight), &storedProof); err != nil {
+			return ErrJournal
+		}
+		attempt.Preflight, attempt.Prepared = storedProof.Evidence, storedProof.Prepared
 		_, err = tx.ExecContext(ctx, `INSERT INTO action_attempts (id, intent_id, preflight, sent_at) VALUES (?, ?, ?, ?)`,
 			attempt.ID, row.intent.ID, preflight, journalTime(now))
 		if err != nil {
@@ -78,9 +83,12 @@ func readAttempt(ctx context.Context, tx *sql.Tx, row journalIntent, id domain.A
 		return journalAttempt{}, err
 	}
 	a.attempt.Operation = row.intent.Proposal.Operation
-	if err := json.Unmarshal([]byte(preflight), &a.attempt.Preflight); err != nil {
+	var proof Preflight
+	if err := json.Unmarshal([]byte(preflight), &proof); err != nil ||
+		(proof.Prepared != nil && !proof.Prepared.Binds(a.attempt.Operation)) {
 		return journalAttempt{}, ErrJournal
 	}
+	a.attempt.Preflight, a.attempt.Prepared = proof.Evidence, proof.Prepared
 	if err := json.Unmarshal([]byte(ack), &a.attempt.Acknowledgement); err != nil {
 		return journalAttempt{}, ErrJournal
 	}

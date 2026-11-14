@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -449,4 +450,76 @@ func TestSQLiteSearchRequiresDurableParent(t *testing.T) {
 		t.Fatalf("unbound search had authority: %v", err)
 	}
 	assertActionAudit(t, local, "action_reserved", 0)
+}
+
+type preparedTestAdapter struct {
+	fixtureAdapter
+	send func(context.Context, domain.Operation, domain.PreparedAction) (domain.Acknowledgement, error)
+}
+
+func (a preparedTestAdapter) DispatchPrepared(ctx context.Context, operation domain.Operation, prepared domain.PreparedAction) (domain.Acknowledgement, error) {
+	return a.send(ctx, operation, prepared)
+}
+
+func TestPreparedDispatchUsesDurablePrivateSnapshot(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "state")
+	local, journal := openJournal(t, dir, fixtureAuthorize)
+	setFixtureMode(t, local)
+	intent := authorisedFixture(t, journal, fixtureApproval(), fixtureTime)
+	operation := intent.Proposal.Operation
+	const selector = "/synthetic/private/complete/fixture.mkv"
+	prepared := &domain.PreparedAction{
+		Product: domain.ProductRadarr, Version: "fixture-1", AdapterRevision: "test",
+		ConnectionRevision: 1, OperationKey: operation.Key,
+		Import: &domain.PreparedImport{DownloadID: "private-job-selector", Files: []domain.PreparedImportFile{{
+			Path: selector, FolderName: "fixture", Targets: operation.Targets,
+			QualityID: 1, Quality: domain.ImportQualityRevision{Version: 1}, Languages: []int64{1},
+		}}},
+	}
+	calls := 0
+	adapter := preparedTestAdapter{
+		fixtureAdapter: fixtureAdapter{Send: func(context.Context, domain.Operation) (domain.Acknowledgement, error) {
+			t.Fatal("unprepared send called")
+			return domain.Acknowledgement{}, nil
+		}},
+		send: func(ctx context.Context, observed domain.Operation, value domain.PreparedAction) (domain.Acknowledgement, error) {
+			calls++
+			if observed.Key != operation.Key || value.Import.Files[0].Path != selector {
+				t.Fatal("adapter received a different private selector")
+			}
+			var payload, state string
+			err := local.Read(ctx, func(tx *sql.Tx) error {
+				return tx.QueryRowContext(ctx, `SELECT a.preflight, i.state FROM action_attempts a JOIN action_intents i
+					ON i.id = a.intent_id WHERE i.id = ?`, intent.ID).Scan(&payload, &state)
+			})
+			if err != nil || state != string(domain.IntentSending) || !strings.Contains(payload, selector) {
+				t.Fatal("prepared adapter ran before the private selector and sending state committed")
+			}
+			value.Import.Files[0].Path = "/synthetic/changed-after-send.mkv"
+			return domain.Acknowledgement{State: domain.DispatchAcknowledged}, nil
+		},
+	}
+	executor, err := NewExecutor(journal, adapter, gateFunc(func(ctx context.Context, current domain.Intent) (Preflight, error) {
+		proof, err := freshFacts(ctx, current)
+		proof.Prepared = prepared
+		return proof, err
+	}), fixedClock{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempt, err := executor.Dispatch(t.Context(), intent.ID)
+	if err != nil || attempt == "" || calls != 1 {
+		t.Fatalf("dispatch returned %q with %v across %d sends", attempt, err, calls)
+	}
+	if prepared.Import.Files[0].Path != selector {
+		t.Fatal("adapter mutation reached preflight input")
+	}
+	if err := local.Close(); err != nil {
+		t.Fatal(err)
+	}
+	_, journal = openJournal(t, dir, fixtureAuthorize)
+	lease, err := journal.BeginReconcile(t.Context(), attempt, fixtureTime.Add(time.Minute))
+	if err != nil || lease.Attempt.Prepared == nil || lease.Attempt.Prepared.Import.Files[0].Path != selector {
+		t.Fatalf("private selector unavailable after reopening: %v", err)
+	}
 }
