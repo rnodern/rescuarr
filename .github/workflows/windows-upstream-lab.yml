@@ -66,6 +66,7 @@ jobs:
           bash test/lab/seed.sh "$lab_dir"
           openssl x509 -in "$lab_dir/tls/root.pem" -outform der -out "$lab_dir/tls/root.cer"
       - name: Run the native Windows Sonarr and SABnzbd lab
+        timeout-minutes: 12
         run: |
           $dir = Join-Path $env:RUNNER_TEMP 'rescuarr-windows-lab'
           $sonarrDir = Join-Path $dir ($env:SONARR_ARCHIVE + '.extracted')
@@ -80,10 +81,12 @@ jobs:
           # Resolve metadata to the generated fixture only inside this ephemeral runner.
           $hosts = "$env:SystemRoot/System32/drivers/etc/hosts"
           $originalHosts = [IO.File]::ReadAllBytes($hosts)
+          Write-Host 'Trusting the disposable metadata certificate'
           $certificate = Import-Certificate -FilePath "$dir/tls/root.cer" -CertStoreLocation 'Cert:/CurrentUser/Root'
           try {
             Add-Content -LiteralPath $hosts -Value "`r`n127.0.0.1 skyhook.sonarr.tv" -Encoding ascii
             Clear-DnsClientCache
+            Write-Host 'Launching isolated Windows recovery scenario'
             python -B test/lab/windows_empty_pack.py --sonarr $sonarr[0].FullName --sab $sab[0].FullName `
               --adapter "$dir/go-pack-probe.exe" --media "$dir/media/synthetic.mkv" `
               --certificate "$dir/tls/source.pem" --key "$dir/tls/source.key" `
