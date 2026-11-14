@@ -21,9 +21,12 @@ from source import (
     nzb,
     releases,
     rss,
+    recent_index_targets,
     search_targets,
     series_metadata,
 )
+
+from scenarios import validation_category
 
 
 class SyntheticSourceTest(unittest.TestCase):
@@ -41,6 +44,22 @@ class SyntheticSourceTest(unittest.TestCase):
             self.assertEqual(movie_metadata(index - 1)["tmdbId"], movie_id)
         self.assertEqual(search_targets("radarr", {"t": ["movie"], "tmdbid": ["1"]}), [])
         self.assertEqual(series_metadata()["tvdbId"], TVDB_ID)
+
+    def test_recent_validation_feed_is_distinct_from_targeted_search(self):
+        tv = {"t": ["tvsearch"], "cat": ["5040"], "offset": ["0"]}
+        movie = {"t": ["movie"], "cat": ["2040"]}
+        self.assertEqual(recent_index_targets("sonarr", tv), ["episode1"])
+        self.assertEqual(recent_index_targets("radarr", movie), ["movie1"])
+        self.assertEqual(search_targets("sonarr", tv), [])
+        self.assertEqual(search_targets("radarr", movie), [])
+        self.assertEqual(recent_index_targets("sonarr", {**tv, "ep": ["3"]}), [])
+        self.assertEqual(recent_index_targets("radarr", {**movie, "tmdbid": ["1"]}), [])
+        self.assertEqual(recent_index_targets("radarr", {**movie, "cat": ["5000"]}), [])
+
+    def test_indexer_validation_diagnostics_exclude_upstream_text(self):
+        example = io.BytesIO(b'[{"errorMessage":"Unable to connect to http://private.invalid/?apikey=secret"}]')
+        self.assertEqual(validation_category(example), "cannotConnect")
+        self.assertEqual(validation_category(io.BytesIO(b'{}')), "validationUnknown")
 
     def test_index_item_binds_a_scoped_nzb(self):
         caps = ET.fromstring(CAPABILITIES)

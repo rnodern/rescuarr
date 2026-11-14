@@ -2,6 +2,7 @@
 
 import hashlib
 import http.client
+import json
 import os
 import time
 import urllib.error
@@ -79,6 +80,34 @@ def linked_library_path(path, lab_library):
     return safe_path(str(lab_library / upstream.relative_to("/library")), lab_library)
 
 
+def validation_category(error):
+    """Record an allowlisted category and discard all upstream text and fields."""
+    try:
+        body = error.read(8193)
+        problems = json.loads(body) if len(body) <= 8192 else None
+    except (OSError, ValueError):
+        return "validationUnknown"
+    if not isinstance(problems, list):
+        return "validationUnknown"
+    for problem in problems:
+        if not isinstance(problem, dict):
+            continue
+        message = problem.get("errorMessage", "")
+        if not isinstance(message, str):
+            continue
+        message = message.lower()
+        for signature, category in (
+            ("no results", "emptyRecentFeed"),
+            ("no rss feed query", "missingRecentQuery"),
+            ("does not support any of the selected categories", "unsupportedCategory"),
+            ("valid url", "invalidURL"),
+            ("unable to connect", "cannotConnect"),
+        ):
+            if signature in message:
+                return category
+    return "validationUnknown"
+
+
 class Arr:
     def __init__(self, product):
         self.product = product
@@ -94,7 +123,10 @@ class Arr:
         try:
             return call_json(self.origin, "/api/v3/" + path, query, self.headers, method=method, body=body)
         except urllib.error.HTTPError as error:
-            raise LabFailure(f"{method}:{path.split('/')[0]}:HTTP{error.code}") from None
+            with error:
+                route = path.split("/")[0]
+                category = validation_category(error) if error.code == 400 and method == "POST" and route == "indexer" else ""
+            raise LabFailure(f"{method}:{route}:HTTP{error.code}" + (f":{category}" if category else "")) from None
 
     def read(self, path, **query):
         return self.api(path, query=query)[1]
@@ -180,7 +212,7 @@ class Arr:
         }, {"enable": True, "removeCompletedDownloads": False, "removeFailedDownloads": False})
         self.provider("indexer", "Newznab", INDEXER_NAME, {
             "baseUrl": f"{SOURCE}/{self.product}", "apiPath": "/api",
-            "categories": [5030 if self.product == "sonarr" else 2040],
+            "categories": [5040 if self.product == "sonarr" else 2040],
         }, {"enableRss": False, "enableAutomaticSearch": True, "enableInteractiveSearch": True})
         return profile
 

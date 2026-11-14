@@ -38,8 +38,8 @@ ARTICLE_ID = re.compile(
 
 # Each target can select its release fixture through the lab control route.
 TARGETS = {
-    "episode1": ("sonarr", f"{SONARR_TITLE.replace(' ', '.')}.S01E01", 5030),
-    "episode2": ("sonarr", f"{SONARR_TITLE.replace(' ', '.')}.S01E02", 5030),
+    "episode1": ("sonarr", f"{SONARR_TITLE.replace(' ', '.')}.S01E01", 5040),
+    "episode2": ("sonarr", f"{SONARR_TITLE.replace(' ', '.')}.S01E02", 5040),
     "movie1": ("radarr", f"{RADARR_TITLES[0].replace(' ', '.')}.2020", 2040),
     "movie2": ("radarr", f"{RADARR_TITLES[1].replace(' ', '.')}.2020", 2040),
 }
@@ -52,7 +52,7 @@ CAPABILITIES = b"""<?xml version="1.0" encoding="utf-8"?>
   <movie-search available="yes" supportedParams="q,tmdbid"/>
 </searching>
 <categories><category id="2000" name="Movies"><subcat id="2040" name="HD"/></category>
-<category id="5000" name="TV"><subcat id="5030" name="SD"/></category></categories>
+<category id="5000" name="TV"><subcat id="5040" name="HD"/></category></categories>
 </caps>"""
 
 
@@ -114,6 +114,20 @@ def search_targets(product, query):
             if tmdb == str(movie_id) or (not tmdb and re.sub("[^a-z]", "", RADARR_TITLES[index].lower()) in title):
                 return [f"movie{index + 1}"]
     return []
+
+
+def recent_index_targets(product, query):
+    """The pinned indexers validate settings with an unscoped recent-feed read."""
+    expected_kind, expected_category, sample = {
+        "sonarr": ("tvsearch", "5040", "episode1"),
+        "radarr": ("movie", "2040", "movie1"),
+    }[product]
+    if (query.get("t") not in ([expected_kind], ["search"])
+            or expected_category not in query.get("cat", [""])[0].split(",")
+            or any(query.get(key, [""])[0] for key in
+                   ("q", "tvdbid", "rid", "imdbid", "tmdbid", "season", "ep"))):
+        return []
+    return [sample]
 
 
 def rss(items, product, size):
@@ -318,6 +332,11 @@ class Source(BaseHTTPRequestHandler):
                     phase = self.server.phases.get(target, "original")
                     stamp = self.server.started - (60 if phase == "replacement" else 3600)
                     items.append((target, phase, stamp))
+            # Validation needs a parseable recent item. It remains outside the
+            # recorded target scope and cannot satisfy a recovery search.
+            if not items:
+                items.extend((target, "original", self.server.started - 3600)
+                             for target in recent_index_targets(product, query))
         self.write(rss(items, product, len(self.server.media)), "application/rss+xml")
 
 
