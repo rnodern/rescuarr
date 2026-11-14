@@ -28,6 +28,7 @@ type Options struct {
 	Read          app.ConsoleReader
 	Commands      app.ConsoleCommands
 	Connections   ConnectionService
+	Learning      LearningService
 	Notifications NotificationService
 	ProwlDelivery bool
 	Authorize     Authorize
@@ -76,6 +77,10 @@ func New(options Options) http.Handler {
 		mux.HandleFunc("POST "+base+"/notifications/{id}/test", c.testNotification)
 		mux.HandleFunc("POST "+base+"/notifications/{id}/disable", c.disableNotification)
 	}
+	if c.Learning != nil {
+		mux.HandleFunc("GET "+base+"/learning", c.learn)
+		mux.HandleFunc("POST "+base+"/learning/{id}", c.changePattern)
+	}
 	assets, err := fs.Sub(files, "assets")
 	if err != nil {
 		panic(err)
@@ -112,6 +117,7 @@ type page struct {
 	Status                    app.Overview
 	HasConnections            bool
 	HasNotifications          bool
+	HasLearning               bool
 	Body                      any
 }
 
@@ -119,6 +125,7 @@ func (c console) render(w http.ResponseWriter, r *http.Request, code int, name s
 	p.Base = c.BasePath
 	p.HasConnections = c.Connections != nil
 	p.HasNotifications = c.Notifications != nil
+	p.HasLearning = c.Learning != nil
 	session, _ := r.Context().Value(sessionKey{}).(Session)
 	p.CSRF = session.CSRF
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")

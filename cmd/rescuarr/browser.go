@@ -6,16 +6,19 @@ import (
 	"github.com/rnodern/rescuarr/internal/access"
 	"github.com/rnodern/rescuarr/internal/app"
 	"github.com/rnodern/rescuarr/internal/config"
+	"github.com/rnodern/rescuarr/internal/learningstore"
 	"github.com/rnodern/rescuarr/internal/observeservice"
 	"github.com/rnodern/rescuarr/internal/store"
 	"github.com/rnodern/rescuarr/internal/webconsole"
 )
 
 func browserHandler(cfg config.Config, auth *access.Auth, local *store.Store, observations *observeservice.Service, notifications webconsole.NotificationService) http.Handler {
+	patterns, _ := learningstore.New(local)
 	browser := webconsole.New(webconsole.Options{
 		BasePath:      cfg.BasePath,
 		Read:          observations,
 		Connections:   observations,
+		Learning:      patterns,
 		Authorize:     app.CurrentBrowserSession,
 		Notifications: notifications,
 		ProwlDelivery: cfg.ProwlDelivery,
