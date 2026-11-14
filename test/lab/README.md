@@ -18,3 +18,9 @@ The [Upstream lab workflow](../../.github/workflows/upstream-lab.yml) runs the s
 | Reject, blocklist, failed history, client effects, explicit search and lost response | Tagged-source review. Awaiting disposable tests |
 
 Run the offline checks with `python3 -B -m unittest discover -s test/lab -p 'test_*.py'`. See [integration contracts](../../docs/INTEGRATIONS_DESIGN.md) for the broader release criteria.
+
+## Optional effect scenarios
+
+Pass one of `sonarr/import`, `radarr/import`, `sonarr/reject-preserve`, `radarr/reject-preserve`, `sonarr/reject-remove`, `radarr/reject-remove`, `sonarr/reject-lost-response` or `radarr/reject-lost-response` as the second argument. The effect runner also requires OpenSSL and FFmpeg. It generates disposable certificates and a video from filters, serves controlled metadata, search results and articles on the closed network, and exports scoped evidence. GitHub pull requests still run the read probes. Use the workflow dispatch input to run one effect scenario on an exact checked-out revision.
+
+The import scenario records whether the source was preserved as a separate result. The rejection scenarios exercise the Arr queue branch on a paused synthetic download. They do not establish terminal downloader failure, qualify automatic removal, or qualify the production replacement flow. A source-retaining trial can leave final import pending. Review each effect independently before drawing a capability conclusion.
