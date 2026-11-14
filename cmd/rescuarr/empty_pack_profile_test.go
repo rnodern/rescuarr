@@ -61,7 +61,7 @@ func TestCheckEmptyPackProfileOnlyReadsSelectedConnection(t *testing.T) {
 	if err := checkEmptyPackProfile(ctx, local, "", exchange, &output); err != nil {
 		t.Fatal(err)
 	}
-	if calls != 4 || !strings.Contains(output.String(), "outside the Linux container environment tested in the lab") ||
+	if calls != 4 || !strings.Contains(output.String(), "Sonarr matches the lab's platform and download-handling settings") ||
 		strings.Contains(output.String(), apiKey) || strings.Contains(output.String(), "fixture.invalid") {
 		t.Fatalf("unexpected profile report: %d requests, %s", calls, output.String())
 	}

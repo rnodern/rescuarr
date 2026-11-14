@@ -68,10 +68,10 @@ func checkEmptyPackProfile(ctx context.Context, local *store.Store, selected str
 		}
 		return errors.New("could not confirm the selected Sonarr build and one enabled SABnzbd client")
 	}
-	reason := "The tested Sonarr profile matches the lab's OS and download-handling settings. The exact package, SABnzbd and storage setup require qualification before enabling writes."
+	reason := "Sonarr matches the lab's platform and download-handling settings. The installed package, SABnzbd version and storage setup still need verification."
 	switch {
-	case profile.OSFamily != "linux" || !profile.Docker:
-		reason = "This Sonarr runs outside the Linux container environment tested in the lab."
+	case !((profile.OSFamily == "linux" && profile.Docker) || (profile.OSFamily == "windows" && !profile.Docker)):
+		reason = "The lab tested Sonarr in a Linux container and as a native Windows app. This Sonarr reports a different deployment."
 	case profile.Branch != "develop":
 		reason = "This Sonarr branch differs from the one tested in the lab."
 	case !profile.CompletedHandling || profile.RemoveCompleted || profile.RemoveFailed || !profile.AutoRedownloadFailed || !profile.AutoRedownloadInteractive:
