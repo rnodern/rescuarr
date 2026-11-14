@@ -137,8 +137,72 @@ func TestTrackSearchBoundsExplicitAndArrOwnedTargets(t *testing.T) {
 	t.Run("Arr owns replacement", func(t *testing.T) {
 		in := syntheticSearch(domain.ProductRadarr)
 		in.Attempt = syntheticRejection(domain.ProductRadarr, false).Attempt
+		if out := TrackArrReplacement(in); len(out.Targets) != 0 {
+			t.Fatalf("non-Arr-owned rejection tracked: %#v", out)
+		}
+		in.Attempt.Operation.Effects = append(in.Attempt.Operation.Effects, domain.Effect{Kind: domain.EffectSearchDispatch})
 		if out := TrackArrReplacement(in); out.Command != "" || len(out.Targets) != 1 || out.Targets[0].Import.Verification != domain.VerificationExternal {
 			t.Fatalf("Arr-owned progress = %#v", out)
+		}
+		in.Targets[0].Grabs.Value = nil
+		in.Targets[0].Grabs.Observation.State = domain.ObservationAbsent
+		if out := TrackArrReplacement(in); out.Command != "" || len(out.Targets) != 1 || out.Targets[0].Grab.Observation.ID != "" {
+			t.Fatalf("Arr-owned search exhausted without dispatch proof: %#v", out)
+		}
+	})
+}
+
+func TestTrackSearchAbsenceRequiresCompletedCommand(t *testing.T) {
+	checks := []struct {
+		name string
+		edit func(*SearchInput)
+	}{
+		{"uncertain dispatch", func(in *SearchInput) { in.Attempt.Acknowledgement.State = domain.DispatchUncertain }},
+		{"pending command", func(in *SearchInput) { in.Command.Value.State = CommandPending }},
+		{"different command", func(in *SearchInput) { in.Command.Value.Reference = "192" }},
+		{"absence read before completion", func(in *SearchInput) {
+			in.Targets[0].Grabs.Observation.ObservedAt = in.Command.Observation.ObservedAt.Add(-time.Second)
+		}},
+	}
+	for _, tc := range checks {
+		t.Run(tc.name, func(t *testing.T) {
+			in := syntheticSearch(domain.ProductRadarr)
+			in.Targets[0].Grabs.Value = nil
+			in.Targets[0].Grabs.Observation.State = domain.ObservationAbsent
+			tc.edit(&in)
+			out := TrackSearch(in)
+			if len(out.Targets) != 1 || out.Targets[0].Grab.Observation.ID != "" ||
+				out.Targets[0].Import.Verification != domain.VerificationUnresolved {
+				t.Fatalf("unconfirmed search yielded an empty result: %#v", out)
+			}
+		})
+	}
+}
+
+func TestTrackSearchRequiresExactOriginalGrabObservation(t *testing.T) {
+	checks := []struct {
+		name string
+		edit func(*SearchInput)
+	}{
+		{"missing evidence identity", func(in *SearchInput) { in.Origin.Grab.Observation.ID = "" }},
+		{"wrong download", func(in *SearchInput) { in.Origin.Grab.Observation.SourceRecord = "other" }},
+		{"wrong scope", func(in *SearchInput) { in.Origin.Grab.Observation.Scope.Instance.Epoch++ }},
+		{"captured after dispatch", func(in *SearchInput) { in.Origin.Grab.Observation.ObservedAt = in.Attempt.SentAt.Add(time.Second) }},
+	}
+	for _, tc := range checks {
+		t.Run(tc.name, func(t *testing.T) {
+			in := syntheticSearch(domain.ProductRadarr)
+			tc.edit(&in)
+			if out := TrackSearch(in); out.Command != "" || len(out.Targets) != 0 {
+				t.Fatalf("invalid original observation yielded progress: %#v", out)
+			}
+		})
+	}
+	t.Run("historical capture can expire before tracking", func(t *testing.T) {
+		in := syntheticSearch(domain.ProductRadarr)
+		in.Origin.Grab.Observation.ExpiresAt = in.Attempt.SentAt.Add(-time.Second)
+		if out := TrackSearch(in); out.Command != CommandCompleted || len(out.Targets) != 1 || out.Targets[0].Import.Verification != domain.VerificationExternal {
+			t.Fatalf("historical original observation lost provenance: %#v", out)
 		}
 	})
 }

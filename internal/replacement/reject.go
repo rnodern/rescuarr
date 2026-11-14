@@ -15,7 +15,10 @@ const (
 	ClientTerminal domain.ObservationKind = "client_terminal_release_failure"
 )
 
-const maxTargets = 128
+const (
+	maxTargets       = 128
+	maxRejectEffects = 5
+)
 
 // ReleaseSignature is the normalised join key for Arr history and blocklist
 // readbacks. Fingerprints come from an adapter's exact title and quality records.
@@ -122,7 +125,7 @@ func VerifyReject(in RejectInput) Rejection {
 	out := Rejection{
 		Outcome: domain.Outcome{AttemptID: attempt.ID, ObservedAt: in.Now, Verification: domain.VerificationUnresolved},
 	}
-	if len(attempt.Operation.Effects) > 4 {
+	if len(attempt.Operation.Effects) > maxRejectEffects {
 		return out
 	}
 	for _, effect := range attempt.Operation.Effects {
@@ -236,13 +239,23 @@ func validRejection(in RejectInput) bool {
 	default:
 		return false
 	}
+	return exactRejectEffects(a.Operation.Effects)
+}
+
+func exactRejectEffects(effects []domain.Effect) bool {
+	if len(effects) > maxRejectEffects {
+		return false
+	}
 	kinds := make(map[domain.EffectKind]bool)
-	for _, effect := range a.Operation.Effects {
+	for _, effect := range effects {
 		if effect.Target != (domain.TargetRef{}) || kinds[effect.Kind] {
 			return false
 		}
 		kinds[effect.Kind] = true
 	}
+	// Arr-owned search is a planned side effect. Failed history and blocklist
+	// prove neither its dispatch nor its completion.
+	delete(kinds, domain.EffectSearchDispatch)
 	return kinds[domain.EffectQueueRemoval] && kinds[domain.EffectBlocklist] &&
 		((len(kinds) == 3 && kinds[domain.EffectSourceRetained]) ||
 			(len(kinds) == 4 && kinds[domain.EffectClientRemoval] && kinds[domain.EffectDataRemoval]))

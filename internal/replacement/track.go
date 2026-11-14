@@ -86,7 +86,9 @@ func TrackSearch(in SearchInput) SearchProgress {
 // TrackArrReplacement follows Arr-owned work from the rejection timestamp. It
 // reports replacement effects from exact target evidence without a command reference.
 func TrackArrReplacement(in SearchInput) SearchProgress {
-	if in.Attempt.Operation.Action != domain.ActionReject || !sameTargets(in.Attempt.Operation.Targets, in.Origin.Targets) {
+	op := in.Attempt.Operation
+	if op.Action != domain.ActionReject || !exactRejectEffects(op.Effects) ||
+		!slices.Contains(op.Effects, domain.Effect{Kind: domain.EffectSearchDispatch}) || !sameTargets(op.Targets, in.Origin.Targets) {
 		return SearchProgress{}
 	}
 	return trackSearch(in, false)
@@ -95,7 +97,9 @@ func TrackArrReplacement(in SearchInput) SearchProgress {
 func trackSearch(in SearchInput, explicit bool) SearchProgress {
 	o, a := in.Origin, in.Attempt
 	var out SearchProgress
+	captured := o.Grab.Observation.ObservedAt
 	if _, ok := o.exactGrab(); !ok || a.ID == "" || a.Operation.Key == "" || a.SentAt.IsZero() || !a.SentAt.Before(in.Now) ||
+		captured.After(a.SentAt) || !arrObservation(o, o.Grab.Observation, GrabHistory, domain.ObservationKnown, captured) ||
 		a.Operation.Job != o.Job.Ref || a.Acknowledgement.State == domain.DispatchRejectedBeforeEffect ||
 		len(a.Operation.Targets) == 0 || len(a.Operation.Targets) > maxTargets || len(in.Targets) != len(a.Operation.Targets) {
 		return out
@@ -110,11 +114,15 @@ func trackSearch(in SearchInput, explicit bool) SearchProgress {
 	if !sameTargets(certifiedTargets, a.Operation.Targets) {
 		return out
 	}
+	var completedAt time.Time
 	if explicit && qualifiedCommand(in) {
 		out.Command = in.Command.Value.State
+		if out.Command == CommandCompleted {
+			completedAt = in.Command.Observation.ObservedAt
+		}
 	}
 	for _, target := range in.Targets {
-		out.Targets = append(out.Targets, trackTarget(o, a, target, in.Now))
+		out.Targets = append(out.Targets, trackTarget(o, a, target, in.Now, completedAt))
 	}
 	return out
 }
@@ -159,7 +167,7 @@ func qualifiedCommand(in SearchInput) bool {
 	return false
 }
 
-func trackTarget(o Original, a domain.Attempt, t SearchTarget, now time.Time) TargetProgress {
+func trackTarget(o Original, a domain.Attempt, t SearchTarget, now, completedAt time.Time) TargetProgress {
 	out := TargetProgress{Target: t.Target, Import: domain.EffectResult{
 		Effect: domain.Effect{Kind: domain.EffectLibraryImport, Target: t.Target}, Verification: domain.VerificationUnresolved,
 	}}
@@ -169,7 +177,8 @@ func trackTarget(o Original, a domain.Attempt, t SearchTarget, now time.Time) Ta
 	if !postSend(gobs, a) {
 		return out
 	}
-	if len(t.Grabs.Value) == 0 && scopedObservation(gobs, arrScope, source, ReplacementGrab, domain.ObservationAbsent, targetRecord, now) &&
+	if !completedAt.IsZero() && !gobs.ObservedAt.Before(completedAt) && len(t.Grabs.Value) == 0 &&
+		scopedObservation(gobs, arrScope, source, ReplacementGrab, domain.ObservationAbsent, targetRecord, now) &&
 		sameReadContract(gobs, o.Grab.Observation) {
 		out.Grab.Observation = gobs
 		return out

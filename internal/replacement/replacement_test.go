@@ -210,3 +210,20 @@ func TestUncertainRejectKeepsAttemptOpenWithExactReadbacks(t *testing.T) {
 		}
 	}
 }
+
+func TestArrOwnedRejectKeepsSearchDispatchUnresolved(t *testing.T) {
+	for _, remove := range []bool{false, true} {
+		t.Run(fmt.Sprintf("remove=%t", remove), func(t *testing.T) {
+			input := syntheticRejection(domain.ProductRadarr, remove)
+			input.Attempt.Operation.Effects = append(input.Attempt.Operation.Effects, domain.Effect{Kind: domain.EffectSearchDispatch})
+			out := VerifyReject(input)
+			if out.Outcome.Verification != domain.VerificationPartial || out.Readback.Blocklist.ID == "" {
+				t.Fatalf("outcome = %#v", out)
+			}
+			for _, effect := range input.Attempt.Operation.Effects[:len(input.Attempt.Operation.Effects)-1] {
+				verifyEffect(t, out.Outcome, effect.Kind, domain.VerificationEffect)
+			}
+			verifyEffect(t, out.Outcome, domain.EffectSearchDispatch, domain.VerificationUnresolved)
+		})
+	}
+}
