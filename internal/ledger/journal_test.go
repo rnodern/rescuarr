@@ -3,9 +3,11 @@ package ledger
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -328,11 +330,14 @@ func TestSQLiteExecutorReturnsCommittedReadback(t *testing.T) {
 				if err := tx.QueryRowContext(t.Context(), "SELECT outcome FROM action_attempts WHERE id = ?", send.Attempt.ID).Scan(&stored); err != nil {
 					return err
 				}
-				canonical, err := marshalJournal(outcome)
-				if err == nil && canonical != stored {
-					t.Fatalf("executor returned %s, journal committed %s", canonical, stored)
+				var committed domain.Outcome
+				if err := json.Unmarshal([]byte(stored), &committed); err != nil {
+					return err
 				}
-				return err
+				if !reflect.DeepEqual(outcome, committed) {
+					t.Fatalf("executor returned %+v, journal committed %+v", outcome, committed)
+				}
+				return nil
 			}); err != nil {
 				t.Fatal(err)
 			}

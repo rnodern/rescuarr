@@ -17,6 +17,7 @@ import (
 	"github.com/rnodern/rescuarr/internal/access"
 	"github.com/rnodern/rescuarr/internal/app"
 	"github.com/rnodern/rescuarr/internal/config"
+	"github.com/rnodern/rescuarr/internal/observepoll"
 	"github.com/rnodern/rescuarr/internal/observeservice"
 	"github.com/rnodern/rescuarr/internal/prowl"
 	"github.com/rnodern/rescuarr/internal/prowloutbox"
@@ -136,9 +137,10 @@ func serve(ctx context.Context, cfg config.Config, local *store.Store, auth *acc
 	if err != nil {
 		return fmt.Errorf("open listener: %w", err)
 	}
+	observations := observeservice.New(local, nil, nil)
 	notifications := prowloutbox.New(local, nil, prowl.NewClient(nil), cfg.ProwlDelivery)
 	server := &http.Server{
-		Handler:           browserHandler(cfg, auth, local, observeservice.New(local, nil, nil), notifications),
+		Handler:           browserHandler(cfg, auth, local, observations, notifications),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      55 * time.Second, // Allows the bounded upstream queue scan to finish.
@@ -162,9 +164,15 @@ func serve(ctx context.Context, cfg config.Config, local *store.Store, auth *acc
 		defer close(workerStopped)
 		maintain(workers, local, auth, logger)
 	}()
+	observationsStopped := make(chan struct{})
+	go func() {
+		defer close(observationsStopped)
+		observepoll.Run(workers, observations)
+	}()
 	defer func() {
 		stopWorkers()
 		<-workerStopped
+		<-observationsStopped
 	}()
 	finished := make(chan error, 1)
 	logger.Info("service_started", "component", "http", "version", version)
