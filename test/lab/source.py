@@ -71,6 +71,7 @@ def series_metadata():
         "malIds": [],
         "aniListIds": [],
         "seasons": [{"seasonNumber": 1, "images": []}],
+        "seasonTypes": [{"name": "Official", "type": "official", "seasonNumbers": [1], "episodeCount": 2}],
         "episodes": [
             {"tvdbId": TVDB_ID + number, "seasonNumber": 1, "episodeNumber": number, "title": f"Episode {number}",
              "airDate": "2020-01-01", "airDateUtc": "2020-01-01T00:00:00Z", "runtime": 15}
@@ -279,11 +280,11 @@ class News(socketserver.StreamRequestHandler):
 
 
 def metadata_path_kind(path):
-    if path == f"/v1/tvdb/shows/en/{TVDB_ID}":
+    if path in (f"/v1/tvdb/shows/en/{TVDB_ID}", f"/v2/tvdb/shows/eng/{TVDB_ID}/official"):
         return "sonarrSeries"
     if path in (f"/v1/movie/{movie_id}" for movie_id in TMDB_IDS):
         return "radarrMovie"
-    if path.startswith("/v1/"):
+    if path.startswith(("/v1/", "/v2/")):
         return "unmatchedMetadata"
     return None
 

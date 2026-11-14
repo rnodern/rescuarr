@@ -9,7 +9,7 @@ from unittest.mock import Mock, patch
 
 import probe
 from scenarios import CATEGORY, ID_ONLY_WARNING, LabFailure, id_only_import
-from source import ID_ONLY_PHASE, ID_ONLY_TARGET, TVDB_ID, article_id, nzb, releases, rss, valid_phase
+from source import ID_ONLY_PHASE, ID_ONLY_TARGET, TVDB_ID, article_id, metadata_path_kind, nzb, releases, rss, series_metadata, valid_phase
 
 
 class SonarrV5LabTest(unittest.TestCase):
@@ -27,6 +27,13 @@ class SonarrV5LabTest(unittest.TestCase):
         self.assertEqual(article, article_id(ID_ONLY_TARGET, ID_ONLY_PHASE, 1))
         self.assertFalse(valid_phase("episode2", ID_ONLY_PHASE))
         self.assertFalse(valid_phase("movie1", ID_ONLY_PHASE))
+
+    def test_v5_metadata_contract_keeps_v4_and_checks_language_and_order(self):
+        self.assertEqual(metadata_path_kind(f"/v1/tvdb/shows/en/{TVDB_ID}"), "sonarrSeries")
+        self.assertEqual(metadata_path_kind(f"/v2/tvdb/shows/eng/{TVDB_ID}/official"), "sonarrSeries")
+        self.assertEqual(metadata_path_kind(f"/v2/tvdb/shows/eng/{TVDB_ID}/dvd"), "unmatchedMetadata")
+        self.assertEqual(metadata_path_kind(f"/v2/tvdb/shows/zho/{TVDB_ID}/official"), "unmatchedMetadata")
+        self.assertEqual(series_metadata()["seasonTypes"][0]["episodeCount"], 2)
 
     def test_probe_selects_v5_only_for_the_new_scenario(self):
         for scenario, version in ((probe.SONARR_V5_ID_IMPORT, "5.0.0.2941"), ("sonarr/import", "4.0.20.3014")):
