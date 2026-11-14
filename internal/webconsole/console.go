@@ -24,15 +24,16 @@ type Authorize func(*http.Request) Session
 
 type Options struct {
 	// BasePath is a previously validated, canonical path or the empty string.
-	BasePath      string
-	Read          app.ConsoleReader
-	Commands      app.ConsoleCommands
-	Connections   ConnectionService
-	ImportPreview app.ImportPreviewReader
-	Notifications NotificationService
-	ProwlDelivery bool
-	Authorize     Authorize
-	Clock         app.Clock
+	BasePath         string
+	Read             app.ConsoleReader
+	Commands         app.ConsoleCommands
+	Connections      ConnectionService
+	ImportPreview    app.ImportPreviewReader
+	RecoveryActivity app.RecoveryActivityReader
+	Notifications    NotificationService
+	ProwlDelivery    bool
+	Authorize        Authorize
+	Clock            app.Clock
 }
 
 type console struct {
@@ -63,6 +64,9 @@ func New(options Options) http.Handler {
 	mux.HandleFunc("GET "+base+"/{$}", c.overview)
 	mux.HandleFunc("GET "+base+"/cases", c.cases)
 	mux.HandleFunc("GET "+base+"/cases/{caseID}", c.caseDetail)
+	if c.RecoveryActivity != nil {
+		mux.HandleFunc("GET "+base+"/activity", c.activity)
+	}
 	if c.ImportPreview != nil {
 		mux.HandleFunc("POST "+base+"/cases/{caseID}/import-preview", c.importPreview)
 	}
@@ -117,6 +121,7 @@ type page struct {
 	Status                    app.Overview
 	HasConnections            bool
 	HasImportPreview          bool
+	HasRecoveryActivity       bool
 	HasNotifications          bool
 	Body                      any
 }
@@ -125,6 +130,7 @@ func (c console) render(w http.ResponseWriter, r *http.Request, code int, name s
 	p.Base = c.BasePath
 	p.HasConnections = c.Connections != nil
 	p.HasImportPreview = c.ImportPreview != nil
+	p.HasRecoveryActivity = c.RecoveryActivity != nil
 	p.HasNotifications = c.Notifications != nil
 	session, _ := r.Context().Value(sessionKey{}).(Session)
 	p.CSRF = session.CSRF

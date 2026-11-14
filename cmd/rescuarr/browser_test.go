@@ -85,7 +85,7 @@ func TestBrowserUsesOwnerSessionAndLocalState(t *testing.T) {
 	if response := perform(base+"/", ""); response.Code != http.StatusSeeOther || response.Header().Get("Location") != base+"/setup" {
 		t.Fatalf("fresh console returned %d", response.Code)
 	}
-	for _, route := range []string{"/cases", "/connections", "/assets/console.css", "/fragments/status"} {
+	for _, route := range []string{"/cases", "/connections", "/activity", "/assets/console.css", "/fragments/status"} {
 		if status := perform(base+route, "").Code; status != http.StatusUnauthorized {
 			t.Errorf("anonymous %s returned %d", route, status)
 		}
@@ -167,13 +167,19 @@ func TestBrowserUsesOwnerSessionAndLocalState(t *testing.T) {
 		strings.Contains(detail, "Check Arr import candidates") {
 		t.Fatal("case did not show the job identity and available filename check")
 	}
+	response := perform(base+"/activity", session.Token)
+	activity := response.Body.String()
+	if response.Code != http.StatusOK || !strings.Contains(activity, "Fixture Show · S02E04") ||
+		!strings.Contains(activity, "Automatic import is unavailable for this setup") || !strings.Contains(activity, detailPath[1]) {
+		t.Fatalf("activity did not show the case's persisted filename assessment: HTTP %d", response.Code)
+	}
 	for _, query := range []string{"fixture+show", "s02e04", "fixture+episode", "1080p"} {
 		if !strings.Contains(perform(base+"/cases?q="+query, session.Token).Body.String(), detailPath[1]) {
 			t.Fatalf("search did not find the saved case for %q", query)
 		}
 	}
 	for _, private := range []string{key, keyFile, upstream, "fixture-job", "/private/fixture-path", "fixture unclassified message"} {
-		if strings.Contains(connections, private) || strings.Contains(cases, private) || strings.Contains(detail, private) {
+		if strings.Contains(connections, private) || strings.Contains(cases, private) || strings.Contains(detail, private) || strings.Contains(activity, private) {
 			t.Fatal("private connection or queue data appeared in the console")
 		}
 	}

@@ -14,13 +14,14 @@ import (
 
 func browserHandler(cfg config.Config, auth *access.Auth, local *store.Store, observations *observeservice.Service, notifications webconsole.NotificationService) http.Handler {
 	browser := webconsole.New(webconsole.Options{
-		BasePath:      cfg.BasePath,
-		Read:          observations,
-		Connections:   observations,
-		ImportPreview: recoveryservice.NewPreviewService(observations, local, nil, app.SystemClock{}),
-		Authorize:     app.CurrentBrowserSession,
-		Notifications: notifications,
-		ProwlDelivery: cfg.ProwlDelivery,
+		BasePath:         cfg.BasePath,
+		Read:             observations,
+		Connections:      observations,
+		RecoveryActivity: observations,
+		ImportPreview:    recoveryservice.NewPreviewService(observations, local, nil, app.SystemClock{}),
+		Authorize:        app.CurrentBrowserSession,
+		Notifications:    notifications,
+		ProwlDelivery:    cfg.ProwlDelivery,
 	})
 	return app.ConsoleHandler(cfg, auth, local, browser)
 }

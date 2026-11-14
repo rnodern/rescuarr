@@ -145,6 +145,7 @@ func persistGroup(ctx context.Context, tx *sql.Tx, instance domain.Instance, gro
 			item.ID = domain.CaseID(newCaseID(instance.Ref, key+"-"+strconv.FormatUint(uint64(caseGeneration), 10)))
 			item.Revision = 1
 			previous = storedCase{}
+			old = domain.Case{}
 			if *count >= limit {
 				return nil
 			}
@@ -222,7 +223,11 @@ func persistGroup(ctx context.Context, tx *sql.Tx, instance domain.Instance, gro
 			revision = excluded.revision, payload = excluded.payload, last_seen_generation = excluded.last_seen_generation,
 			missing_complete_scans = 0, updated_at = excluded.updated_at`, item.ID,
 		instance.Ref.ID, instance.Ref.Epoch, key, group.key.Scan != 0, fingerprint, item.State, item.Reason, item.Revision, string(payload), generation, stamp(now))
-	return err
+	if err != nil || len(group.rows) != 1 {
+		return err
+	}
+	_, checked := checks[group.rows[0].ID]
+	return recordEpisodeCheck(ctx, tx, old, item, checked, now)
 }
 
 func loadGroup(ctx context.Context, tx *sql.Tx, instance domain.InstanceRef, key string) (storedCase, error) {

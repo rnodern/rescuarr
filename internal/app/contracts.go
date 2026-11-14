@@ -63,6 +63,23 @@ type ImportPreviewReader interface {
 	ImportPreview(context.Context, domain.CaseID, domain.Revision) (ImportPreview, error)
 }
 
+// RecoveryActivityEntry describes a recorded recovery event. CaseTitle is empty
+// when the case is no longer available.
+type RecoveryActivityEntry struct {
+	Sequence   int64
+	CaseID     domain.CaseID
+	CaseTitle  string
+	Kind       domain.EventKind
+	Reason     domain.ReasonCode
+	OccurredAt time.Time
+}
+
+type RecoveryActivityReader interface {
+	// RecoveryActivity returns up to limit entries in descending sequence order.
+	// before excludes that sequence and newer entries. Zero starts at the newest.
+	RecoveryActivity(ctx context.Context, limit int, before int64) ([]RecoveryActivityEntry, error)
+}
+
 type ConsoleReader interface {
 	Overview(context.Context) (Overview, error)
 	Cases(context.Context, CaseQuery) (CasePage, error)
