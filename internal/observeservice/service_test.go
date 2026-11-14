@@ -229,3 +229,56 @@ func TestObserveOneScanAtATime(t *testing.T) {
 	close(release)
 	wg.Wait()
 }
+
+func TestUnidentifiedQueueChurnCannotExhaustExactCases(t *testing.T) {
+	db, _ := testStore(t)
+	s := New(db, nil, nil)
+	instance := add(t, s, domain.ProductSonarr)
+	ctx := t.Context()
+	now := time.Date(2026, 11, 14, 0, 0, 0, 0, time.UTC)
+	unknown := make([]observe.QueueRecord, 400)
+	for i := range unknown {
+		unknown[i] = observe.QueueRecord{ID: int64(i + 1), Protocol: domain.ProtocolUsenet, ClientLabel: "test", Status: "completed"}
+	}
+	collect := func(generation uint64, coverage domain.ObservationState, records []observe.QueueRecord) {
+		t.Helper()
+		if err := db.Write(ctx, func(tx *sql.Tx) error {
+			return persistCases(ctx, tx, instance, observe.QueueSnapshot{Records: records}, generation, now, coverage)
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The original implementation would persist 2,400 different identities by
+	// here, preventing the identified job from getting an available case slot.
+	for generation := uint64(1); generation <= 6; generation++ {
+		collect(generation, domain.ObservationKnown, unknown)
+	}
+	exact := observe.QueueRecord{ID: 500, Target: domain.TargetRef{Instance: instance.Ref, Kind: domain.TargetEpisode, ID: 8, SeriesID: 9},
+		DownloadID: "stable-test-id", Protocol: domain.ProtocolUsenet, ClientLabel: "test", Status: "completed"}
+	records := append(unknown, exact)
+	collect(7, domain.ObservationKnown, records)
+	page, err := s.Cases(ctx, app.CaseQuery{Limit: 100})
+	if err != nil || len(page.Cases) != maxObservationCases+1 {
+		t.Fatalf("projection exceeded separate observation-only quota: %d, %v", len(page.Cases), err)
+	}
+	var exactID domain.CaseID
+	for _, item := range page.Cases {
+		if item.Job.CompleteSet {
+			if len(item.Targets) != 1 || item.Targets[0].Ref != exact.Target {
+				t.Fatal("unidentified rows gained complete status")
+			}
+			exactID = item.ID
+		}
+	}
+	if exactID == "" {
+		t.Fatal("unidentified rows starved the exact group")
+	}
+	collect(8, "partial", nil)
+	if unchanged, _ := s.Cases(ctx, app.CaseQuery{Limit: 100}); len(unchanged.Cases) != len(page.Cases) {
+		t.Fatal("partial scan removed retained observations")
+	}
+	collect(9, domain.ObservationKnown, []observe.QueueRecord{exact})
+	if current, _ := s.Cases(ctx, app.CaseQuery{Limit: 100}); len(current.Cases) != 1 || current.Cases[0].ID != exactID {
+		t.Fatalf("complete scan failed to retire observations without disturbing exact case: %+v", current)
+	}
+}

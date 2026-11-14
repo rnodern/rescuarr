@@ -16,7 +16,10 @@ import (
 	"github.com/rnodern/rescuarr/internal/observe"
 )
 
-const closedRetention = 30 * 24 * time.Hour
+const (
+	closedRetention     = 30 * 24 * time.Hour
+	maxObservationCases = 64
+)
 
 // A job group is scoped to one installation/epoch and exact upstream download
 // ID, protocol and client label. A label supports grouping only, never shared
@@ -51,9 +54,14 @@ func persistCases(ctx context.Context, tx *sql.Tx, instance domain.Instance, sna
 			instance.Ref.ID, domain.CaseClosed, stamp(now.Add(-closedRetention))); err != nil {
 			return err
 		}
+		_, err := tx.ExecContext(ctx, `DELETE FROM observe_cases WHERE instance_id = ? AND observation_only = 1`, instance.Ref.ID)
+		if err != nil {
+			return err
+		}
 	}
-	var count int
-	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM observe_cases WHERE instance_id = ?`, instance.Ref.ID).Scan(&count); err != nil {
+	var count, observationCount int
+	if err := tx.QueryRowContext(ctx, `SELECT count(*) FILTER (WHERE observation_only = 0),
+		count(*) FILTER (WHERE observation_only = 1) FROM observe_cases WHERE instance_id = ?`, instance.Ref.ID).Scan(&count, &observationCount); err != nil {
 		return err
 	}
 	groups := make(map[jobKey][]observe.QueueRecord)
@@ -76,11 +84,15 @@ func persistCases(ctx context.Context, tx *sql.Tx, instance domain.Instance, sna
 			cmp.Compare(a.key.Protocol, b.key.Protocol), cmp.Compare(a.key.Row, b.key.Row), cmp.Compare(a.key.Target, b.key.Target))
 	})
 	for _, group := range ordered {
-		if err := persistGroup(ctx, tx, instance, group, snapshot.Evidence, generation, now, isComplete, &count); err != nil {
+		bucket, limit := &count, maxCases
+		if group.key.Scan != 0 {
+			bucket, limit = &observationCount, maxObservationCases
+		}
+		if err := persistGroup(ctx, tx, instance, group, snapshot.Evidence, generation, now, isComplete, bucket, limit); err != nil {
 			return err
 		}
 	}
-	if count >= maxCases {
+	if count >= maxCases || observationCount >= maxObservationCases {
 		if _, err := tx.ExecContext(ctx, `UPDATE observe_instances SET health = 'projection_limit', coverage = 'partial' WHERE id = ?`, instance.Ref.ID); err != nil {
 			return err
 		}
@@ -92,7 +104,7 @@ func persistCases(ctx context.Context, tx *sql.Tx, instance domain.Instance, sna
 }
 
 func persistGroup(ctx context.Context, tx *sql.Tx, instance domain.Instance, group jobGroup, evidence domain.Observation,
-	generation uint64, now time.Time, isComplete bool, count *int) error {
+	generation uint64, now time.Time, isComplete bool, count *int, limit int) error {
 	key, err := hashJSON(group.key)
 	if err != nil {
 		return err
@@ -101,7 +113,7 @@ func persistGroup(ctx context.Context, tx *sql.Tx, instance domain.Instance, gro
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
-	if errors.Is(err, sql.ErrNoRows) && *count >= maxCases {
+	if errors.Is(err, sql.ErrNoRows) && *count >= limit {
 		return nil
 	}
 	item := domain.Case{ID: previous.ID, Revision: previous.Revision, NextCheckAt: now.Add(45 * time.Second)}
@@ -133,7 +145,7 @@ func persistGroup(ctx context.Context, tx *sql.Tx, instance domain.Instance, gro
 			item.ID = domain.CaseID(newCaseID(instance.Ref, key+"-"+strconv.FormatUint(uint64(caseGeneration), 10)))
 			item.Revision = 1
 			previous = storedCase{}
-			if *count >= maxCases {
+			if *count >= limit {
 				return nil
 			}
 		}
@@ -185,12 +197,12 @@ func persistGroup(ctx context.Context, tx *sql.Tx, instance domain.Instance, gro
 	if err != nil {
 		return err
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO observe_cases (id, instance_id, epoch, correlation_key, fingerprint, state, reason,
-		revision, payload, last_seen_generation, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	_, err = tx.ExecContext(ctx, `INSERT INTO observe_cases (id, instance_id, epoch, correlation_key, observation_only, fingerprint, state, reason,
+		revision, payload, last_seen_generation, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (id) DO UPDATE SET fingerprint = excluded.fingerprint, state = excluded.state, reason = excluded.reason,
 			revision = excluded.revision, payload = excluded.payload, last_seen_generation = excluded.last_seen_generation,
 			missing_complete_scans = 0, updated_at = excluded.updated_at`, item.ID,
-		instance.Ref.ID, instance.Ref.Epoch, key, fingerprint, item.State, item.Reason, item.Revision, string(payload), generation, stamp(now))
+		instance.Ref.ID, instance.Ref.Epoch, key, group.key.Scan != 0, fingerprint, item.State, item.Reason, item.Revision, string(payload), generation, stamp(now))
 	return err
 }
 
@@ -231,7 +243,7 @@ func retireConflictingGroup(ctx context.Context, tx *sql.Tx, detail domain.Case,
 
 func markMissing(ctx context.Context, tx *sql.Tx, instance domain.InstanceRef, generation uint64, now time.Time) error {
 	rows, err := tx.QueryContext(ctx, `SELECT id, payload, missing_complete_scans FROM observe_cases
-		WHERE instance_id = ? AND epoch = ? AND state <> 'closed' AND last_seen_generation < ? LIMIT ?`, instance.ID, instance.Epoch, generation, maxCases)
+		WHERE instance_id = ? AND epoch = ? AND state <> 'closed' AND observation_only = 0 AND last_seen_generation < ? LIMIT ?`, instance.ID, instance.Epoch, generation, maxCases)
 	if err != nil {
 		return err
 	}
