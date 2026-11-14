@@ -110,6 +110,7 @@ func evaluate(ctx context.Context, tx *sql.Tx, p patternRecord, current learning
 		if len(encoded) > maxCandidateBytes || len(candidates) >= learning.MaxCandidates || json.Unmarshal([]byte(encoded), &candidate) != nil {
 			return learning.View{}, ErrHistory
 		}
+		gateTreatmentAttribution(p.pattern.Signature.Family, &candidate)
 		candidates = append(candidates, candidate)
 	}
 	if err := rows.Err(); err != nil {
@@ -125,6 +126,9 @@ func evaluate(ctx context.Context, tx *sql.Tx, p patternRecord, current learning
 	}
 	if view.Status != learning.Invalidated && p.safety > reset && p.safety <= stamp(now) {
 		view.Status, view.Explanation = learning.Quarantined, "learning_safety_contradiction"
+	}
+	if view.Status == learning.Collecting && p.pattern.Signature.Family == learning.OriginalImport {
+		view.Explanation = "learning_dispatch_fingerprint_unverified"
 	}
 	if view.Status == learning.Recommended {
 		switch {

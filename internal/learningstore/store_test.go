@@ -135,28 +135,52 @@ func promote(t *testing.T, s *Store, p learning.Fingerprint) {
 	}
 }
 
-func TestJournalProvenanceAndRedactedCandidate(t *testing.T) {
+func TestTreatmentRequiresDispatchFingerprintAndRedactsContext(t *testing.T) {
 	local, s := openFixture(t, filepath.Join(t.TempDir(), "state"))
 	p := patternFixture(t, learning.OriginalImport)
-	absent := candidateFixture(p, 1, now)
-	record(t, s, p, absent, learning.SampleNeutral)
-	writeJournalFixture(t, local, absent, false)
-	untied := absent
-	untied.Plan.Actor = "another-owner"
-	record(t, s, p, untied, learning.SampleNeutral)
-	record(t, s, p, absent, learning.SampleSuccess)
-	record(t, s, p, absent, learning.SampleSuccess)
-	conflicting := candidateFixture(p, 2, now)
-	writeJournalFixture(t, local, conflicting, true)
-	record(t, s, p, conflicting, learning.SampleNeutral)
+	candidate := candidateFixture(p, 1, now)
+	record(t, s, p, candidate, learning.SampleNeutral)
+	writeJournalFixture(t, local, candidate, false)
+	record(t, s, p, candidate, learning.SampleNeutral)
+	if v := view(t, s, p, now, learning.Collecting); v.Explanation != "learning_dispatch_fingerprint_unverified" ||
+		v.Counts.Successes != 0 || v.Counts.Neutral != 1 || len(v.Samples) != 1 {
+		t.Fatalf("unexpected eligibility without dispatch fingerprint: %+v", v)
+	}
+	for _, drift := range []struct {
+		name   string
+		change func(*learning.Signature)
+	}{
+		{"adapter epoch", func(s *learning.Signature) { s.Epochs.Adapter++ }},
+		{"config epoch", func(s *learning.Signature) { s.Epochs.Config++ }},
+		{"policy epoch", func(s *learning.Signature) { s.Epochs.Policy++ }},
+		{"instance epoch", func(s *learning.Signature) { s.Epochs.Installation.Epoch++ }},
+		{"instance ID", func(s *learning.Signature) { s.Epochs.Installation.ID = "another-instance" }},
+		{"diagnosis", func(s *learning.Signature) { s.Reason = "post_processing" }},
+	} {
+		t.Run(drift.name, func(t *testing.T) {
+			signature := p.Signature
+			drift.change(&signature)
+			altered, err := learning.BuildFingerprint(signature)
+			if err != nil {
+				t.Fatal(err)
+			}
+			reassigned := candidate
+			reassigned.Sample.Pattern = altered.ID
+			reassigned.Sample.Job.Instance, reassigned.Sample.Target.Instance = signature.Epochs.Installation, signature.Epochs.Installation
+			record(t, s, altered, reassigned, learning.SampleNeutral)
+			if v := view(t, s, altered, now, learning.Collecting); v.Counts.Successes != 0 || v.Counts.Neutral != 1 {
+				t.Fatalf("relabelled journal outcome influenced learning: %+v", v)
+			}
+		})
+	}
+	partial := candidateFixture(p, 2, now)
+	partial.Sample.Outcome.Verification = domain.VerificationPartial
+	partial.Sample.Outcome.Effects[0].Verification = domain.VerificationPartial
+	record(t, s, p, partial, learning.SampleNeutral)
 	rejected := candidateFixture(p, 3, now)
 	rejected.MediaAssociation.Evidence = "https://secret.test/fixture"
 	if _, err := s.Record(t.Context(), p, rejected, now); !errors.Is(err, learning.ErrInvalid) {
 		t.Fatalf("unsafe evidence unexpectedly persisted: %v", err)
-	}
-	v := view(t, s, p, now, learning.Collecting)
-	if v.Counts.Successes != 1 || v.Counts.Neutral != 2 || len(v.Samples) != 3 {
-		t.Fatalf("unexpected journal eligibility: %+v", v.Counts)
 	}
 	if err := local.Read(t.Context(), func(tx *sql.Tx) error {
 		var count int
@@ -167,6 +191,41 @@ func TestJournalProvenanceAndRedactedCandidate(t *testing.T) {
 		return err
 	}); err != nil {
 		t.Fatal(err)
+	}
+	unsafe := candidateFixture(p, 4, now)
+	unsafe.Safety, unsafe.SafetyEvidence = learning.NeededFileLost, unsafe.NoReversalThrough
+	record(t, s, p, unsafe, learning.SampleContradiction)
+	view(t, s, p, now, learning.Quarantined)
+}
+
+func TestPreviouslyStoredTreatmentRequiresDispatchFingerprint(t *testing.T) {
+	local, s := openFixture(t, filepath.Join(t.TempDir(), "state"))
+	p := patternFixture(t, learning.OriginalImport)
+	for i := 1; i <= 5; i++ {
+		candidate := candidateFixture(p, i, now.AddDate(0, 0, -(i%3)))
+		record(t, s, p, candidate, learning.SampleNeutral)
+		legacy, err := sanitise(candidate, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		result := learning.Classify(p, legacy, now)
+		if result.State != learning.SampleSuccess {
+			t.Fatalf("invalid legacy sample fixture: %+v", result)
+		}
+		body, err := json.Marshal(legacy)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := local.Write(t.Context(), func(tx *sql.Tx) error {
+			_, err := tx.ExecContext(t.Context(), `INSERT INTO learning_samples (pattern_id, sample_key, state, recorded_at, available_at, candidate)
+				VALUES (?, ?, ?, ?, ?, ?)`, p.ID, fmt.Sprintf("%064x", i), result.State, stamp(result.Sample.RecordedAt), stamp(now), string(body))
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if v := view(t, s, p, now, learning.Collecting); v.Counts.Successes != 0 || v.Counts.Neutral != 10 {
+		t.Fatalf("legacy treatment counted without a dispatch fingerprint: %+v", v)
 	}
 }
 

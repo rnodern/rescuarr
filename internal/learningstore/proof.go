@@ -1,12 +1,6 @@
 package learningstore
 
 import (
-	"context"
-	"database/sql"
-	"encoding/json"
-	"errors"
-	"reflect"
-	"slices"
 	"time"
 
 	"github.com/rnodern/rescuarr/internal/domain"
@@ -151,41 +145,13 @@ func validIDs(ids ...string) bool {
 	return true
 }
 
-func journalMatches(ctx context.Context, tx *sql.Tx, c learning.Candidate) (bool, error) {
-	var proposal, outcome, actor, intent, created, sent, preflight string
-	err := tx.QueryRowContext(ctx, `SELECT i.proposal, i.actor, i.id, i.created_at, a.sent_at, a.preflight, a.outcome
-		FROM action_attempts a JOIN action_intents i ON i.id = a.intent_id
-		WHERE a.id = ? AND i.state = 'completed' AND a.conflicting_readback = 0`, c.Attempt.ID).
-		Scan(&proposal, &actor, &intent, &created, &sent, &preflight, &outcome)
-	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
+// Until the durable action journal binds a terminal outcome to the exact
+// fingerprint at dispatch, treatment evidence can only contribute context and
+// safety findings. Apply the gate on write and read, including older rows.
+func gateTreatmentAttribution(family learning.Family, candidate *learning.Candidate) {
+	if family != learning.IncidentCause {
+		candidate.DispatchVerified = false
 	}
-	if err != nil {
-		return false, err
-	}
-	var p domain.Proposal
-	var o domain.Outcome
-	var evidence []domain.EvidenceID
-	if json.Unmarshal([]byte(proposal), &p) != nil || json.Unmarshal([]byte(outcome), &o) != nil {
-		return false, ErrHistory
-	}
-	if len(preflight) > 0 && preflight[0] == '[' {
-		err = json.Unmarshal([]byte(preflight), &evidence)
-	} else {
-		var proof struct{ Evidence []domain.EvidenceID }
-		err = json.Unmarshal([]byte(preflight), &proof)
-		evidence = proof.Evidence
-	}
-	if err != nil {
-		return false, ErrHistory
-	}
-	o.ObservedAt = o.ObservedAt.UTC()
-	plan := c.Plan.Proposal
-	return intent == string(c.Plan.ID) && intent == string(c.Attempt.IntentID) && actor == string(c.Plan.Actor) &&
-		created == stamp(c.Plan.CreatedAt) && sent == stamp(c.Attempt.SentAt) && slices.Equal(evidence, c.Attempt.Preflight) &&
-		p.ID == plan.ID && p.CaseID == plan.CaseID && p.CaseRevision == plan.CaseRevision && p.DecisionHash == plan.DecisionHash &&
-		p.PolicyRevision == plan.PolicyRevision && p.CapabilityRevision == plan.CapabilityRevision && p.ExpiresAt.Equal(plan.ExpiresAt) &&
-		reflect.DeepEqual(p.Operation, plan.Operation) && reflect.DeepEqual(o, c.Sample.Outcome), nil
 }
 
 func validObservationTime(at, now time.Time) bool {

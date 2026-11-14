@@ -12,10 +12,10 @@ import (
 	"github.com/rnodern/rescuarr/internal/learning"
 )
 
-// Record classifies typed proof and stores a bounded projection of it. An
-// attributable treatment also has to match an uncontradicted, completed local
-// action journal entry. Callers supply independently established supporting
-// proof from the corresponding readback contract.
+// Record classifies typed proof and stores a bounded projection of it. Callers
+// supply independently established supporting proof from the corresponding
+// readback contract. A terminal outcome needs a durable dispatch-time pattern
+// binding before it can count as an attributable treatment.
 func (s *Store) Record(ctx context.Context, pattern learning.Fingerprint, candidate learning.Candidate, now time.Time) (learning.SampleResult, error) {
 	canonical, err := learning.BuildFingerprint(pattern.Signature)
 	if err != nil || canonical.ID != pattern.ID || !validTime(now) {
@@ -25,6 +25,7 @@ func (s *Store) Record(ctx context.Context, pattern learning.Fingerprint, candid
 	if err != nil {
 		return learning.SampleResult{}, err
 	}
+	gateTreatmentAttribution(canonical.Signature.Family, &candidate)
 	result := learning.Classify(canonical, candidate, now)
 	if result.Reason == "sample_unbound" {
 		return learning.SampleResult{}, learning.ErrInvalid
@@ -35,16 +36,6 @@ func (s *Store) Record(ctx context.Context, pattern learning.Fingerprint, candid
 	}
 	var saturated bool
 	err = s.local.Write(ctx, func(tx *sql.Tx) error {
-		if result.Sample.Eligible && canonical.Signature.Family != learning.IncidentCause {
-			matched, err := journalMatches(ctx, tx, candidate)
-			if err != nil {
-				return err
-			}
-			if !matched {
-				candidate.DispatchVerified = false
-				result = learning.Classify(canonical, candidate, now)
-			}
-		}
 		_, err := tx.ExecContext(ctx, `INSERT INTO learning_patterns (id, instance_id, signature) VALUES (?, ?, ?)
 			ON CONFLICT (id) DO NOTHING`, canonical.ID, canonical.Signature.Epochs.Installation.ID, string(signature))
 		if err != nil {
