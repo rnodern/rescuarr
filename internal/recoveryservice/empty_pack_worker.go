@@ -234,6 +234,7 @@ func prepareManualEmptyPack(ctx context.Context, cases *observeservice.Service, 
 	if err != nil {
 		return manualPackPlan{}, err
 	}
+	plan.checkpoint.languageRevision = prefs.Revision
 	plan.preview.Language = reviewPackLanguage(ctx, arr, current, plan.preview, clock.Now(), prefs, domain.ModeAssist)
 	plan.searchIDs = wantedEmptyPackEpisodes(plan.preview)
 	// The token binds to what the owner sees and to the original private job
@@ -243,7 +244,8 @@ func prepareManualEmptyPack(ctx context.Context, cases *observeservice.Service, 
 		Preview    *app.ReplacementPreview
 		Path       string
 		Client     string
-	}{checkpoint, plan.preview, first.OutputPath, first.ClientLabel})
+		Language   domain.Revision
+	}{checkpoint, plan.preview, first.OutputPath, first.ClientLabel, prefs.Revision})
 	if err != nil {
 		return manualPackPlan{}, err
 	}
@@ -304,7 +306,7 @@ func (w *emptyPackWorker) manualStep(ctx context.Context, transport http.RoundTr
 	if plan.scopeHash != scopeHash || !slices.Equal(plan.searchIDs, approved) {
 		return resetManualReview(ctx, local, id, token, w.clock.Now())
 	}
-	if plan.preview.UnclearCount != 0 {
+	if plan.preview.UnclearCount != 0 || plan.preview.Language != nil && plan.preview.Language.NeedsReview {
 		return app.ErrHeld
 	}
 	instance, err := w.cases.RecoveryInstance(ctx, plan.checkpoint.Key.Job.Instance, plan.checkpoint.ConnectionRevision)

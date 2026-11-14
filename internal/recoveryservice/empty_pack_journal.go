@@ -46,6 +46,7 @@ type EmptyPackCheckpoint struct {
 	StartedAt          time.Time
 	manualToken        string
 	manualScopeHash    string
+	languageRevision   domain.Revision
 	outputPath         string
 	clientLabel        string
 }
@@ -167,8 +168,10 @@ func (j *EmptyPackJournal) BeginReject(ctx context.Context, key EmptyPackKey, ch
 				AND c.instance_id = ? AND c.epoch = ? AND c.state = 'held' AND c.reason = 'no_eligible_files'
 				AND c.observation_only = 0 AND c.missing_complete_scans = 0
 				AND json_extract(c.payload, '$.Job.Ref.ID') = ?
-				AND json_extract(c.payload, '$.Job.Ref.Generation') = ?)`, key.CaseID, checkpoint.manualToken,
-				checkpoint.manualScopeHash, key.Job.Instance.ID, key.Job.Instance.Epoch, key.Job.ID, key.Job.Generation).
+				AND json_extract(c.payload, '$.Job.Ref.Generation') = ?
+				AND COALESCE((SELECT revision FROM language_preferences WHERE singleton = 1), 0) = ?)`,
+				key.CaseID, checkpoint.manualToken, checkpoint.manualScopeHash, key.Job.Instance.ID,
+				key.Job.Instance.Epoch, key.Job.ID, key.Job.Generation, checkpoint.languageRevision).
 				Scan(&approved); err != nil {
 				return err
 			}

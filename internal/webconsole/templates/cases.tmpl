@@ -109,9 +109,9 @@
 {{template "replacement-preview" .Body.Result.Replacement}}
 {{else if .Body.Result.Episode}}
 <section class="panel">{{template "episode-check-result" .Body.Result.Episode}}
-  {{if or (not .Body.Result.Audio) (eq (index .Body.Result.Audio 0).Decision "accept")}}
+  {{if and .Body.Result.Episode.Matched .Body.Result.Audio (eq (index .Body.Result.Audio 0).Decision "accept")}}
   <p>In Sonarr, go to <strong>Activity → Queue → Manual Import</strong> for this download. Confirm the selected file, series and episode before importing.</p>
-  {{end}}
+  {{else if and .Body.Result.Episode.Matched (not .Body.Result.Audio)}}<p>Audio tracks could not be verified.</p>{{end}}
 </section>
 {{else}}
 <p>{{.Body.Summary}}</p>
