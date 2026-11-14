@@ -226,12 +226,13 @@ func (j *Journal) allowed(ctx context.Context, tx *sql.Tx, approval Approval, no
 		(approval.Actor == automaticImportActor && mode != domain.ModeAutonomous) {
 		return ErrHeld
 	}
-	var removed bool
-	if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM observe_instances WHERE id = ? AND health = 'removed')`,
-		approval.Proposal.Operation.Job.Instance.ID).Scan(&removed); err != nil {
+	instance := approval.Proposal.Operation.Job.Instance.ID
+	var blocked bool
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM observe_instances WHERE id = ? AND health = 'removed')
+		OR EXISTS (SELECT 1 FROM empty_pack_recovery WHERE instance_id = ? AND stage <> 'done')`, instance, instance).Scan(&blocked); err != nil {
 		return err
 	}
-	if removed {
+	if blocked {
 		return ErrHeld
 	}
 	return j.authorize(ctx, tx, approval, now)

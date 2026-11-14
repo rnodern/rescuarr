@@ -44,8 +44,9 @@ func (s *Service) RemoveInstance(ctx context.Context, id domain.InstanceID, acto
 		}
 		var activeIntent bool
 		if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM action_intents
-			WHERE state NOT IN ('completed', 'cancelled') AND json_extract(proposal, '$.Operation.Job.Instance.ID') = ?)`,
-			id).Scan(&activeIntent); err != nil {
+			WHERE state NOT IN ('completed', 'cancelled') AND json_extract(proposal, '$.Operation.Job.Instance.ID') = ?)
+			OR EXISTS (SELECT 1 FROM empty_pack_recovery WHERE instance_id = ? AND stage <> 'done')`,
+			id, id).Scan(&activeIntent); err != nil {
 			return err
 		}
 		if activeIntent {

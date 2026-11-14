@@ -99,29 +99,33 @@ func completedWithoutEligibleFiles(row observe.QueueRecord) bool {
 
 func replacementPlan(proof observeservice.RecoveryQueue, needs map[int64]observe.EpisodeNeed) *app.ReplacementPreview {
 	first := proof.Members[0]
+	return planReplacement(proof.Case, proof.Queue, first.DownloadID, first.Target.SeriesID, first.Release, needs)
+}
+
+func planReplacement(item domain.Case, queue observe.QueueSnapshot, downloadID string, seriesID int64, release string, needs map[int64]observe.EpisodeNeed) *app.ReplacementPreview {
 	otherDownloads := make(map[domain.TargetRef]bool)
 	unclear := false
-	for _, row := range proof.Queue.Records {
-		if row.DownloadID == first.DownloadID || row.Status == "failed" || row.TrackedState == "downloadFailed" ||
+	for _, row := range queue.Records {
+		if row.DownloadID == downloadID || row.Status == "failed" || row.TrackedState == "downloadFailed" ||
 			completedWithoutEligibleFiles(row) {
 			continue
 		}
 		if row.Target.Valid() {
 			otherDownloads[row.Target] = true
-		} else if row.SeriesID == 0 || row.SeriesID == first.Target.SeriesID {
+		} else if row.SeriesID == 0 || row.SeriesID == seriesID {
 			unclear = true
 		}
 	}
-	labels := make(map[domain.TargetRef]string, len(proof.Case.Display.Media))
-	for _, media := range proof.Case.Display.Media {
+	labels := make(map[domain.TargetRef]string, len(item.Display.Media))
+	for _, media := range item.Display.Media {
 		label := media.Episode
 		if label != "" && media.Title != "" {
 			label += " · " + media.Title
 		}
 		labels[media.Target] = label
 	}
-	result := &app.ReplacementPreview{Release: first.Release}
-	for _, target := range proof.Case.Targets {
+	result := &app.ReplacementPreview{Release: release}
+	for _, target := range item.Targets {
 		ref := target.Ref
 		label := labels[ref]
 		if label == "" {
