@@ -47,6 +47,10 @@ class LabFailure(Exception):
     pass
 
 
+class LabReadTimeout(LabFailure):
+    pass
+
+
 def verify(condition, reason):
     if not condition:
         raise LabFailure(reason)
@@ -181,7 +185,8 @@ class Arr:
         try:
             return call_json(self.origin, "/api/v3/" + path, query, self.headers, method=method, body=body, timeout=timeout)
         except TimeoutError:
-            raise LabFailure(f"{method}:{path.split('/')[0]}:timeout") from None
+            failure = LabReadTimeout if method == "GET" else LabFailure
+            raise failure(f"{method}:{path.split('/')[0]}:timeout") from None
         except urllib.error.HTTPError as error:
             with error:
                 route = path.split("/")[0]
@@ -202,22 +207,27 @@ class Arr:
     def command_status(self, name, **params):
         status, command = self.api("command", method="POST", body={"name": name, **params})
         verify(isinstance(command.get("id"), int), "invalidCommandID")
+
         def terminal():
-            state = self.read(f"command/{command['id']}")
-            return state if state["status"] in ("completed", "failed", "aborted", "cancelled", "orphaned") else None
+            return self.completed_command(command["id"], name, require_success=False)
 
         state = poll(terminal, "commandTimeout:" + name)
-        verify(state["status"] == "completed", "commandFailed:" + name)
-        return {"responseStatus": status, **projection(state, ("id", "name", "status", "result", "started", "ended"))}
+        return {"responseStatus": status, **state}
 
-    def completed_command(self, command_id, expected_name):
-        command = self.read(f"command/{command_id}")
+    def completed_command(self, command_id, expected_name, *, require_success=True):
+        try:
+            command = self.read(f"command/{command_id}")
+        except LabReadTimeout:
+            # A busy runner can stall a read. Poll the same command ID without
+            # submitting another command.
+            return None
         verify(command.get("id") == command_id and command.get("name") == expected_name, "unexpectedCommandIdentity")
         verify(command.get("status") not in ("failed", "aborted", "cancelled", "orphaned"),
                "commandFailed:" + expected_name)
         if command.get("status") != "completed":
             return None
-        verify(command.get("result") == "successful", "commandFailed:" + expected_name)
+        if require_success:
+            verify(command.get("result") == "successful", "commandFailed:" + expected_name)
         return projection(command, ("id", "name", "status", "result", "started", "ended"))
 
     def refresh(self):
