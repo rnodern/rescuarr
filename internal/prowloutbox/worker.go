@@ -54,6 +54,14 @@ func (s *Service) RunOne(ctx context.Context) (bool, error) {
 func (s *Service) claim(ctx context.Context, now time.Time) (claim, error) {
 	var work claim
 	err := s.db.Write(ctx, func(tx *sql.Tx) error {
+		// A restored database may contain deliveries previously attempted.
+		var reconcileRequired bool
+		if err := tx.QueryRowContext(ctx, `SELECT reconcile_required FROM app_state WHERE singleton = 1`).Scan(&reconcileRequired); err != nil {
+			return err
+		}
+		if reconcileRequired {
+			return nil
+		}
 		at := stamp(now)
 		if err := settleAbandoned(ctx, tx, at); err != nil {
 			return err
@@ -128,8 +136,22 @@ func (s *Service) complete(ctx context.Context, work claim, now time.Time, resul
 	defer cancel()
 	state, when, pause, reason := classify(work, now, result, local)
 	return s.db.Write(journal, func(tx *sql.Tx) error {
+		outboxState, outboxWhen, outboxReason := state, when, reason
+		if state == domain.OutboxDelayed {
+			// Keep the outcome of an in-flight attempt, but never requeue a
+			// delivery under a route that changed while the attempt ran.
+			var current bool
+			if err := tx.QueryRowContext(journal, `SELECT EXISTS(SELECT 1 FROM prowl_routes
+				WHERE id = ? AND revision = ? AND enabled = 1)`, work.Route, work.Revision).Scan(&current); err != nil {
+				return err
+			}
+			if !current {
+				outboxState, outboxWhen, outboxReason = domain.OutboxSuppressed, "", "notification_route_changed"
+			}
+		}
 		changed, err := tx.ExecContext(journal, `UPDATE notification_outbox SET state = ?, reason = ?, scheduled_at =
-			CASE WHEN ? <> '' THEN ? ELSE scheduled_at END WHERE id = ? AND attempts = ? AND state = 'sending'`, state, reason, when, when, work.ID, work.Number)
+			CASE WHEN ? <> '' THEN ? ELSE scheduled_at END WHERE id = ? AND attempts = ? AND state = 'sending'`,
+			outboxState, outboxReason, outboxWhen, outboxWhen, work.ID, work.Number)
 		if err != nil {
 			return err
 		}

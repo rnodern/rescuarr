@@ -72,6 +72,18 @@ def validation_category(error):
         problems = json.loads(body) if len(body) <= 8192 else None
     except (OSError, ValueError):
         return "validationUnknown"
+    if isinstance(problems, dict):
+        messages = [problems.get("message", ""), problems.get("description", "")]
+        combined = " ".join(value.lower() for value in messages if isinstance(value, str))
+        if "not null constraint failed" in combined:
+            if "series.malids" in combined or "series.anilistids" in combined:
+                return "missingSeriesAnimeIDArrays"
+            return "databaseRequiredField"
+        if "unique constraint failed" in combined:
+            return "databaseDuplicateIdentity"
+        if "constraint failed" in combined:
+            return "databaseConstraint"
+        return "validationUnknown"
     if not isinstance(problems, list):
         return "validationUnknown"
     for problem in problems:
@@ -104,20 +116,24 @@ class Arr:
         self.file_field = FILE_FIELD[product]
         self.library = Path("/library", product)
 
-    def api(self, path, *, method="GET", query=None, body=None):
+    def api(self, path, *, method="GET", query=None, body=None, timeout=5):
         try:
-            return call_json(self.origin, "/api/v3/" + path, query, self.headers, method=method, body=body)
+            return call_json(self.origin, "/api/v3/" + path, query, self.headers, method=method, body=body, timeout=timeout)
+        except TimeoutError:
+            raise LabFailure(f"{method}:{path.split('/')[0]}:timeout") from None
         except urllib.error.HTTPError as error:
             with error:
                 route = path.split("/")[0]
-                category = validation_category(error) if error.code == 400 and method == "POST" and route == "indexer" else ""
+                inspect_validation = method == "POST" and ((route == "indexer" and error.code == 400)
+                                                           or (route == "series" and error.code in (400, 409)))
+                category = validation_category(error) if inspect_validation else ""
             raise LabFailure(f"{method}:{route}:HTTP{error.code}" + (f":{category}" if category else "")) from None
 
     def read(self, path, **query):
         return self.api(path, query=query)[1]
 
-    def configure(self, path, value, **query):
-        return self.api(path, method="POST", query=query, body=value)[1]
+    def configure(self, path, value, *, timeout=5, **query):
+        return self.api(path, method="POST", query=query, body=value, timeout=timeout)[1]
 
     def update(self, path, value):
         return self.api(path, method="PUT", body=value)[1]
@@ -202,7 +218,7 @@ class Arr:
         if self.product == "sonarr":
             series = self.configure("series", {"title": SONARR_TITLE, "tvdbId": TVDB_ID, **options,
                                                "seriesType": "standard", "seasonFolder": True,
-                                               "addOptions": {"monitor": "all", "searchForMissingEpisodes": False}})
+                                               "addOptions": {"monitor": "all", "searchForMissingEpisodes": False}}, timeout=45)
             def episodes():
                 rows = self.read("episode", seriesId=series["id"])
                 return sorted(rows, key=lambda row: row["episodeNumber"]) if len(rows) == 2 else None
@@ -542,5 +558,9 @@ def run_scenarios(report, scenario):
     except (OSError, RuntimeError, ValueError, KeyError, TypeError, AttributeError) as failure:
         result.update(status="failed", reason=type(failure).__name__)
     finally:
+        try:
+            result["fixtureMetadata"] = get_json(SOURCE, "/lab/metadata")
+        except (OSError, ValueError):
+            result["fixtureMetadata"] = {"status": "unavailable"}
         result["elapsedSeconds"] = round(time.monotonic() - started, 3)
     return result["status"] == "observed"
