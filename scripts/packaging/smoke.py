@@ -56,18 +56,28 @@ def check_setup_token(data):
         raise RuntimeError("Setup token is accessible to group or other users")
 
 class OwnerForm(HTMLParser):
-    def __init__(self, html):
+    def __init__(self, html, action):
         super().__init__(convert_charrefs=True)
+        self.action = action
+        self.current = False
+        self.form_count = 0
         self.tokens = []
         self.feed(html.decode("utf-8"))
 
     def handle_starttag(self, tag, attributes):
         attrs = dict(attributes)
-        if tag == "input" and attrs.get("name") == "csrf" and attrs.get("type") == "hidden":
+        if tag == "form":
+            self.current = attrs.get("action") == self.action and attrs.get("method", "").lower() == "post"
+            self.form_count += int(self.current)
+        elif self.current and tag == "input" and attrs.get("name") == "csrf" and attrs.get("type") == "hidden":
             self.tokens.append(attrs.get("value", ""))
 
+    def handle_endtag(self, tag):
+        if tag == "form":
+            self.current = False
+
     def csrf(self):
-        if len(self.tokens) != 1 or not self.tokens[0]:
+        if self.form_count != 1 or len(self.tokens) != 1 or not self.tokens[0]:
             raise RuntimeError("Owner page did not include a unique form token")
         return self.tokens[0]
 
@@ -100,10 +110,10 @@ def check_owner_workflow(base_url, data):
 
     anonymous_cases()
     password = "Rescuarr synthetic packaging password"
-    setup = OwnerForm(get("/setup", b"Set owner password"))
+    setup = OwnerForm(get("/setup", b"Set owner password"), "/setup")
     token = (data / "setup-token").read_text(encoding="ascii").strip()
     post("/setup", "/login", {"csrf": setup.csrf(), "token": token, "password": password})
-    login = OwnerForm(get("/login", b"Sign in"))
+    login = OwnerForm(get("/login", b"Sign in"), "/login")
     post("/login", "/", {"csrf": login.csrf(), "password": password})
     get("/cases", b"<h1>Cases</h1>")
     get("/connections", b"<h1>Connections</h1>")
@@ -112,6 +122,6 @@ def check_owner_workflow(base_url, data):
         with opener.open(base_url + path, timeout=5) as response:
             if response.geturl() != base_url + path or media not in response.headers.get("Content-Type", ""):
                 raise RuntimeError("The authenticated console asset has an invalid media type")
-    overview = OwnerForm(get("/", b"<h1>Overview</h1>"))
+    overview = OwnerForm(get("/", b"<h1>Overview</h1>"), "/logout")
     post("/logout", "/login", {"csrf": overview.csrf()})
     anonymous_cases()
