@@ -103,8 +103,7 @@ func (s *PreviewService) ImportPreview(ctx context.Context, id domain.CaseID, re
 		if err != nil {
 			return app.ImportPreview{}, err
 		}
-		review := app.EpisodeNameReview(match)
-		return app.ImportPreview{Episode: &review}, nil
+		return app.ImportPreview{Episode: &match}, nil
 	}
 	job := importflow.Job{Ref: proof.Case.Job.Ref, DownloadID: first.DownloadID, OutputPath: first.OutputPath,
 		LibraryRoots: roots, PathStyle: style, Queue: proof.Queue, TrackingComplete: true}
@@ -145,5 +144,5 @@ func heldPreview(reason string) (app.ImportPreview, error) {
 }
 
 func heldFilenameCheck(reason string) (app.ImportPreview, error) {
-	return app.ImportPreview{Episode: &app.EpisodeNameReview{Reason: reason}}, app.ErrHeld
+	return app.ImportPreview{Episode: &domain.EpisodeNameReview{Reason: reason}}, app.ErrHeld
 }

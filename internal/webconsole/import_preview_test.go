@@ -47,12 +47,12 @@ func TestOwnerImportPreview(t *testing.T) {
 	}
 }
 
-func TestOwnerEpisodeFilenameReviewOnSonarr3012(t *testing.T) {
+func TestOwnerEpisodeFilenameReviewOnSonarrV5(t *testing.T) {
 	opts := fixture(func(c *apptest.Console) {
 		detail := c.Details["case-1"]
 		detail.Case.Reason = "series_matched_by_id"
 		detail.Case.Display.Product = domain.ProductSonarr
-		detail.Case.Display.Version = "4.0.20.3012"
+		detail.Case.Display.Version = "5.0.0.2941"
 		detail.Case.Targets = []domain.Target{{Ref: domain.TargetRef{Kind: domain.TargetEpisode, ID: 41, SeriesID: 12}}}
 		detail.Case.Job.CompleteSet = true
 		c.Details["case-1"] = detail
@@ -60,9 +60,9 @@ func TestOwnerEpisodeFilenameReviewOnSonarr3012(t *testing.T) {
 	var held bool
 	opts.ImportPreview = previewFixture(func(_ context.Context, _ domain.CaseID, _ domain.Revision) (app.ImportPreview, error) {
 		if held {
-			return app.ImportPreview{Episode: &app.EpisodeNameReview{Reason: "Sonarr returned too many files."}}, app.ErrHeld
+			return app.ImportPreview{Episode: &domain.EpisodeNameReview{Reason: "Sonarr returned too many files."}}, app.ErrHeld
 		}
-		return app.ImportPreview{Episode: &app.EpisodeNameReview{
+		return app.ImportPreview{Episode: &domain.EpisodeNameReview{
 			Series: "Captain Wattle: The Animated Series", Episode: "S02E11", EpisodeTitle: "Signal Lost",
 			Filename: "Captain.Wattle.Animated.S02E11.mkv", Matched: true, ArrRejection: true,
 		}}, nil

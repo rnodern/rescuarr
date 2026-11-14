@@ -24,16 +24,18 @@ func TestImportPreviewUsesExactSavedCaseAndReadOnlyRequests(t *testing.T) {
 	for _, test := range []struct {
 		name           string
 		product        domain.Product
+		version        string
 		filenameReview bool
 		trackedState   string
 		wantRead       bool
 	}{
-		{"sonarr import pending", domain.ProductSonarr, false, "importPending", true},
-		{"radarr import pending", domain.ProductRadarr, false, "importPending", true},
-		{"sonarr filename import pending", domain.ProductSonarr, true, "importPending", true},
-		{"sonarr filename import blocked", domain.ProductSonarr, true, "importBlocked", true},
-		{"sonarr filename without a tracked state", domain.ProductSonarr, true, "", false},
-		{"sonarr ordinary preview import blocked", domain.ProductSonarr, false, "importBlocked", false},
+		{"sonarr import pending", domain.ProductSonarr, "4.0.20.3014", false, "importPending", true},
+		{"radarr import pending", domain.ProductRadarr, "6.4.4.10685", false, "importPending", true},
+		{"sonarr filename import pending", domain.ProductSonarr, "4.0.20.3012", true, "importPending", true},
+		{"sonarr filename import blocked", domain.ProductSonarr, "4.0.20.3012", true, "importBlocked", true},
+		{"sonarr filename without a tracked state", domain.ProductSonarr, "4.0.20.3012", true, "", false},
+		{"sonarr v5 filename import blocked", domain.ProductSonarr, "5.0.0.2941", true, "importBlocked", true},
+		{"sonarr v5 ordinary preview import blocked", domain.ProductSonarr, "5.0.0.2941", false, "importBlocked", false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			product := test.product
@@ -51,18 +53,18 @@ func TestImportPreviewUsesExactSavedCaseAndReadOnlyRequests(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(secrets, "fixture"), []byte("fixture-key\n"), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			version, queueTarget := "4.0.20.3014", `"seriesId":12,"episodeId":41`
+			queueTarget := `"seriesId":12,"episodeId":41`
 			media := `"series":{"id":12,"qualityProfileId":3},"episodes":[{"id":41,"seriesId":12,"episodeFileId":0}],"releaseType":"singleEpisode"`
 			source, modifier, language := "web", "", ""
 			if product == domain.ProductRadarr {
-				version, queueTarget = "6.4.4.10685", `"movieId":41`
+				queueTarget = `"movieId":41`
 				media = `"movie":{"id":41,"qualityProfileId":3,"movieFileId":0}`
 				source, modifier, language = "webdl", `,"modifier":"none"`, `,"language":{"id":1}`
 			}
 			const folder = "Captain.Wattle.Animated.S02E11.Captain.Wattle.Animated.720p.FIXTURE.WEB-DL.AAC2.0.x264-Lab"
 			output := "/private/downloads/original"
 			if test.filenameReview {
-				version, output = "4.0.20.3012", "/private/downloads/"+folder
+				output = "/private/downloads/" + folder
 				queueTarget += `,"series":{"id":12,"title":"Captain Wattle: The Animated Series"},"episode":{"id":41,"seriesId":12,"seasonNumber":2,"episodeNumber":11,"title":"Signal Lost"}` +
 					`,"statusMessages":[{"title":"Fixture","messages":["Found matching series via grab history, but release was matched to series by ID. Automatic import is not possible. See the FAQ for details."]}]`
 			}
@@ -75,7 +77,7 @@ func TestImportPreviewUsesExactSavedCaseAndReadOnlyRequests(t *testing.T) {
 				var body string
 				switch r.URL.Path {
 				case "/api/v3/system/status":
-					body = fmt.Sprintf(`{"appName":%q,"version":%q,"osName":"Alpine Linux","isLinux":true}`, product, version)
+					body = fmt.Sprintf(`{"appName":%q,"version":%q,"osName":"Alpine Linux","isLinux":true}`, product, test.version)
 				case "/api/v3/queue":
 					body = `{"page":1,"pageSize":100,"totalRecords":1,"records":[{"id":4,` + queueTarget + `,"downloadId":"private-original","downloadClient":"fixture-sab","protocol":"usenet","status":"completed",` +
 						fmt.Sprintf(`"trackedDownloadState":%q,"outputPath":%q}]}`, test.trackedState, output)
@@ -98,7 +100,7 @@ func TestImportPreviewUsesExactSavedCaseAndReadOnlyRequests(t *testing.T) {
 					}
 					previews++
 					if test.filenameReview {
-						body = fmt.Sprintf(`[{"path":%q,"size":4096,"rejections":[{"type":"permanent"}]}]`, output+"/"+folder+".mkv")
+						body = fmt.Sprintf(`[{"path":%q,"size":4096,"downloadId":"private-original","series":{"id":12},"episodes":[{"id":41,"seriesId":12}],"rejections":[{"type":"permanent"}]}]`, output+"/"+folder+".mkv")
 						break
 					}
 					body = `[{"path":"/private/downloads/original/media.mkv","size":4096,"folderName":"original",` + media +
@@ -124,11 +126,22 @@ func TestImportPreviewUsesExactSavedCaseAndReadOnlyRequests(t *testing.T) {
 				t.Fatalf("saved case unavailable: %v", err)
 			}
 			item := page.Cases[0]
+			if test.filenameReview {
+				saved := item.Display.EpisodeCheck
+				if saved == nil || saved.Matched != test.wantRead || saved.CheckedAt != clock.Now() ||
+					(saved.Matched && saved.Filename != folder+".mkv") {
+					t.Fatalf("unexpected automatic filename check: %+v", saved)
+				}
+			} else if item.Display.EpisodeCheck != nil || previews != 0 {
+				t.Fatal("ordinary preview was run automatically")
+			}
+			scanCalls, scanPreviews := calls, previews
 			svc := NewPreviewService(cases, local, transport, clock)
-			if _, err := svc.ImportPreview(ctx, item.ID, item.Revision+1); err != app.ErrConflict || calls != 2 {
+			if _, err := svc.ImportPreview(ctx, item.ID, item.Revision+1); err != app.ErrConflict || calls != scanCalls {
 				t.Fatalf("stale request reached Arr: %d calls, %v", calls, err)
 			}
 			got, err := svc.ImportPreview(ctx, item.ID, item.Revision)
+			previews -= scanPreviews
 			if !test.wantRead {
 				if previews != 0 {
 					t.Fatal("an unsupported queue state reached Sonarr’s file preview")

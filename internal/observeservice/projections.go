@@ -47,7 +47,7 @@ type storedCase struct {
 }
 
 func persistCases(ctx context.Context, tx *sql.Tx, instance domain.Instance, snapshot observe.QueueSnapshot, generation uint64,
-	now time.Time, coverage domain.ObservationState) error {
+	now time.Time, coverage domain.ObservationState, checks map[int64]domain.EpisodeNameReview) error {
 	isComplete := coverage == domain.ObservationKnown
 	if isComplete {
 		if _, err := tx.ExecContext(ctx, `DELETE FROM observe_cases WHERE instance_id = ? AND state = ? AND updated_at < ?`,
@@ -88,7 +88,7 @@ func persistCases(ctx context.Context, tx *sql.Tx, instance domain.Instance, sna
 		if group.key.Scan != 0 {
 			bucket, limit = &observationCount, maxObservationCases
 		}
-		if err := persistGroup(ctx, tx, instance, group, snapshot.Evidence, generation, now, isComplete, bucket, limit); err != nil {
+		if err := persistGroup(ctx, tx, instance, group, snapshot.Evidence, generation, now, isComplete, bucket, limit, checks); err != nil {
 			return err
 		}
 	}
@@ -104,7 +104,7 @@ func persistCases(ctx context.Context, tx *sql.Tx, instance domain.Instance, sna
 }
 
 func persistGroup(ctx context.Context, tx *sql.Tx, instance domain.Instance, group jobGroup, evidence domain.Observation,
-	generation uint64, now time.Time, isComplete bool, count *int, limit int) error {
+	generation uint64, now time.Time, isComplete bool, count *int, limit int, checks map[int64]domain.EpisodeNameReview) error {
 	key, err := hashJSON(group.key)
 	if err != nil {
 		return err
@@ -129,8 +129,8 @@ func persistGroup(ctx context.Context, tx *sql.Tx, instance domain.Instance, gro
 	}
 	slices.SortFunc(group.rows, func(a, b observe.QueueRecord) int { return cmp.Compare(a.ID, b.ID) })
 	caseGeneration := domain.Revision(1)
+	var old domain.Case
 	if len(previous.Payload) > 0 {
-		var old domain.Case
 		if err := json.Unmarshal([]byte(previous.Payload), &old); err != nil {
 			return err
 		}
@@ -192,6 +192,16 @@ func persistGroup(ctx context.Context, tx *sql.Tx, instance domain.Instance, gro
 	if !item.Job.CompleteSet && item.State != domain.CaseWaiting && caseGeneration == 1 {
 		item.State, item.Reason = domain.CaseHeld, "target_ambiguous"
 	}
+	if item.Reason == domain.ReasonCode(observe.FindingSeriesIDOnly) && item.Job.CompleteSet && len(group.rows) == 1 {
+		row := group.rows[0]
+		input := episodeCheckInput(instance.ConnectionRevision, row)
+		if result, checked := checks[row.ID]; checked {
+			item.Display.EpisodeCheck = &domain.CaseEpisodeCheck{EpisodeNameReview: result, CheckedAt: now, InputFingerprint: input}
+		} else if old.Display.EpisodeCheck != nil && old.Display.EpisodeCheck.InputFingerprint == input &&
+			!now.Before(old.Display.EpisodeCheck.CheckedAt) && now.Sub(old.Display.EpisodeCheck.CheckedAt) < episodeCheckMaxAge {
+			item.Display.EpisodeCheck = old.Display.EpisodeCheck
+		}
+	}
 	fingerprint, err := materialFingerprint(item)
 	if err != nil {
 		return err
@@ -241,6 +251,7 @@ func contradictoryAliases(previous []domain.QueueMember, next []observe.QueueRec
 func retireConflictingGroup(ctx context.Context, tx *sql.Tx, detail domain.Case, key string, now time.Time) error {
 	detail.State, detail.Reason, detail.Revision = domain.CaseClosed, "job_identity_changed", detail.Revision+1
 	detail.Job.CompleteSet = false
+	detail.Display.EpisodeCheck = nil
 	payload, err := json.Marshal(detail)
 	if err != nil {
 		return err
@@ -282,6 +293,7 @@ func markMissing(ctx context.Context, tx *sql.Tx, instance domain.InstanceRef, g
 		}
 		detail.State, detail.Reason, detail.Revision, detail.Job.CompleteSet = state, reason, detail.Revision+1, false
 		detail.NextCheckAt = now.Add(45 * time.Second)
+		detail.Display.EpisodeCheck = nil
 		payload, err := json.Marshal(detail)
 		if err != nil {
 			return err

@@ -56,20 +56,7 @@ type ImportPreview struct {
 	Candidates int
 	Eligible   int
 	Hold       string
-	Episode    *EpisodeNameReview
-}
-
-// EpisodeNameReview presents filename evidence only. It does not authorise an import.
-type EpisodeNameReview struct {
-	Series       string
-	Episode      string
-	EpisodeTitle string
-	Folder       string
-	Filename     string
-	TitleInNames bool
-	Matched      bool
-	Reason       string
-	ArrRejection bool
+	Episode    *domain.EpisodeNameReview
 }
 
 type ImportPreviewReader interface {

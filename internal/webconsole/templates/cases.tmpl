@@ -28,7 +28,9 @@
       </th>
       <td data-label="Service">{{serviceLabel .Display.Service .Display.Product}}</td>
       <td data-label="State"><span class="chip{{if eq .State "held"}} hold{{end}}">{{state .State}}</span></td>
-      <td data-label="Why it’s here">{{reason .Reason}}</td>
+      <td data-label="Why it’s here">{{reason .Reason}}
+        {{with .Display.EpisodeCheck}}{{if .Matched}}<span class="row-note">Likely episode match</span>{{else}}<span class="row-note">Filename check needs review</span>{{end}}{{end}}
+      </td>
     </tr>{{end}}
   </tbody>
 </table>
@@ -58,14 +60,19 @@
   <section class="panel">
     <h2>Import and recovery</h2>
     {{if .Body.Proposals}}<ul class="links">{{range .Body.Proposals}}<li><a href="{{$base}}/cases/{{.CaseID}}/review/{{.ID}}">Review {{action .Operation.Action}}</a><span>Expires {{when .ExpiresAt}}</span></li>{{end}}</ul>
+    {{else if and (eq .Status.Mode "observe") .Body.ReviewNames}}<p>Rescuarr checks the filenames during queue scans. Automatic import is unavailable for this connection.</p>
     {{else if eq .Status.Mode "observe"}}<p>Observe mode lets you inspect the download. Make any import or retry in Arr.</p>
     {{else}}<p>No recovery proposal is available.</p>{{end}}
+    {{with .Body.Case.Display.EpisodeCheck}}
+      <p class="connection-meta">Filename check · {{when .CheckedAt}}</p>
+      {{template "episode-check-result" .EpisodeNameReview}}
+    {{else}}{{if .Body.ReviewNames}}<p>Waiting for a filename check in a queue scan.</p>{{end}}{{end}}
     {{if and .HasImportPreview .Body.PreviewHold}}<p class="notice">{{.Body.PreviewHold}}</p>
     {{else if and .HasImportPreview .Body.Case.Job.CompleteSet .Body.Case.Revision (ne .Body.Case.State "closed")}}
     <form method="post" action="{{$base}}/cases/{{.Body.Case.ID}}/import-preview">
       <input type="hidden" name="csrf" value="{{.CSRF}}">
       <input type="hidden" name="revision" value="{{.Body.Case.Revision}}">
-      <button type="submit">{{if .Body.ReviewNames}}Check episode filename{{else}}Check Arr import candidates{{end}}</button>
+      <button type="submit">{{if .Body.ReviewNames}}{{if .Body.Case.Display.EpisodeCheck}}Recheck episode filename{{else}}Check episode filename{{end}}{{else}}Check Arr import candidates{{end}}</button>
     </form>
     {{end}}
   </section>
@@ -93,8 +100,19 @@
 <h1>{{.Title}}</h1>
 {{if .Body.Result.Hold}}<p class="notice">{{.Body.Result.Hold}}</p>
 {{else if .Body.Result.Episode}}
-{{with .Body.Result.Episode}}
-<section class="panel">
+<section class="panel">{{template "episode-check-result" .Body.Result.Episode}}</section>
+{{else}}
+<p>{{.Body.Summary}}</p>
+<dl>
+  <dt>Candidates returned by Arr</dt><dd>{{.Body.Result.Candidates}}</dd>
+  <dt>Eligible candidates in the preview</dt><dd>{{.Body.Result.Eligible}}</dd>
+</dl>
+<p>Review any import in the Arr application.</p>
+{{end}}
+{{template "end" .}}
+{{end}}
+
+{{define "episode-check-result"}}
   {{if .Matched}}<h2>Likely episode match</h2>
   <p>The folder and filename identify the same series and episode number as the Sonarr queue.{{if .ArrRejection}} Sonarr still reports an import rejection for this file.{{end}}</p>
   {{else}}<h2>Match needs review</h2><p class="notice">{{.Reason}}</p>{{end}}
@@ -106,15 +124,4 @@
     {{if .Filename}}<dt>Video file</dt><dd>{{.Filename}}</dd>{{end}}
   </dl>
   <p>In Sonarr, go to <strong>Activity → Queue → Manual Import</strong> for this download. Confirm the selected file, series and episode before importing.</p>
-</section>
-{{end}}
-{{else}}
-<p>{{.Body.Summary}}</p>
-<dl>
-  <dt>Candidates returned by Arr</dt><dd>{{.Body.Result.Candidates}}</dd>
-  <dt>Eligible candidates in the preview</dt><dd>{{.Body.Result.Eligible}}</dd>
-</dl>
-<p>Review any import in the Arr application.</p>
-{{end}}
-{{template "end" .}}
 {{end}}

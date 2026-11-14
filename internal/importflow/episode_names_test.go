@@ -15,7 +15,7 @@ func TestEpisodeFilenameReview(t *testing.T) {
 		DownloadID: "original", MediaTitle: "Captain Wattle: The Animated Series", Episode: "S02E11", EpisodeTitle: "Signal Lost",
 		Target: domain.TargetRef{Kind: domain.TargetEpisode, ID: 41, SeriesID: 12},
 	}
-	review := EpisodeNameReview{Series: row.MediaTitle, Episode: row.Episode, EpisodeTitle: row.EpisodeTitle}
+	review := domain.EpisodeNameReview{Series: row.MediaTitle, Episode: row.Episode, EpisodeTitle: row.EpisodeTitle}
 	cases := []struct {
 		name, folder, file string
 		wantMatch, titled  bool
@@ -70,7 +70,7 @@ func TestEpisodeFilenameReviewHoldsDifferentScopeOrIdentity(t *testing.T) {
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
-			got := checkEpisodeNames(EpisodeNameReview{}, row, UnixPath, test.roots, test.candidates)
+			got := checkEpisodeNames(domain.EpisodeNameReview{}, row, UnixPath, test.roots, test.candidates)
 			if got.Matched || got.Reason == "" {
 				t.Fatalf("unexpected match: %+v", got)
 			}

@@ -243,7 +243,7 @@ func TestUnidentifiedQueueChurnCannotExhaustExactCases(t *testing.T) {
 	collect := func(generation uint64, coverage domain.ObservationState, records []observe.QueueRecord) {
 		t.Helper()
 		if err := db.Write(ctx, func(tx *sql.Tx) error {
-			return persistCases(ctx, tx, instance, observe.QueueSnapshot{Records: records}, generation, now, coverage)
+			return persistCases(ctx, tx, instance, observe.QueueSnapshot{Records: records}, generation, now, coverage, nil)
 		}); err != nil {
 			t.Fatal(err)
 		}

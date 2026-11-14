@@ -53,7 +53,7 @@ func (s *Service) FreshRecoveryQueue(ctx context.Context, id domain.CaseID, expe
 	at := s.clock.Now().UTC()
 	generation := baseline.generation + 1
 	instance := baseline.proof.Instance
-	queue, version, err := s.observe(ctx, instance, generation, at)
+	queue, version, _, err := s.observe(ctx, instance, generation, at, false)
 	if err != nil {
 		return RecoveryQueue{}, err
 	}

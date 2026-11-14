@@ -96,21 +96,26 @@ func (s *Service) Case(ctx context.Context, id domain.CaseID) (app.CaseDetail, e
 	return result, err
 }
 
-const caseDisplayQuery = `SELECT c.payload, i.display_name, i.product, i.version FROM observe_cases AS c
+const caseDisplayQuery = `SELECT c.payload, i.display_name, i.product, i.version, i.health, i.coverage, c.missing_complete_scans, i.generation, c.last_seen_generation FROM observe_cases AS c
 	JOIN observe_instances AS i ON i.id = c.instance_id`
 
 func scanCaseDisplay(row interface{ Scan(...any) error }) (domain.Case, error) {
 	var item domain.Case
 	var payload []byte
-	var service, version string
+	var service, version, health string
 	var product domain.Product
-	if err := row.Scan(&payload, &service, &product, &version); err != nil {
+	var coverage domain.ObservationState
+	var misses, current, seen uint64
+	if err := row.Scan(&payload, &service, &product, &version, &health, &coverage, &misses, &current, &seen); err != nil {
 		return item, err
 	}
 	if err := json.Unmarshal(payload, &item); err != nil {
 		return item, err
 	}
 	item.Display.Service, item.Display.Product, item.Display.Version = service, product, version
+	if health != "available" || coverage != domain.ObservationKnown || misses != 0 || current != seen {
+		item.Display.EpisodeCheck = nil
+	}
 	return item, nil
 }
 

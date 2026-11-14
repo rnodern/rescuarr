@@ -13,36 +13,30 @@ import (
 	"github.com/rnodern/rescuarr/internal/observe"
 )
 
-const sonarrQueueTestVersion = "4.0.20.3012"
-
 // SupportsEpisodeNameReview covers only the download-scoped GET. Import
 // certification is independent and still uses the normal discovery contract.
 func SupportsEpisodeNameReview(product domain.Product, version string) bool {
-	return product == domain.ProductSonarr && (version == sonarrQueueTestVersion || version == SonarrVersion)
-}
-
-type EpisodeNameReview struct {
-	Series       string
-	Episode      string
-	EpisodeTitle string
-	Folder       string
-	Filename     string
-	TitleInNames bool
-	Matched      bool
-	Reason       string
-	ArrRejection bool
+	if product != domain.ProductSonarr {
+		return false
+	}
+	switch version {
+	case "4.0.20.3012", SonarrVersion, "5.0.0.2941":
+		return true
+	default:
+		return false
+	}
 }
 
 // ReviewEpisodeNames compares the actual candidate path returned by Sonarr
 // with the exact episode already identified in the fresh queue record.
-func (c *Client) ReviewEpisodeNames(ctx context.Context, row observe.QueueRecord, style PathStyle, roots []string) (EpisodeNameReview, error) {
+func (c *Client) ReviewEpisodeNames(ctx context.Context, row observe.QueueRecord, style PathStyle, roots []string) (domain.EpisodeNameReview, error) {
 	if !SupportsEpisodeNameReview(c.instance.Product, c.instance.UpstreamVersion) ||
 		row.Target.Instance != c.instance.Ref || row.Target.Kind != domain.TargetEpisode ||
 		!row.Target.Valid() || row.DownloadID == "" ||
 		!slices.Contains(row.Findings, observe.FindingSeriesIDOnly) {
-		return EpisodeNameReview{}, ErrInvalid
+		return domain.EpisodeNameReview{}, ErrInvalid
 	}
-	review := EpisodeNameReview{Series: row.MediaTitle, Episode: row.Episode, EpisodeTitle: row.EpisodeTitle}
+	review := domain.EpisodeNameReview{Series: row.MediaTitle, Episode: row.Episode, EpisodeTitle: row.EpisodeTitle}
 	if row.Status != "completed" || (row.TrackedState != "importBlocked" && row.TrackedState != "importPending") {
 		review.Reason = "Sonarr is not reporting a completed download awaiting import or manual review. Check its current queue status."
 		return review, nil
@@ -57,12 +51,12 @@ func (c *Client) ReviewEpisodeNames(ctx context.Context, row observe.QueueRecord
 	}
 	candidates, err := c.get(ctx, row.DownloadID)
 	if err != nil {
-		return EpisodeNameReview{}, err
+		return domain.EpisodeNameReview{}, err
 	}
 	return checkEpisodeNames(review, row, style, roots, candidates), nil
 }
 
-func checkEpisodeNames(review EpisodeNameReview, row observe.QueueRecord, style PathStyle, roots []string, candidates []wireCandidate) EpisodeNameReview {
+func checkEpisodeNames(review domain.EpisodeNameReview, row observe.QueueRecord, style PathStyle, roots []string, candidates []wireCandidate) domain.EpisodeNameReview {
 	var video *wireCandidate
 	for i := range candidates {
 		candidate := &candidates[i]

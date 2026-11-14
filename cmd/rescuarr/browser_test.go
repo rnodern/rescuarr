@@ -46,9 +46,16 @@ func TestBrowserUsesOwnerSessionAndLocalState(t *testing.T) {
 		var body string
 		switch r.URL.Path {
 		case "/arr/api/v3/system/status":
-			body = `{"appName":"Sonarr","version":"4.0.20.3012"}`
+			body = `{"appName":"Sonarr","version":"5.0.0.2941","osName":"Linux","isLinux":true}`
 		case "/arr/api/v3/queue":
-			body = `{"page":1,"pageSize":100,"totalRecords":1,"records":[{"id":4,"title":"Fixture.Show.S02E04.1080p","seriesId":8,"episodeId":11,"series":{"id":8,"title":"Fixture Show"},"episode":{"id":11,"seriesId":8,"title":"Fixture Episode","seasonNumber":2,"episodeNumber":4},"downloadId":"fixture-job","downloadClient":"lab","protocol":"usenet","status":"completed","trackedDownloadState":"importBlocked","outputPath":"/private/fixture-path","statusMessages":[{"messages":["Found matching series via grab history, but release was matched to series by ID. Automatic import is not possible. See the FAQ for details.","fixture unclassified message"]}]}]}`
+			body = `{"page":1,"pageSize":100,"totalRecords":1,"records":[{"id":4,"title":"Fixture.Show.S02E04.1080p","seriesId":8,"episodeId":11,"series":{"id":8,"title":"Fixture Show"},"episode":{"id":11,"seriesId":8,"title":"Fixture Episode","seasonNumber":2,"episodeNumber":4},"downloadId":"fixture-job","downloadClient":"lab","protocol":"usenet","status":"completed","trackedDownloadState":"importBlocked","outputPath":"/private/fixture-path/Fixture.Show.S02E04.1080p","statusMessages":[{"messages":["Found matching series via grab history, but release was matched to series by ID. Automatic import is not possible. See the FAQ for details.","fixture unclassified message"]}]}]}`
+		case "/arr/api/v3/rootfolder":
+			body = `[{"id":1,"path":"/private/library"}]`
+		case "/arr/api/v3/manualimport":
+			if query := r.URL.Query(); len(query) != 2 || query.Get("downloadId") != "fixture-job" || query.Get("filterExistingFiles") != "false" {
+				t.Fatal("automatic check used an unexpected Sonarr query")
+			}
+			body = `[{"path":"/private/fixture-path/Fixture.Show.S02E04.1080p/Fixture.Show.S02E04.1080p.mkv","size":4096}]`
 		default:
 			t.Fatalf("unexpected upstream request path %s", r.URL.Path)
 		}
@@ -143,18 +150,19 @@ func TestBrowserUsesOwnerSessionAndLocalState(t *testing.T) {
 	if response := request(http.MethodPost, check[1], session.Token, origin, url.Values{"csrf": {"invalid"}}); response.Code != http.StatusForbidden || calls != 0 {
 		t.Fatalf("invalid token check returned %d with %d upstream requests", response.Code, calls)
 	}
-	if response := request(http.MethodPost, check[1], session.Token, origin, url.Values{"csrf": {session.CSRF}}); response.Code != http.StatusSeeOther || calls != 2 {
+	if response := request(http.MethodPost, check[1], session.Token, origin, url.Values{"csrf": {session.CSRF}}); response.Code != http.StatusSeeOther || calls != 4 {
 		t.Fatalf("queue check returned %d with %d upstream requests", response.Code, calls)
 	}
 	connections = perform(base+"/connections", session.Token).Body.String()
 	cases := perform(base+"/cases", session.Token).Body.String()
 	detailPath := regexp.MustCompile(`href="(/rescuarr/cases/[^/"]+)"`).FindStringSubmatch(cases)
-	if len(detailPath) != 2 || !strings.Contains(connections, "4.0.20.3012") || !strings.Contains(connections, "Complete") {
+	if len(detailPath) != 2 || !strings.Contains(connections, "5.0.0.2941") || !strings.Contains(connections, "Complete") {
 		t.Fatal("saved status or observed queue case did not render")
 	}
 	detail := perform(detailPath[1], session.Token).Body.String()
-	if !strings.Contains(cases, "Fixture Show · S02E04") || !strings.Contains(cases, "Fixture.Show.S02E04.1080p") ||
-		!strings.Contains(detail, "S02E04 · Fixture Episode") || !strings.Contains(detail, "Check episode filename") ||
+	if !strings.Contains(cases, "Fixture Show · S02E04") || !strings.Contains(cases, "Fixture.Show.S02E04.1080p") || !strings.Contains(cases, "Likely episode match") ||
+		!strings.Contains(detail, "S02E04 · Fixture Episode") || !strings.Contains(detail, "Likely episode match") ||
+		!strings.Contains(detail, "Fixture.Show.S02E04.1080p.mkv") || !strings.Contains(detail, "Recheck episode filename") ||
 		!strings.Contains(detail, "Sonarr found the series by ID") ||
 		strings.Contains(detail, "Check Arr import candidates") {
 		t.Fatal("case did not show the job identity and available filename check")

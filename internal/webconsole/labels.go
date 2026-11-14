@@ -55,7 +55,7 @@ func reasonLabel(code domain.ReasonCode) string {
 	case "no_eligible_files":
 		return "Arr found no files eligible for import"
 	case "series_matched_by_id":
-		return "Sonarr found the series by ID and needs you to confirm the episode before importing"
+		return "Sonarr found the series by ID and blocked automatic import"
 	case "awaiting_import_assessment":
 		return "Download complete. Import still pending"
 	case "download_failed":
