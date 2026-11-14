@@ -103,29 +103,40 @@ func checkEpisodeNames(review domain.EpisodeNameReview, row observe.QueueRecord,
 		return review
 	}
 	expected := singleEpisode(row.Episode)
-	for _, name := range []struct {
-		label, value string
-	}{{"folder name", folder}, {"filename", strings.TrimSuffix(file, path.Ext(file))}} {
-		found := singleEpisode(name.value)
-		switch {
-		case !found.valid() || found.season != expected.season || found.episode != expected.episode:
+	names := []struct {
+		label string
+		value string
+		episodeMarker
+	}{
+		{label: "folder name", value: folder},
+		{label: "filename", value: strings.TrimSuffix(file, path.Ext(file))},
+	}
+	for i := range names {
+		name := &names[i]
+		name.episodeMarker = singleEpisode(name.value)
+		if !name.valid() || name.season != expected.season || name.episode != expected.episode {
 			review.Reason = "The " + name.label + " needs to identify exactly " + row.Episode + "."
-		case !slices.Equal(seriesWords(name.value[:found.start]), seriesWords(row.MediaTitle)):
-			review.Reason = "The series in the " + name.label + " does not match " + row.MediaTitle + "."
-		default:
-			namedTitle, extra := episodeSuffix(name.value[found.end:], row.MediaTitle)
-			if extra {
-				review.Reason = "The " + name.label + " looks like a sample or extra."
-			} else if len(namedTitle) > 0 {
-				if !slices.Equal(namedTitle, nameWords(row.EpisodeTitle)) {
-					review.Reason = "The episode title in the " + name.label + " could not be confirmed against Sonarr."
-				} else {
-					review.TitleInNames = true
-				}
-			}
-		}
-		if review.Reason != "" {
 			return review
+		}
+	}
+	for _, name := range names {
+		if !matchingSeries(name.value[:name.start], row.MediaTitle) {
+			review.Reason = "The series in the " + name.label + " does not match " + row.MediaTitle + "."
+			return review
+		}
+	}
+	for _, name := range names {
+		namedTitle, extra := episodeSuffix(name.value[name.end:], row.MediaTitle)
+		if extra {
+			review.Reason = "The " + name.label + " looks like a sample or extra."
+			return review
+		}
+		if len(namedTitle) > 0 && row.EpisodeTitle != "" {
+			if !slices.Equal(namedTitle, nameWords(row.EpisodeTitle)) {
+				review.Reason = "The episode title in the " + name.label + " could not be confirmed against Sonarr."
+				return review
+			}
+			review.TitleInNames = true
 		}
 	}
 	review.Matched = true
@@ -150,10 +161,18 @@ func conflictsWithEpisode(candidate wireCandidate, target domain.TargetRef) bool
 		slices.ContainsFunc(candidate.EpisodeIDs, func(id int64) bool { return id > 0 && id != target.ID })
 }
 
+const (
+	episodeSeparator = `[\s._,:-]*`
+	episodeLabel     = `e(?:p(?:isode)?)?`
+)
+
 var (
-	episodeNumber = regexp.MustCompile(`(?i)\b(?:s([0-9]{1,3})e([0-9]{1,4})|([0-9]{1,3})x([0-9]{1,4}))\b`)
-	episodeRange  = regexp.MustCompile(`(?i)^(?:[ .-]*e[0-9]|\s*[-~&+]\s*(?:e\s*)?[0-9]+\b|[ .-]+(?:and|to)[ .-]+[0-9]+\b)`)
-	releaseTag    = regexp.MustCompile(`(?i)\b(?:480p|576p|720p|1080[pi]|2160p|4320p|4k|hdtv|web[ .-]?(?:dl|rip)|blu[ .-]?ray|b[dr]rip|dvdrip|x26[45]|h[ .-]?26[45]|hevc|av1|aac|repack|proper)\b`)
+	episodeNumber = regexp.MustCompile(`(?i)\b(?:s(?:eason)?` + episodeSeparator + `([0-9]{1,3})` + episodeSeparator +
+		episodeLabel + episodeSeparator + `([0-9]{1,4})|([0-9]{1,3})\s*x\s*([0-9]{1,4}))\b`)
+	episodeRange = regexp.MustCompile(`(?i)^(?:` + episodeSeparator + episodeLabel + episodeSeparator + `[0-9]+\b|[\s._]*[-–—~&+,](?:` +
+		episodeSeparator + episodeLabel + `)?` +
+		episodeSeparator + `[0-9]+\b|[\s._,-]+(?:and|to)[\s._,-]+(?:` + episodeLabel + episodeSeparator + `)?[0-9]+\b)`)
+	releaseTag = regexp.MustCompile(`(?i)\b(?:480p|576p|720p|1080[pi]|2160p|4320p|4k|hdtv|web[ .-]?(?:dl|rip)|blu[ .-]?ray|b[dr]rip|dvdrip|x26[45]|h[ .-]?26[45]|hevc|av1|aac|repack|proper)\b`)
 )
 
 type episodeMarker struct {
@@ -174,11 +193,12 @@ func singleEpisode(name string) episodeMarker {
 	if episodeRange.MatchString(value[m[1]:]) {
 		return episodeMarker{}
 	}
-	if m[2] < 0 {
-		m = []int{m[0], m[1], m[6], m[7], m[8], m[9]}
+	numbers := m[2:6]
+	if numbers[0] < 0 {
+		numbers = m[6:10]
 	}
-	season, _ := strconv.Atoi(value[m[2]:m[3]])
-	episode, _ := strconv.Atoi(value[m[4]:m[5]])
+	season, _ := strconv.Atoi(value[numbers[0]:numbers[1]])
+	episode, _ := strconv.Atoi(value[numbers[2]:numbers[3]])
 	return episodeMarker{season: season, episode: episode, start: m[0], end: m[1]}
 }
 
@@ -198,6 +218,51 @@ func seriesWords(name string) []string {
 	return words
 }
 
+// matchingSeries keeps the significant title words and permits one typo in
+// a longer word when the rest of the title matches exactly.
+func matchingSeries(actual, expected string) bool {
+	got, want := seriesWords(actual), seriesWords(expected)
+	if len(got) == 0 || len(got) != len(want) {
+		return false
+	}
+	typo := false
+	for i, word := range got {
+		if word == want[i] {
+			continue
+		}
+		if typo || len(want) == 1 || !singleTitleTypo(word, want[i]) {
+			return false
+		}
+		typo = true
+	}
+	return true
+}
+
+func singleTitleTypo(actual, expected string) bool {
+	got, want := []rune(actual), []rune(expected)
+	if len(got) > len(want) {
+		got, want = want, got
+	}
+	if len(got) < 5 || len(want)-len(got) > 1 || got[0] != want[0] ||
+		strings.ContainsFunc(actual, unicode.IsNumber) || strings.ContainsFunc(expected, unicode.IsNumber) {
+		return false
+	}
+	for i, letter := range got {
+		if letter == want[i] {
+			continue
+		}
+		if len(got) != len(want) {
+			return slices.Equal(got[i:], want[i+1:])
+		}
+		if slices.Equal(got[i+1:], want[i+1:]) {
+			return true
+		}
+		return i+1 < len(got) && got[i] == want[i+1] && got[i+1] == want[i] &&
+			slices.Equal(got[i+2:], want[i+2:])
+	}
+	return true
+}
+
 func episodeSuffix(suffix, series string) ([]string, bool) {
 	for _, word := range nameWords(suffix) {
 		if word == "sample" || word == "trailer" || word == "featurette" {
@@ -207,7 +272,7 @@ func episodeSuffix(suffix, series string) ([]string, bool) {
 	if marker := releaseTag.FindStringIndex(strings.ReplaceAll(suffix, "_", " ")); marker != nil {
 		suffix = suffix[:marker[0]]
 	}
-	if slices.Equal(seriesWords(suffix), seriesWords(series)) {
+	if matchingSeries(suffix, series) {
 		return nil, false
 	}
 	return nameWords(suffix), false

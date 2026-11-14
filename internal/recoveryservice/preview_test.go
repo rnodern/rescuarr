@@ -62,6 +62,10 @@ func TestImportPreviewUsesExactSavedCaseAndReadOnlyRequests(t *testing.T) {
 				source, modifier, language = "webdl", `,"modifier":"none"`, `,"language":{"id":1}`
 			}
 			const folder = "Captain.Wattle.Animated.S02E11.Captain.Wattle.Animated.720p.FIXTURE.WEB-DL.AAC2.0.x264-Lab"
+			filename := folder + ".mkv"
+			if test.version == "5.0.0.2941" {
+				filename = "Captain Watle Animated Season 2 Episode 11 Signal Lost 720p.mkv"
+			}
 			output := "/private/downloads/original"
 			if test.filenameReview {
 				output = "/private/downloads/" + folder
@@ -100,7 +104,7 @@ func TestImportPreviewUsesExactSavedCaseAndReadOnlyRequests(t *testing.T) {
 					}
 					previews++
 					if test.filenameReview {
-						body = fmt.Sprintf(`[{"path":%q,"size":4096,"downloadId":"private-original","series":{"id":12},"episodes":[{"id":41,"seriesId":12}],"rejections":[{"type":"permanent"}]}]`, output+"/"+folder+".mkv")
+						body = fmt.Sprintf(`[{"path":%q,"size":4096,"downloadId":"private-original","series":{"id":12},"episodes":[{"id":41,"seriesId":12}],"rejections":[{"type":"permanent"}]}]`, output+"/"+filename)
 						break
 					}
 					body = `[{"path":"/private/downloads/original/media.mkv","size":4096,"folderName":"original",` + media +
@@ -129,7 +133,7 @@ func TestImportPreviewUsesExactSavedCaseAndReadOnlyRequests(t *testing.T) {
 			if test.filenameReview {
 				saved := item.Display.EpisodeCheck
 				if saved == nil || saved.Matched != test.wantRead || saved.CheckedAt != clock.Now() ||
-					(saved.Matched && saved.Filename != folder+".mkv") {
+					(saved.Matched && saved.Filename != filename) {
 					t.Fatalf("unexpected automatic filename check: %+v", saved)
 				}
 			} else if item.Display.EpisodeCheck != nil || previews != 0 {
@@ -157,7 +161,7 @@ func TestImportPreviewUsesExactSavedCaseAndReadOnlyRequests(t *testing.T) {
 			}
 			if test.filenameReview {
 				if err != nil || previews != 1 || got.Eligible != 0 || got.Episode == nil || !got.Episode.Matched ||
-					got.Episode.Folder != folder || got.Episode.Filename != folder+".mkv" || got.Episode.EpisodeTitle != "Signal Lost" {
+					got.Episode.Folder != folder || got.Episode.Filename != filename || got.Episode.EpisodeTitle != "Signal Lost" {
 					t.Fatalf("unexpected episode review: %+v, %+v with %d preview requests: %v", got, got.Episode, previews, err)
 				}
 				return
