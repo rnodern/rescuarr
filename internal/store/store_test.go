@@ -284,3 +284,55 @@ func TestMalformedBackupDoesNotReplaceLocalState(t *testing.T) {
 		t.Fatal("startup accepted an altered schema with an intact migration ledger")
 	}
 }
+
+func TestRestoreDoesNotAuthoriseEarlierNotifications(t *testing.T) {
+	ctx := t.Context()
+	local, err := Open(ctx, filepath.Join(t.TempDir(), "source"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer local.Close()
+	states := map[string]string{"pending": "suppressed", "delayed": "suppressed", "sending": "uncertain", "accepted": "accepted"}
+	for state := range states {
+		err := local.Write(ctx, func(tx *sql.Tx) error {
+			event := domain.Event{ID: domain.EventID(state), Kind: "fixture_notification", Actor: "fixture", OccurredAt: time.Now()}
+			if err := AppendEvent(ctx, tx, event); err != nil {
+				return err
+			}
+			_, err := tx.ExecContext(ctx, `INSERT INTO notification_outbox
+				(id, event_id, route_id, route_revision, dedupe_key, state, scheduled_at, expires_at, attempts, reason)
+				VALUES (?, ?, 'route-1', 1, ?, ?, '2026-11-14', '2099-01-01', 0, '')`, state, event.ID, state, state)
+			return err
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	backup := filepath.Join(t.TempDir(), "backup.sqlite")
+	if _, err := local.Backup(ctx, backup); err != nil {
+		t.Fatal(err)
+	}
+	restoredDir := filepath.Join(t.TempDir(), "restored")
+	if _, err := Restore(ctx, restoredDir, backup, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	restored, err := Open(ctx, restoredDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restored.Close()
+	if err := restored.Read(ctx, func(tx *sql.Tx) error {
+		for id, expected := range states {
+			var state, reason string
+			if err := tx.QueryRowContext(ctx, "SELECT state, reason FROM notification_outbox WHERE id = ?", id).Scan(&state, &reason); err != nil {
+				return err
+			}
+			if state != expected || (id != "accepted" && reason != "notification_restored_without_delivery") {
+				t.Errorf("%s restored with state %s and reason %s", id, state, reason)
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}

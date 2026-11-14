@@ -176,11 +176,11 @@ func (s *fixtureStore) BeginReconcile(_ context.Context, id domain.AttemptID, _ 
 	return Reconciliation{Attempt: s.attempt, Fence: 2}, nil
 }
 
-func (s *fixtureStore) RecordOutcome(_ context.Context, r Reconciliation, out domain.Outcome) error {
+func (s *fixtureStore) RecordOutcome(_ context.Context, r Reconciliation, out domain.Outcome) (domain.Outcome, error) {
 	s.Lock()
 	defer s.Unlock()
 	if !s.claimedReadback || s.attempt.ID != r.Attempt.ID || r.Fence != 2 {
-		return ErrConflict
+		return domain.Outcome{}, ErrConflict
 	}
 	s.claimedReadback = false
 	s.outcome = out
@@ -190,7 +190,7 @@ func (s *fixtureStore) RecordOutcome(_ context.Context, r Reconciliation, out do
 			s.intent.State = domain.IntentReconciling
 		}
 	}
-	return nil
+	return s.outcome, nil
 }
 
 type fixtureAdapter struct {
