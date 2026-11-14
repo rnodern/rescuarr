@@ -55,7 +55,7 @@ func TestBrowserUsesOwnerSessionAndLocalState(t *testing.T) {
 		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/json"}},
 			Body: io.NopCloser(strings.NewReader(body)), ContentLength: int64(len(body))}, nil
 	}))
-	handler := browserHandler(cfg, auth, local, observations)
+	handler := browserHandler(cfg, auth, local, observations, nil)
 	request := func(method, path, token, origin string, form url.Values) *httptest.ResponseRecorder {
 		t.Helper()
 		request := httptest.NewRequest(method, "http://127.0.0.1:8787"+path, strings.NewReader(form.Encode()))

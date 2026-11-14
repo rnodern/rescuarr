@@ -11,12 +11,14 @@ import (
 	"github.com/rnodern/rescuarr/internal/webconsole"
 )
 
-func browserHandler(cfg config.Config, auth *access.Auth, local *store.Store, observations *observeservice.Service) http.Handler {
+func browserHandler(cfg config.Config, auth *access.Auth, local *store.Store, observations *observeservice.Service, notifications webconsole.NotificationService) http.Handler {
 	browser := webconsole.New(webconsole.Options{
-		BasePath:    cfg.BasePath,
-		Read:        observations,
-		Connections: observations,
-		Authorize:   app.CurrentBrowserSession,
+		BasePath:      cfg.BasePath,
+		Read:          observations,
+		Connections:   observations,
+		Authorize:     app.CurrentBrowserSession,
+		Notifications: notifications,
+		ProwlDelivery: cfg.ProwlDelivery,
 	})
 	return app.ConsoleHandler(cfg, auth, local, browser)
 }

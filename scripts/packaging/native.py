@@ -13,7 +13,7 @@ import subprocess
 import tempfile
 
 from artifact import check_version, checksum, command, commit, sbom, source_archive, version_arg, write_checksums, write_json
-from smoke import check_setup_page, check_setup_token, installation_state, wait_for_http
+from smoke import check_owner_workflow, check_setup_page, check_setup_token, installation_state, wait_for_http
 
 
 def smoke_log_tail(log, scratch):
@@ -42,7 +42,7 @@ def server(binary, data, phase):
                 base = f"http://127.0.0.1:{port}"
                 wait_for_http(base, lambda: process.poll() is None)
                 check_setup_page(base)
-                yield
+                yield base
             finally:
                 status = process.poll()
                 if status is None:
@@ -77,9 +77,10 @@ def smoke(binary, scratch, version, revision):
     command(str(binary), "restore", "--data-dir", str(restored), "--input", str(backup))
     if installation_state(restored / database.name) != (install_id, "observe", 1):
         raise RuntimeError("Restore failed to preserve the installation ID and gate recovery")
-    with server(binary, restored, "startup after restore"):
+    with server(binary, restored, "startup after restore") as base:
         if installation_state(restored / database.name)[0] != install_id:
             raise RuntimeError("Restored installation failed to start with its original identity")
+        check_owner_workflow(base, restored)
 
 
 def build(args):
@@ -133,7 +134,7 @@ def build(args):
             "go": command("go", "version"), "archive": archive.name,
             "archive_sha256": checksum(archive), "binary_sha256": checksum(installed),
             "runtime": {"runner": os.environ.get("RUNNER_NAME", platform.platform()),
-                        "checks": ["version", "health", "readiness", "setup page", "restart", "backup", "restore"]},
+                        "checks": ["version", "health", "readiness", "setup page", "restart", "backup", "restore", "owner setup and sign-in", "case and connection pages", "session logout"]},
             "signing": "external hook completed" if args.sign_hook else "unsigned",
             "notarisation": (
                 "external hook completed" if args.notarise_hook else
