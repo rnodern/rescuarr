@@ -13,20 +13,23 @@ type ManualReviewService interface {
 }
 
 type ManualReviewView struct {
-	Case          *domain.Case
-	Preview       ImportPreview
-	Token         string
-	ApprovalToken string
-	Hold          string
-	Diagnosis     string
-	CanApprove    bool
-	Processing    bool
-	Folder        string
-	SearchLabels  []string
+	Case              *domain.Case
+	Preview           ImportPreview
+	Token             string
+	ApprovalToken     string
+	Hold              string
+	Diagnosis         string
+	CanApprove        bool
+	Processing        bool
+	ImportAction      bool
+	CanCloseUncertain bool
+	Folder            string
+	SearchLabels      []string
 }
 
 type ManualDecision struct {
-	Token   string
-	Approve bool
-	Actor   domain.ActorID
+	Token          string
+	Approve        bool
+	CloseUncertain bool
+	Actor          domain.ActorID
 }

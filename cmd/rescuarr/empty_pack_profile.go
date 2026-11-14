@@ -17,42 +17,9 @@ import (
 )
 
 func checkEmptyPackProfile(ctx context.Context, local *store.Store, selected string, exchange arradapter.FixtureTransport, out io.Writer) error {
-	service := observeservice.New(local, nil, nil)
-	if selected == "" {
-		instances, err := service.Instances(ctx)
-		if err != nil {
-			return err
-		}
-		var sonarr []observeservice.InstanceStatus
-		for _, instance := range instances {
-			if instance.Product == domain.ProductSonarr {
-				sonarr = append(sonarr, instance)
-			}
-		}
-		switch len(sonarr) {
-		case 0:
-			return errors.New("add a Sonarr connection in the console and check its queue")
-		case 1:
-			selected = string(sonarr[0].ID)
-		default:
-			for _, instance := range sonarr {
-				if _, err := fmt.Fprintf(out, "%s  %q\n", instance.ID, instance.DisplayName); err != nil {
-					return err
-				}
-			}
-			return errors.New("repeat check-empty-pack with --sonarr-connection and one of the listed IDs")
-		}
-	}
-	instance, err := service.CurrentRecoveryInstance(ctx, domain.InstanceID(selected))
-	if err != nil || instance.Product != domain.ProductSonarr {
-		return errors.New("select the Sonarr connection and run Check queue in the console first")
-	}
-	if instance.UpstreamVersion != arrwire.SonarrIDOnlyImportVersion {
-		return errors.New("the observed Sonarr version differs from the tested 5.0.0.2941 build")
-	}
-	key, err := local.ReadSecret(instance.SecretRef)
+	instance, key, err := sonarrRecoveryCheckConnection(ctx, local, selected, "check-empty-pack", out)
 	if err != nil {
-		return errors.New("could not read the selected Sonarr connection's API key")
+		return err
 	}
 	if exchange == nil {
 		transport := &http.Transport{
@@ -82,4 +49,45 @@ func checkEmptyPackProfile(ctx context.Context, local *store.Store, selected str
 	_, err = fmt.Fprintf(out, "Sonarr %s (%s, %s) · %q\n%s\nProfile SHA-256: %x\nThis check sends only GET requests and preserves the current mode.\n",
 		profile.Version, profile.Branch, profile.OSFamily, instance.DisplayName, reason, profile.Fingerprint)
 	return err
+}
+
+func sonarrRecoveryCheckConnection(ctx context.Context, local *store.Store, selected, command string, out io.Writer) (domain.Instance, string, error) {
+	service := observeservice.New(local, nil, nil)
+	if selected == "" {
+		instances, err := service.Instances(ctx)
+		if err != nil {
+			return domain.Instance{}, "", err
+		}
+		var sonarr []observeservice.InstanceStatus
+		for _, instance := range instances {
+			if instance.Product == domain.ProductSonarr {
+				sonarr = append(sonarr, instance)
+			}
+		}
+		switch len(sonarr) {
+		case 0:
+			return domain.Instance{}, "", errors.New("add a Sonarr connection in the console and check its queue")
+		case 1:
+			selected = string(sonarr[0].ID)
+		default:
+			for _, instance := range sonarr {
+				if _, err := fmt.Fprintf(out, "%s  %q\n", instance.ID, instance.DisplayName); err != nil {
+					return domain.Instance{}, "", err
+				}
+			}
+			return domain.Instance{}, "", fmt.Errorf("repeat %s with --sonarr-connection and one of the listed IDs", command)
+		}
+	}
+	instance, err := service.CurrentRecoveryInstance(ctx, domain.InstanceID(selected))
+	if err != nil || instance.Product != domain.ProductSonarr {
+		return domain.Instance{}, "", errors.New("select the Sonarr connection and run Check queue in the console first")
+	}
+	if instance.UpstreamVersion != arrwire.SonarrIDOnlyImportVersion {
+		return domain.Instance{}, "", errors.New("the observed Sonarr version differs from the tested 5.0.0.2941 build")
+	}
+	key, err := local.ReadSecret(instance.SecretRef)
+	if err != nil {
+		return domain.Instance{}, "", errors.New("could not read the selected Sonarr connection's API key")
+	}
+	return instance, key, nil
 }

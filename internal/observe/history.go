@@ -20,6 +20,8 @@ type HistoryRecord struct {
 	ClientLabel  string
 	FileID       int64
 	SourceTitle  string                  `json:"-"`
+	DroppedPath  string                  `json:"-"`
+	ImportedPath string                  `json:"-"`
 	Languages    []domain.ImportLanguage `json:"-"`
 }
 
@@ -114,8 +116,10 @@ func (a *Arr) EpisodeImportHistory(ctx context.Context, target domain.TargetRef)
 		Event      string    `json:"eventType"`
 		Date       time.Time `json:"date"`
 		Data       struct {
-			FileID string `json:"fileId"`
-			Client string `json:"downloadClientName"`
+			FileID       string          `json:"fileId"`
+			Client       string          `json:"downloadClientName"`
+			DroppedPath  json.RawMessage `json:"droppedPath"`
+			ImportedPath json.RawMessage `json:"importedPath"`
 		} `json:"data"`
 	}
 	query := url.Values{"episodeId": {strconv.FormatInt(target.ID, 10)}, "seriesIds": {strconv.FormatInt(target.SeriesID, 10)},
@@ -133,8 +137,12 @@ func (a *Arr) EpisodeImportHistory(ctx context.Context, target domain.TargetRef)
 		if err != nil || fileID <= 0 || strconv.FormatInt(fileID, 10) != r.Data.FileID {
 			continue
 		}
+		var dropped, imported string
+		_ = json.Unmarshal(r.Data.DroppedPath, &dropped)
+		_ = json.Unmarshal(r.Data.ImportedPath, &imported)
 		history = append(history, HistoryRecord{ID: r.ID, Target: target, Event: r.Event, At: r.Date, FileID: fileID,
-			DownloadID: exactToken(r.DownloadID, 256), ClientLabel: boundedText(r.Data.Client, 128)})
+			DownloadID: exactToken(r.DownloadID, 256), ClientLabel: boundedText(r.Data.Client, 128),
+			DroppedPath: exactToken(dropped, 4096), ImportedPath: exactToken(imported, 4096)})
 	}
 	return history, nil
 }

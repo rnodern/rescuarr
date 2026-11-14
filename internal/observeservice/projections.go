@@ -277,17 +277,26 @@ func markMissing(ctx context.Context, tx *sql.Tx, instance domain.InstanceRef, g
 	if err != nil {
 		return err
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT id, payload, missing_complete_scans FROM observe_cases
+	rows, err := tx.QueryContext(ctx, `SELECT id, payload, missing_complete_scans,
+			EXISTS(SELECT 1 FROM manual_import_attempts AS m WHERE m.case_id = observe_cases.id AND m.stage = 'verified')
+		FROM observe_cases
 		WHERE instance_id = ? AND epoch = ? AND (state <> 'closed' OR
-			(reason = 'queue_missing_unverified' AND id IN (SELECT value FROM json_each(?))))
+			(reason = 'queue_missing_unverified' AND (id IN (SELECT value FROM json_each(?)) OR
+				EXISTS(SELECT 1 FROM manual_import_attempts AS m WHERE m.case_id = observe_cases.id AND m.stage = 'verified'))))
+		AND NOT EXISTS (SELECT 1 FROM manual_import_attempts AS m WHERE m.case_id = observe_cases.id
+			AND m.stage IN ('sending', 'uncertain'))
 		AND observation_only = 0 AND last_seen_generation < ? LIMIT ?`, instance.ID, instance.Epoch, string(encoded), generation, maxCases)
 	if err != nil {
 		return err
 	}
-	var cases []storedCase
+	type missingCase struct {
+		storedCase
+		manualImportVerified bool
+	}
+	var cases []missingCase
 	for rows.Next() {
-		var item storedCase
-		if err := rows.Scan(&item.ID, &item.Payload, &item.Misses); err != nil {
+		var item missingCase
+		if err := rows.Scan(&item.ID, &item.Payload, &item.Misses, &item.manualImportVerified); err != nil {
 			rows.Close()
 			return err
 		}
@@ -305,7 +314,7 @@ func markMissing(ctx context.Context, tx *sql.Tx, instance domain.InstanceRef, g
 			return err
 		}
 		verified := imports[detail.ID]
-		if detail.State == domain.CaseClosed && verified == "" {
+		if detail.State == domain.CaseClosed && verified == "" && !item.manualImportVerified {
 			continue
 		}
 		state, reason := domain.CaseHeld, domain.ReasonCode("queue_presence_unknown")
@@ -315,6 +324,9 @@ func markMissing(ctx context.Context, tx *sql.Tx, instance domain.InstanceRef, g
 		if verified != "" {
 			state, reason = domain.CaseClosed, "sonarr_import_verified"
 			detail.Evidence = append(detail.Evidence, verified)
+		}
+		if item.manualImportVerified {
+			state, reason = domain.CaseClosed, "sonarr_import_verified"
 		}
 		if detail.LastSeenAt.IsZero() && item.Misses == 0 {
 			detail.LastSeenAt = detail.NextCheckAt.Add(-45 * time.Second)
@@ -339,7 +351,7 @@ func markMissing(ctx context.Context, tx *sql.Tx, instance domain.InstanceRef, g
 		if verified != "" {
 			kind = "recovery_external_import_verified"
 		}
-		if state == domain.CaseClosed {
+		if state == domain.CaseClosed && !item.manualImportVerified {
 			if err := store.AppendEvent(ctx, tx, domain.Event{ID: domain.EventID(store.NewID()), Kind: kind,
 				Actor: "queue-worker", Reason: reason, Scope: domain.Scope{Kind: domain.ScopeInstance, Instance: instance},
 				CaseID: detail.ID, Evidence: detail.Evidence, OccurredAt: now}); err != nil {

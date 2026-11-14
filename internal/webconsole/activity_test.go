@@ -92,3 +92,26 @@ func TestActivityHandlesEmptyAndUnavailableHistory(t *testing.T) {
 		t.Fatal("activity page exposed implementation error")
 	}
 }
+
+func TestActivityShowsManualCopyOutcomesWithoutPaths(t *testing.T) {
+	opts := fixture()
+	opts.RecoveryActivity = activityReader(func(context.Context, int, int64) ([]app.RecoveryActivityEntry, error) {
+		kinds := []domain.EventKind{
+			"recovery_manual_import_sending", "recovery_manual_import_verified",
+			"recovery_manual_import_uncertain", "recovery_manual_import_failed", "recovery_manual_import_unconfirmed",
+		}
+		rows := make([]app.RecoveryActivityEntry, 0, len(kinds))
+		for index, kind := range kinds {
+			rows = append(rows, app.RecoveryActivityEntry{Sequence: int64(index + 1), CaseID: "case-1",
+				CaseTitle: "Fixture Series · S02E03", Kind: kind, Reason: "/private/source/basename.mkv", OccurredAt: opts.Clock.Now()})
+		}
+		return rows, nil
+	})
+	page := request(New(opts), "GET", "/activity", "owner", "", nil)
+	expect(t, page, 200, "Sending the approved Copy import to Sonarr",
+		"Copy import verified. Sonarr linked the approved episode and kept the source file.", "Waiting to confirm the Copy import in Sonarr",
+		"Copy import failed", "Owner closed the review without import confirmation.")
+	if strings.Contains(page.Body.String(), "/private/source/") {
+		t.Fatal("Activity exposed a private import file path")
+	}
+}

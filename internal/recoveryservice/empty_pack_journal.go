@@ -164,7 +164,7 @@ func (j *EmptyPackJournal) BeginReject(ctx context.Context, key EmptyPackKey, ch
 			var approved bool
 			if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM manual_reviews AS m JOIN observe_cases AS c
 				ON c.id = m.case_id AND c.revision = m.case_revision
-				WHERE m.case_id = ? AND m.token = ? AND m.state = 'approved' AND m.scope_hash = ?
+				WHERE m.case_id = ? AND m.token = ? AND m.state = 'approved' AND m.action = 'empty_pack' AND m.scope_hash = ?
 				AND c.instance_id = ? AND c.epoch = ? AND c.state = 'held' AND c.reason = 'no_eligible_files'
 				AND c.observation_only = 0 AND c.missing_complete_scans = 0
 				AND json_extract(c.payload, '$.Job.Ref.ID') = ?

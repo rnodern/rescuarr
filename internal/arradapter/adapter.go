@@ -133,6 +133,10 @@ func (*Adapter) Dispatch(context.Context, domain.Operation) (domain.Acknowledgem
 }
 
 func (a *Adapter) DispatchPrepared(ctx context.Context, op domain.Operation, prepared domain.PreparedAction) (domain.Acknowledgement, error) {
+	return a.dispatchPrepared(ctx, op, prepared, nil)
+}
+
+func (a *Adapter) dispatchPrepared(ctx context.Context, op domain.Operation, prepared domain.PreparedAction, beforeSend func(context.Context) error) (domain.Acknowledgement, error) {
 	wire, err := arrwire.Encode(a.instance, a.binding.AdapterRevision, op, prepared)
 	if err != nil {
 		return domain.Acknowledgement{}, err
@@ -169,6 +173,11 @@ func (a *Adapter) DispatchPrepared(ctx context.Context, op domain.Operation, pre
 	}
 	if ctx.Err() != nil || !validQualification(binding, qualification, a.now()) {
 		return domain.Acknowledgement{}, ErrQualification
+	}
+	if beforeSend != nil {
+		if err := beforeSend(ctx); err != nil || ctx.Err() != nil || !validQualification(binding, qualification, a.now()) {
+			return domain.Acknowledgement{}, ErrQualification
+		}
 	}
 
 	response, err := a.exchange(req)

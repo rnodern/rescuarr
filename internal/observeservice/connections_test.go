@@ -121,6 +121,35 @@ func TestConnectionRemovalKeepsLegacyCredentialsAndRejectsActiveIntent(t *testin
 	}); err != nil {
 		t.Fatal(err)
 	}
+	attempt, err := json.Marshal(struct{ Attempt domain.Attempt }{Attempt: domain.Attempt{
+		Operation: domain.Operation{Job: domain.JobRef{Instance: instance.Ref}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Write(t.Context(), func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(t.Context(), `INSERT INTO manual_reviews
+			(case_id,token,state,case_revision,updated_at,action) VALUES ('copy-case','copy-token','approved',1,'','import')`); err != nil {
+			return err
+		}
+		_, err := tx.ExecContext(t.Context(), `INSERT INTO manual_import_attempts (case_id,token,stage,payload)
+			VALUES ('copy-case','copy-token','uncertain',?)`, string(attempt))
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.RemoveInstance(t.Context(), instance.Ref.ID, "owner"); !errors.Is(err, app.ErrConflict) {
+		t.Fatalf("removal with an unconfirmed Manual Copy returned %v", err)
+	}
+	if err := db.Write(t.Context(), func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(t.Context(), `UPDATE manual_reviews SET state = 'completed' WHERE case_id = 'copy-case'`); err != nil {
+			return err
+		}
+		_, err := tx.ExecContext(t.Context(), `UPDATE manual_import_attempts SET stage = 'unconfirmed' WHERE case_id = 'copy-case'`)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if err := service.RemoveInstance(t.Context(), instance.Ref.ID, "owner"); err != nil {
 		t.Fatal(err)
 	}

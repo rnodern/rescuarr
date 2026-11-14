@@ -20,6 +20,7 @@ on:
           - sonarr/v5-empty-pack
           - sonarr/v5-adapter-pack
           - sonarr/v5-language-pack
+          - sonarr/v5-manual-copy
           - radarr/import
           - sonarr/reject-preserve
           - radarr/reject-preserve
@@ -53,7 +54,7 @@ jobs:
           ffmpeg -version
           openssl version
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        if: github.event_name == 'workflow_dispatch' && inputs.scenario == 'sonarr/v5-adapter-pack'
+        if: github.event_name == 'workflow_dispatch' && (inputs.scenario == 'sonarr/v5-adapter-pack' || inputs.scenario == 'sonarr/v5-manual-copy')
         with:
           go-version-file: go.mod
       - name: Run isolated upstream lab
@@ -89,7 +90,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        scenario: [v5-id-import, v5-empty-pack, v5-adapter-pack, v5-language-pack]
+        scenario: [v5-id-import, v5-empty-pack, v5-adapter-pack, v5-language-pack, v5-manual-copy]
     steps:
       - name: Check out the exact source
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -101,7 +102,7 @@ jobs:
           sudo apt-get update -q
           sudo apt-get install -y --no-install-recommends ffmpeg openssl
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        if: matrix.scenario == 'v5-adapter-pack'
+        if: matrix.scenario == 'v5-adapter-pack' || matrix.scenario == 'v5-manual-copy'
         with:
           go-version-file: go.mod
       - name: Run the isolated Sonarr 5 scenario

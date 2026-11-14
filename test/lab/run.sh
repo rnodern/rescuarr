@@ -4,12 +4,12 @@ set -euo pipefail
 lab_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repo_dir="$(cd -- "$lab_dir/../.." && pwd)"
 if [[ $# -lt 1 || $# -gt 2 || -e "$1" || -L "$1" ]]; then
-  printf 'Usage: %s NEW_REPORT.json [sonarr|radarr]/[import|reject-preserve|reject-remove|reject-lost-response|replace-terminal] [or sonarr/v5-id-import|sonarr/v5-empty-pack|sonarr/v5-adapter-pack|sonarr/v5-language-pack]\n' "$0" >&2
+  printf 'Usage: %s NEW_REPORT.json [sonarr|radarr]/[import|reject-preserve|reject-remove|reject-lost-response|replace-terminal] [or sonarr/v5-id-import|sonarr/v5-empty-pack|sonarr/v5-adapter-pack|sonarr/v5-language-pack|sonarr/v5-manual-copy]\n' "$0" >&2
   exit 2
 fi
 scenario="${2:-}"
 case "$scenario" in
-  ""|sonarr/import|sonarr/v5-id-import|sonarr/v5-empty-pack|sonarr/v5-adapter-pack|sonarr/v5-language-pack|radarr/import|sonarr/reject-preserve|radarr/reject-preserve|sonarr/reject-remove|radarr/reject-remove|sonarr/reject-lost-response|radarr/reject-lost-response|sonarr/replace-terminal|radarr/replace-terminal) ;;
+  ""|sonarr/import|sonarr/v5-id-import|sonarr/v5-empty-pack|sonarr/v5-adapter-pack|sonarr/v5-language-pack|sonarr/v5-manual-copy|radarr/import|sonarr/reject-preserve|radarr/reject-preserve|sonarr/reject-remove|radarr/reject-remove|sonarr/reject-lost-response|radarr/reject-lost-response|sonarr/replace-terminal|radarr/replace-terminal) ;;
   *) printf 'Unknown lab scenario.\n' >&2; exit 2 ;;
 esac
 
@@ -60,6 +60,11 @@ if [[ -n "$scenario" ]]; then
   if [[ "$scenario" == sonarr/v5-adapter-pack ]]; then
     (cd "$repo_dir" && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o "$run_dir/go-pack-probe" ./test/lab/go-pack-probe)
     compose+=(--file "$lab_dir/compose.go-pack-probe.yaml")
+  fi
+  if [[ "$scenario" == sonarr/v5-manual-copy ]]; then
+    (cd "$repo_dir" && python3 -B scripts/packaging/native.py --os linux --arch amd64 --version candidate --output "$run_dir/package") >&2
+    tar -xzf "$run_dir/package/rescuarr-candidate-linux-amd64.tar.gz" -C "$run_dir" ./rescuarr
+    compose+=(--file "$lab_dir/compose.manual-copy.yaml")
   fi
   scenario_args+=("$scenario")
 fi

@@ -3,10 +3,12 @@ package observe
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math"
 	"strconv"
 	"time"
 
+	"github.com/rnodern/rescuarr/internal/arrwire"
 	"github.com/rnodern/rescuarr/internal/domain"
 )
 
@@ -29,6 +31,7 @@ type TargetSnapshot struct {
 	Monitored          domain.Fact[bool]
 	Available          domain.Fact[bool]
 	AirDateUTC         *time.Time
+	EpisodeCode        string `json:",omitempty"`
 	MediaPath          string `json:"-"`
 	RootPath           string `json:"-"`
 	OriginalLanguageID *int32
@@ -56,6 +59,7 @@ type currentTarget struct {
 	mediaWire
 	EpisodeMonitored *bool
 	SeasonNumber     *int32
+	EpisodeNumber    *int32
 	HasFile          *bool
 	FileID           *int32
 	EmbeddedFile     *targetFileWire
@@ -66,6 +70,24 @@ type currentTarget struct {
 // Target reads one exact target, its selected quality profile and, when the
 // target links it, one exact file. It rechecks the target and profile for drift.
 func (a *Arr) Target(ctx context.Context, ref domain.TargetRef, generation domain.Revision, observedAt time.Time) (TargetSnapshot, error) {
+	wantVersion := SonarrTargetVersion
+	if a.reader.product == domain.ProductRadarr {
+		wantVersion = RadarrTargetVersion
+	}
+	return a.targetSnapshot(ctx, ref, generation, observedAt, wantVersion)
+}
+
+// SonarrV5ImportTarget reads an exact episode and profile in the pinned v5
+// manual import workflow.
+func (a *Arr) SonarrV5ImportTarget(ctx context.Context, ref domain.TargetRef, generation domain.Revision, observedAt time.Time) (TargetSnapshot, error) {
+	if a.reader.product != domain.ProductSonarr {
+		return TargetSnapshot{}, ErrConfiguration
+	}
+	return a.targetSnapshot(ctx, ref, generation, observedAt, arrwire.SonarrIDOnlyImportVersion)
+}
+
+func (a *Arr) targetSnapshot(ctx context.Context, ref domain.TargetRef, generation domain.Revision, observedAt time.Time,
+	wantVersion string) (TargetSnapshot, error) {
 	if !ref.Valid() || ref.Instance != a.reader.instance || ref.ID > math.MaxInt32 || ref.SeriesID > math.MaxInt32 ||
 		(a.reader.product == domain.ProductSonarr) != (ref.Kind == domain.TargetEpisode) ||
 		generation == 0 || observedAt.IsZero() {
@@ -75,7 +97,7 @@ func (a *Arr) Target(ctx context.Context, ref domain.TargetRef, generation domai
 	defer cancel()
 
 	out := TargetSnapshot{Ref: ref, ConnectionRevision: a.connectionRevision}
-	availability, err := a.readTarget(ctx, &out)
+	availability, err := a.readTarget(ctx, &out, wantVersion)
 	state, fileState := domain.ObservationKnown, domain.ObservationKnown
 	var monitored bool
 	var fileID int64
@@ -101,6 +123,7 @@ func (a *Arr) Target(ctx context.Context, ref domain.TargetRef, generation domai
 		Monitored          bool
 		Available          *bool
 		AirDateUTC         *time.Time
+		EpisodeCode        string `json:",omitempty"`
 		MediaPath          string
 		RootPath           string
 		OriginalLanguageID *int32
@@ -112,7 +135,7 @@ func (a *Arr) Target(ctx context.Context, ref domain.TargetRef, generation domai
 		FileEdition        string
 	}{
 		Ref: ref, Version: out.Version, ConnectionRevision: out.ConnectionRevision, Monitored: monitored,
-		Available: availability, AirDateUTC: out.AirDateUTC, MediaPath: out.MediaPath, RootPath: out.RootPath,
+		Available: availability, AirDateUTC: out.AirDateUTC, EpisodeCode: out.EpisodeCode, MediaPath: out.MediaPath, RootPath: out.RootPath,
 		OriginalLanguageID: out.OriginalLanguageID, Profile: out.Profile, FileID: fileID, File: out.File,
 		FilePath: path, RelativeFilePath: relativePath, FileEdition: edition,
 	}
@@ -140,11 +163,7 @@ func (a *Arr) Target(ctx context.Context, ref domain.TargetRef, generation domai
 	return out, err
 }
 
-func (a *Arr) readTarget(ctx context.Context, out *TargetSnapshot) (*bool, error) {
-	wantVersion := SonarrTargetVersion
-	if a.reader.product == domain.ProductRadarr {
-		wantVersion = RadarrTargetVersion
-	}
+func (a *Arr) readTarget(ctx context.Context, out *TargetSnapshot, wantVersion string) (*bool, error) {
 	status, err := a.Status(ctx)
 	if err != nil {
 		return nil, err
@@ -185,6 +204,12 @@ func (a *Arr) readTarget(ctx context.Context, out *TargetSnapshot) (*bool, error
 	if currentProfile.Digest != profile.Digest {
 		return nil, ErrPartial
 	}
+	if wantVersion == arrwire.SonarrIDOnlyImportVersion {
+		if first.SeasonNumber == nil || first.EpisodeNumber == nil || *first.EpisodeNumber <= 0 {
+			return nil, ErrResponse
+		}
+		out.EpisodeCode = fmt.Sprintf("S%02dE%02d", *first.SeasonNumber, *first.EpisodeNumber)
+	}
 	out.MediaPath, out.RootPath = exactToken(first.Path, 4096), exactToken(first.RootPath, 4096)
 	if first.Language != nil && first.Language.ID != nil && *first.Language.ID > 0 {
 		out.OriginalLanguageID = first.Language.ID
@@ -202,14 +227,15 @@ func (a *Arr) currentTarget(ctx context.Context, ref domain.TargetRef) (currentT
 	var current currentTarget
 	if ref.Kind == domain.TargetEpisode {
 		var episode struct {
-			ID           int64           `json:"id"`
-			SeriesID     int64           `json:"seriesId"`
-			Monitored    *bool           `json:"monitored"`
-			SeasonNumber *int32          `json:"seasonNumber"`
-			AirDateUTC   *time.Time      `json:"airDateUtc"`
-			HasFile      *bool           `json:"hasFile"`
-			FileID       *int32          `json:"episodeFileId"`
-			File         *targetFileWire `json:"episodeFile"`
+			ID            int64           `json:"id"`
+			SeriesID      int64           `json:"seriesId"`
+			Monitored     *bool           `json:"monitored"`
+			SeasonNumber  *int32          `json:"seasonNumber"`
+			EpisodeNumber *int32          `json:"episodeNumber"`
+			AirDateUTC    *time.Time      `json:"airDateUtc"`
+			HasFile       *bool           `json:"hasFile"`
+			FileID        *int32          `json:"episodeFileId"`
+			File          *targetFileWire `json:"episodeFile"`
 		}
 		if err := a.getTargetResource(ctx, "episode", ref.ID, &episode); err != nil {
 			return current, err
@@ -224,7 +250,8 @@ func (a *Arr) currentTarget(ctx context.Context, ref domain.TargetRef) (currentT
 		if !current.mediaWire.matches(ref.SeriesID) {
 			return current, ErrResponse
 		}
-		current.EpisodeMonitored, current.SeasonNumber, current.AirDateUTC = episode.Monitored, episode.SeasonNumber, episode.AirDateUTC
+		current.EpisodeMonitored, current.SeasonNumber, current.EpisodeNumber = episode.Monitored, episode.SeasonNumber, episode.EpisodeNumber
+		current.AirDateUTC = episode.AirDateUTC
 		current.HasFile, current.FileID, current.EmbeddedFile = episode.HasFile, episode.FileID, episode.File
 		return current, nil
 	}

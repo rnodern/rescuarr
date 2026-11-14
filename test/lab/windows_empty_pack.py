@@ -19,7 +19,8 @@ import empty_pack
 import language_pack
 import scenarios
 from empty_pack import empty_pack_replacement, run_go_adapter
-from manual_browser import PackagedManualLab
+from manual_browser import PackagedManualLab, require_ready, start_process as start, stop_process as stop
+from manual_import_browser import run_packaged_id_only_copy
 from probe import SAB_VERSION, SONARR_V5_VERSION, get_json
 from source import SEED, serve
 
@@ -29,34 +30,12 @@ SOURCE = "http://127.0.0.1:8081"
 CASE = "sonarr/windows-v5-adapter-pack"
 LANGUAGE_CASE = "sonarr/windows-v5-language-pack"
 MANUAL_CASE = "sonarr/windows-v5-manual-pack"
+MANUAL_COPY_CASE = "sonarr/windows-v5-manual-copy"
 
 
 def stage(result, name):
     result["stage"] = name
     print("Windows Sonarr lab: " + name, flush=True)
-
-
-def start(stack, command, cwd, env=None):
-    proc = subprocess.Popen(command, cwd=cwd, stdin=subprocess.DEVNULL,
-                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
-    stack.callback(stop, proc)
-    return proc
-
-
-def stop(proc):
-    if proc.poll() is None:
-        proc.kill()
-        proc.wait(timeout=10)
-
-
-def require_ready(proc, read, stage):
-    def observe():
-        scenarios.verify(proc.poll() is None, f"{stage}Exited")
-        try:
-            return read()
-        except (OSError, ValueError, KeyError):
-            return None
-    return scenarios.poll(observe, f"{stage}Deadline", timeout=120)
 
 
 def sonarr_config(data, key):
@@ -74,7 +53,7 @@ def sonarr_config(data, key):
 def exercise(args, result, source_sha):
     scenarios.verify(os.name == "nt" and os.environ.get("GITHUB_ACTIONS") == "true", "requiresDisposableWindowsRunner")
     result["binaries"] = {}
-    for name in ("sonarr", "sab", "adapter" if args.adapter else "rescuarr"):
+    for name in ("sonarr", "sab", "adapter" if args.adapter else "manual_copy" if args.manual_copy else "rescuarr"):
         executable = getattr(args, name)
         if executable is None:
             continue
@@ -129,15 +108,19 @@ def exercise(args, result, source_sha):
                             "docker": False, "emptyAtStartup": True}
 
         stage(result, "arrSetup")
-        profile = arr.setup(completed_handling=args.language_pack)
+        completed_handling = bool(args.language_pack or args.manual_copy)
+        profile = arr.setup(completed_handling=completed_handling)
         result["settings"] = {"profileId": profile["id"], "cutoff": profile["cutoff"],
-                              "completedHandling": args.language_pack, "removeCompletedDownloads": False,
+                              "completedHandling": completed_handling, "removeCompletedDownloads": False,
                               "removeFailedDownloads": False, "automaticRedownloadFailed": True}
         stage(result, "mediaSetup")
         episodes = arr.media(profile["id"])
         stage(result, "exercise")
         if args.language_pack:
             language_pack.language_pack_replacement(arr, episodes[0], episodes[1], result)
+        elif args.manual_copy:
+            run_packaged_id_only_copy(arr, episodes[0], episodes[1], result, args.manual_copy, source_sha,
+                                      partial(stage, result))
         else:
             adapter = partial(run_go_adapter, executable=args.adapter) if args.adapter else None
             manual_review = None
@@ -162,6 +145,7 @@ def main():
     mode.add_argument("--adapter", type=Path)
     mode.add_argument("--language-pack", action="store_true")
     mode.add_argument("--rescuarr", type=Path)
+    mode.add_argument("--manual-copy", type=Path)
     args = parser.parse_args()
     for attr, value in vars(args).items():
         if isinstance(value, Path):
@@ -169,7 +153,8 @@ def main():
 
     result = {"status": "failed", "evidenceClass": "labObservation", "protocol": "usenet", "stage": "startup"}
     source_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
-    scenario = LANGUAGE_CASE if args.language_pack else MANUAL_CASE if args.rescuarr else CASE
+    scenario = (LANGUAGE_CASE if args.language_pack else MANUAL_COPY_CASE if args.manual_copy else
+                MANUAL_CASE if args.rescuarr else CASE)
     report = {"sourceSHA": source_sha,
               "measuredAt": datetime.now(timezone.utc).isoformat(), "fixtureSeed": SEED,
               "platform": {"system": platform.system(), "release": platform.release(), "arch": platform.machine()},

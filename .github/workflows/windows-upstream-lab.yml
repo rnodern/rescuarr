@@ -24,7 +24,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        driver: [adapter, manual, language]
+        driver: [adapter, manual, language, manual-copy]
     defaults:
       run:
         shell: pwsh
@@ -67,7 +67,7 @@ jobs:
           CGO_ENABLED: '0'
         run: go build -trimpath -o "$env:RUNNER_TEMP/rescuarr-windows-lab/go-pack-probe.exe" ./test/lab/go-pack-probe
       - name: Build and verify the portable Rescuarr package
-        if: matrix.driver == 'manual'
+        if: matrix.driver == 'manual' || matrix.driver == 'manual-copy'
         run: |
           $dir = Join-Path $env:RUNNER_TEMP 'rescuarr-windows-lab'
           python -B scripts/packaging/native.py --os windows --arch amd64 --version candidate --output "$dir/package"
@@ -117,6 +117,7 @@ jobs:
               switch ($env:LAB_DRIVER) {
                 'language' { '--language-pack' }
                 'manual' { '--rescuarr'; "$dir/installed/rescuarr.exe" }
+                'manual-copy' { '--manual-copy'; "$dir/installed/rescuarr.exe" }
                 'adapter' { '--adapter'; "$dir/go-pack-probe.exe" }
               }
             )
@@ -134,6 +135,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
-          name: sonarr-windows-v5-${{ matrix.driver }}-pack-evidence
+          name: ${{ matrix.driver == 'manual-copy' && 'sonarr-windows-v5-manual-copy-evidence' || format('sonarr-windows-v5-{0}-pack-evidence', matrix.driver) }}
           path: ${{ runner.temp }}/rescuarr-windows-empty-pack.json
           if-no-files-found: warn

@@ -43,6 +43,8 @@ func (s *Service) verifyMissingEpisodeImports(ctx context.Context, instance doma
 			(reason IN ('series_matched_by_id', 'queue_presence_unknown', 'queue_missing_unverified')) AND updated_at > ?
 			AND NOT EXISTS (SELECT 1 FROM action_intents AS a JOIN action_attempts AS t ON t.intent_id = a.id
 				WHERE json_extract(a.proposal, '$.CaseID') = observe_cases.id)
+			AND NOT EXISTS (SELECT 1 FROM manual_import_attempts AS m WHERE m.case_id = observe_cases.id
+				AND m.stage IN ('sending', 'uncertain', 'verified'))
 			ORDER BY updated_at DESC, id LIMIT ?`
 		rows, err := tx.QueryContext(ctx, query, instance.Ref.ID, instance.Ref.Epoch, stamp(now.Add(-importReadbackWindow)), maxCases)
 		if err != nil {
