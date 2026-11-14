@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"flag"
 	"fmt"
@@ -17,6 +18,7 @@ import (
 	"github.com/rnodern/rescuarr/internal/access"
 	"github.com/rnodern/rescuarr/internal/app"
 	"github.com/rnodern/rescuarr/internal/config"
+	"github.com/rnodern/rescuarr/internal/ledger"
 	"github.com/rnodern/rescuarr/internal/observepoll"
 	"github.com/rnodern/rescuarr/internal/observeservice"
 	"github.com/rnodern/rescuarr/internal/prowl"
@@ -140,14 +142,18 @@ func doctor(ctx context.Context, cfg config.Config) error {
 }
 
 func serve(ctx context.Context, cfg config.Config, local *store.Store, auth *access.Auth, logger *slog.Logger) error {
+	notifications := prowloutbox.New(local, nil, prowl.NewClient(nil), cfg.ProwlDelivery)
+	recoveryPause, err := ledger.NewJournal(local, holdUnqualifiedRecovery, notifications.Append)
+	if err != nil {
+		return err
+	}
 	listener, err := net.Listen("tcp", cfg.Listen)
 	if err != nil {
 		return fmt.Errorf("open listener: %w", err)
 	}
 	observations := observeservice.New(local, nil, nil)
-	notifications := prowloutbox.New(local, nil, prowl.NewClient(nil), cfg.ProwlDelivery)
 	server := &http.Server{
-		Handler:           browserHandler(cfg, auth, local, observations, notifications),
+		Handler:           browserHandler(cfg, auth, local, observations, notifications, recoveryPause),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      55 * time.Second, // Allows the bounded upstream queue scan to finish.
@@ -197,6 +203,10 @@ func serve(ctx context.Context, cfg config.Config, local *store.Store, auth *acc
 		logger.Info("service_stopped", "component", "http")
 		return nil
 	}
+}
+
+func holdUnqualifiedRecovery(context.Context, *sql.Tx, ledger.Approval, time.Time) error {
+	return ledger.ErrHeld
 }
 
 func maintain(ctx context.Context, local *store.Store, auth *access.Auth, logger *slog.Logger) {

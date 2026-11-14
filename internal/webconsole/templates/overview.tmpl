@@ -4,6 +4,14 @@
 {{if .HasConnections}}<p><a href="{{.Base}}/connections">Manage connections and check queues</a></p>{{end}}
 {{if .Status.Paused}}<p class="notice">New recovery actions are paused.</p>
 {{else if .Status.ReconcileRequired}}<p class="notice">Recovery is held pending reconciliation.</p>{{end}}
+{{if .Body}}<form method="post" action="{{.Base}}/controls/{{if .Status.Paused}}resume{{else}}pause{{end}}">
+  <input type="hidden" name="csrf" value="{{.CSRF}}">
+  <input type="hidden" name="revision" value="{{.Body.Revision}}">
+  {{if .Status.Paused}}<button type="submit">Resume recovery actions</button>
+  <p>Current policy and reconciliation checks still apply.</p>
+  {{else}}<button type="submit">Pause all recovery actions</button>
+  <p>Monitoring continues. Requests already sent may finish.</p>{{end}}
+</form>{{end}}
 <div class="metrics">
   <a class="panel metric" href="{{.Base}}/cases?exclude_closed=1"><span>Open recoveries</span><strong>{{.Status.Cases}}</strong></a>
   <a class="panel metric" href="{{.Base}}/cases?state=held"><span>Held downloads</span><strong>{{.Status.HeldCases}}</strong></a>

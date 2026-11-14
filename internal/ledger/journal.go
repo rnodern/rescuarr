@@ -241,10 +241,42 @@ func (j *Journal) allowed(ctx context.Context, tx *sql.Tx, approval Approval, no
 // SetPaused commits the kill switch and audit together. A send linearises at
 // BeginSend. Readback of previously marked sends remains available when paused.
 func (j *Journal) SetPaused(ctx context.Context, paused bool, actor domain.ActorID, now time.Time) error {
+	return j.setPaused(ctx, paused, actor, now, nil)
+}
+
+// PauseState returns the committed gate and its last control event. A revision
+// of zero identifies a fresh installation without a pause or resume event.
+func (j *Journal) PauseState(ctx context.Context) (paused bool, revision uint64, err error) {
+	err = j.local.Read(ctx, func(tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx, pauseStateQuery).Scan(&paused, &revision)
+	})
+	return paused, revision, err
+}
+
+const pauseStateQuery = `SELECT paused, COALESCE((SELECT max(sequence) FROM audit_events
+	WHERE kind IN ('action_pause', 'action_resume')), 0) FROM action_pause WHERE singleton = 1`
+
+// ComparePause holds stale browser controls after another owner session
+// changes the gate, including when the gate returns to its old value.
+func (j *Journal) ComparePause(ctx context.Context, paused bool, revision uint64, actor domain.ActorID, now time.Time) error {
+	return j.setPaused(ctx, paused, actor, now, &revision)
+}
+
+func (j *Journal) setPaused(ctx context.Context, paused bool, actor domain.ActorID, now time.Time, expected *uint64) error {
 	if !boundedID(string(actor)) || now.IsZero() {
 		return ErrInvalid
 	}
 	return j.local.Write(ctx, func(tx *sql.Tx) error {
+		if expected != nil {
+			var current bool
+			var revision uint64
+			if err := tx.QueryRowContext(ctx, pauseStateQuery).Scan(&current, &revision); err != nil {
+				return err
+			}
+			if revision != *expected || current == paused {
+				return ErrConflict
+			}
+		}
 		update, err := tx.ExecContext(ctx, "UPDATE action_pause SET paused = ? WHERE singleton = 1 AND paused != ?", paused, paused)
 		if err != nil {
 			return err
