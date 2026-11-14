@@ -1,3 +1,4 @@
+import hashlib
 import tempfile
 import unittest
 from pathlib import Path
@@ -5,7 +6,7 @@ from unittest.mock import Mock, patch
 
 import empty_pack
 import probe
-from scenarios import LabFailure, run_scenarios
+from scenarios import LabFailure, completed_fixture_media, run_scenarios
 from source import EMPTY_PACK_PHASE, EMPTY_PACK_TARGET, TVDB_ID, releases, search_targets, valid_phase
 
 
@@ -18,6 +19,38 @@ class EmptyPackLabTest(unittest.TestCase):
         self.assertFalse(valid_phase("episode1", EMPTY_PACK_PHASE))
         self.assertIn(".S01.720p.", releases(EMPTY_PACK_TARGET, EMPTY_PACK_PHASE))
         self.assertEqual(search_targets("sonarr", {**query, "ep": ["1"]}), ["episode1"])
+
+    def test_completed_output_accepts_sab_file_or_directory_with_exact_clip(self):
+        with tempfile.TemporaryDirectory() as temp, patch("scenarios.DOWNLOADS", Path(temp).resolve()):
+            category = Path(temp).resolve() / "complete" / "sonarr-lab"
+            title = releases(EMPTY_PACK_TARGET, EMPTY_PACK_PHASE)
+            folder = category / title
+            folder.mkdir(parents=True)
+            clip = folder / "renamed-by-sab.mkv"
+            contents = b"fixture clip"
+            clip.write_bytes(contents)
+            expected = {"bytes": len(contents), "sha256": hashlib.sha256(contents).hexdigest()}
+            for storage, kind in ((folder, "directory"), (clip, "file")):
+                evidence = {}
+                self.assertEqual(completed_fixture_media(str(storage), title, expected, evidence), (folder, clip))
+                self.assertEqual(evidence["completedFixtureLayout"]["storageKind"], kind)
+            wrong_hash = {**expected, "sha256": "0" * 64}
+            evidence = {}
+            with self.assertRaisesRegex(LabFailure, "unexpectedSyntheticPackLayout"):
+                completed_fixture_media(str(clip), title, wrong_hash, evidence)
+            self.assertFalse(evidence["completedFixtureLayout"]["contentMatch"])
+            self.assertNotIn(str(folder), str(evidence))
+            spare = folder / "sidecar.txt"
+            spare.write_bytes(contents)
+            with self.assertRaisesRegex(LabFailure, "unexpectedSyntheticPackLayout"):
+                completed_fixture_media(str(folder), title, expected, {})
+            spare.unlink()
+            outside = category / "outside.mkv"
+            outside.write_bytes(contents)
+            clip.unlink()
+            clip.symlink_to(outside)
+            with self.assertRaisesRegex(LabFailure, "unexpectedSyntheticPackLayout"):
+                completed_fixture_media(str(folder), title, expected, {})
 
     def test_exact_pending_aliases_need_matching_warning_and_path(self):
         with tempfile.TemporaryDirectory() as temp, patch("scenarios.DOWNLOADS", Path(temp).resolve()):

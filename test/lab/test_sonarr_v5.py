@@ -1,3 +1,4 @@
+import hashlib
 import io
 import json
 import tempfile
@@ -66,7 +67,7 @@ class SonarrV5LabTest(unittest.TestCase):
                 self.assertEqual(original.called, not expected)
 
     def test_import_requires_real_block_then_exact_copy_and_independent_readback(self):
-        for defect in (None, "wrong_reason", "wrong_file_id", "changed_source"):
+        for defect in (None, "file_storage", "wrong_reason", "wrong_file_id", "changed_source"):
             with self.subTest(defect=defect), tempfile.TemporaryDirectory() as temporary:
                 downloads = Path(temporary).resolve()
                 title = releases(ID_ONLY_TARGET, ID_ONLY_PHASE)
@@ -116,13 +117,16 @@ class SonarrV5LabTest(unittest.TestCase):
                     return {"status": "completed"}
 
                 arr.command_status.side_effect = copy
+                fixture_bytes = source.read_bytes()
+                fingerprint = {"bytes": len(fixture_bytes), "sha256": hashlib.sha256(fixture_bytes).hexdigest()}
+                storage = source if defect == "file_storage" else folder
                 report = {}
                 with patch("scenarios.DOWNLOADS", downloads), patch("scenarios.call_json"), patch(
                     "scenarios.search_events", return_value=[]
-                ), patch("scenarios.completed_job", return_value={"name": title, "storage": str(folder), "category": CATEGORY["sonarr"]}), patch(
+                ), patch("scenarios.completed_job", return_value={"name": title, "storage": str(storage), "category": CATEGORY["sonarr"]}), patch(
                     "scenarios.sab_job", return_value={"queue": [], "history": [{"nzo_id": download_id}], "archive": []}
-                ):
-                    if defect:
+                ), patch("scenarios.get_json", return_value=fingerprint):
+                    if defect and defect != "file_storage":
                         expected = {"wrong_reason": "blockedForAnotherReason", "wrong_file_id": "importHistoryScopeMismatch",
                                     "changed_source": "IDOnlyImportChangedSource"}[defect]
                         with self.assertRaisesRegex(LabFailure, expected):

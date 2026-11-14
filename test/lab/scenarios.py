@@ -6,6 +6,7 @@ import json
 import os
 import time
 import urllib.error
+from itertools import islice
 from pathlib import Path
 from urllib.parse import urlencode
 
@@ -86,6 +87,35 @@ def safe_path(path, root):
 
 def safe_download_path(path):
     return safe_path(path, DOWNLOADS / "complete")
+
+
+def completed_fixture_media(storage, title, expected, report, *, allow_sidecars=False):
+    """Bind SAB's exact completed job to its one verified disposable video."""
+    layout = report.setdefault("completedFixtureLayout", {})
+    reported = safe_download_path(storage)
+    # SAB can report the sole video as storage. Sonarr walks its ancestors to
+    # find the directory named for the job, then uses that as the output path.
+    folder = reported if reported.is_dir() else reported.parent
+    layout.update(storageKind="directory" if reported.is_dir() else "file" if reported.is_file() else "missing",
+                  namedFolder=folder.name == title)
+    verify(reported == Path(storage) and folder.is_dir() and folder.name == title,
+           "unexpectedSyntheticPackLayout")
+    # The Copy test may retain sidecars. The empty-pack case needs one file
+    # total so removing it produces a genuinely empty directory.
+    entry_limit = 32 if allow_sidecars else 1
+    entries = list(islice(folder.iterdir(), entry_limit + 1))
+    layout["entryCountBounded"] = len(entries)
+    layout["regularEntries"] = all(item.is_file() and not item.is_symlink() for item in entries)
+    verify(len(entries) <= entry_limit and layout["regularEntries"], "unexpectedSyntheticPackLayout")
+    videos = [item for item in entries if item.suffix.lower() == ".mkv"]
+    layout["videoCount"] = len(videos)
+    verify(len(videos) == 1 and reported in (videos[0], folder), "unexpectedSyntheticPackLayout")
+    video = videos[0]
+    layout["sizeMatch"] = video.stat().st_size == expected["bytes"]
+    verify(layout["sizeMatch"], "unexpectedSyntheticPackLayout")
+    layout["contentMatch"] = projection(inventory(video)[0], ("bytes", "sha256")) == expected
+    verify(layout["contentMatch"], "unexpectedSyntheticPackLayout")
+    return folder, video
 
 
 def linked_library_path(path, lab_library):
@@ -514,18 +544,19 @@ def id_only_import(arr, media, guard, report):
     job = poll(lambda: completed_job(download_id), "SABCompletionTimeout", timeout=150)
     verify(job["category"] == CATEGORY["sonarr"] and job["name"] == original_title,
            "IDOnlySABIdentityMismatch")
-    output = safe_download_path(job["storage"])
+    expected = get_json(SOURCE, "/lab/media")
+    output, verified_source = completed_fixture_media(job["storage"], original_title, expected, report, allow_sidecars=True)
     arr.refresh()
     row = poll(lambda: id_only_queue_row(arr, download_id, episode_id, series_id), "IDOnlyBlockNotObserved")
-    verify(safe_download_path(row["outputPath"]) == output, "unexpectedArrOutputPath")
+    arr_output = safe_download_path(row["outputPath"])
+    report["completedFixtureLayout"]["arrOutputMatch"] = arr_output in (output, verified_source)
+    verify(report["completedFixtureLayout"]["arrOutputMatch"], "unexpectedArrOutputPath")
     report["blocked"] = {**projection(row, SOURCE_KEYS), "trackedDownloadState": row["trackedDownloadState"],
                          "reason": "seriesMatchedById"}
 
     before = {"source": inventory(output, all_files=True), "library": inventory(arr.library, all_files=True),
               "client": sab_job(download_id), "guardFileId": arr.file_link(guard_id),
               "guardHistory": [projection(row, SOURCE_KEYS) for row in arr.history(episodeId=guard_id)]}
-    verify(output.is_dir() and output.name == original_title and len(inventory(output)) == 1,
-           "unexpectedIDOnlySourceLayout")
     verify(arr.file_link(episode_id) == before["guardFileId"] == 0 and not before["library"],
            "IDOnlyImportAlreadyHappened")
     report["before"] = before
@@ -536,7 +567,7 @@ def id_only_import(arr, media, guard, report):
     verify(len(candidates) == 1, "expectedSingletonIDOnlyPreview")
     candidate = candidates[0]
     source = safe_download_path(candidate["path"])
-    verify(source.parent == output and source.name == original_title + ".mkv" and source.is_file()
+    verify(source == verified_source and Path(candidate["path"]) == verified_source
            and candidate.get("downloadId") in (None, download_id), "unexpectedIDOnlyCandidatePath")
     candidate_series = candidate.get("series") or {}
     verify(candidate_series.get("id") in (None, series_id)

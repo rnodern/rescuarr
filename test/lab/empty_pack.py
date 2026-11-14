@@ -10,6 +10,7 @@ from scenarios import (
     INDEXER_NAME,
     SOURCE_KEYS,
     call_json,
+    completed_fixture_media,
     completed_job,
     delete_queue,
     get_json,
@@ -155,12 +156,9 @@ def empty_pack_replacement(arr, missing, covered, report):
     }
     job = poll(lambda: completed_job(download_id), "packSABCompletionTimeout", timeout=150)
     verify(job.get("category") == CATEGORY["sonarr"] and job.get("name") == title, "packSABIdentityMismatch")
-    output = safe_download_path(job["storage"])
-    expected = [{"name": title + ".mkv", **get_json(SOURCE, "/lab/media")}]
-    # Only delete this single known fixture video in the disposable download volume.
-    verify(output.is_dir() and output.name == title and inventory(output, all_files=True) == expected,
-           "unexpectedSyntheticPackLayout")
-    original_file = output / (title + ".mkv")
+    expected = get_json(SOURCE, "/lab/media")
+    # Move only the byte-verified disposable clip from this exact SAB job.
+    output, original_file = completed_fixture_media(job["storage"], title, expected, report)
     # Stage a separate file the native scanner can bind to the already-covered
     # episode. An indexer grab of equal quality could be rejected while the
     # original pack remains queued, which would not test a real library link.
@@ -180,8 +178,8 @@ def empty_pack_replacement(arr, missing, covered, report):
     rescan = arr.command_status("RescanSeries", seriesId=series_id)
     existing_file = poll(lambda: arr.library_file(covered["id"]), "existingEpisodeLibraryLinkMissing")
     verify(linked_library_path(existing_file["path"], arr.library) == staged
-           and len(inventory(staged)) == 1 and projection(inventory(staged)[0], ("bytes", "sha256"))
-           == projection(expected[0], ("bytes", "sha256")), "existingEpisodeFileMismatch")
+           and len(inventory(staged)) == 1 and projection(inventory(staged)[0], ("bytes", "sha256")) == expected,
+           "existingEpisodeFileMismatch")
     before_links = episode_disposition(arr, series_id, targets)
     verify(before_links == {missing["id"]: 0, covered["id"]: existing_file["id"]},
            "packEpisodeDispositionChanged")
@@ -199,9 +197,11 @@ def empty_pack_replacement(arr, missing, covered, report):
     verify(not any(row.get("eventType") == "downloadFolderImported" for row in arr.history(downloadId=download_id)),
            "packAlreadyImported")
     before_library = inventory(arr.library, all_files=True)
+    candidates = arr.read("manualimport", downloadId=download_id, filterExistingFiles="false")
+    verify(candidates == [], "packManualImportNotEmpty")
     report["beforeReject"] = {
         "queue": [projection(item, SOURCE_KEYS) for item in rows],
-        "reason": "noEligibleFiles", "sourceInventory": [], "client": client,
+        "reason": "noEligibleFiles", "sourceInventory": [], "manualImportCandidateCount": 0, "client": client,
         "episodeFileIDs": before_links,
     }
     start = len(search_events())
