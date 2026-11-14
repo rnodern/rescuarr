@@ -44,7 +44,10 @@ class SyntheticSourceTest(unittest.TestCase):
                              [f"movie{index}"])
             self.assertEqual(movie_metadata(index - 1)["tmdbId"], movie_id)
         self.assertEqual(search_targets("radarr", {"t": ["movie"], "tmdbid": ["1"]}), [])
-        self.assertEqual(series_metadata()["tvdbId"], TVDB_ID)
+        synthetic_series = series_metadata()
+        self.assertEqual(synthetic_series["tvdbId"], TVDB_ID)
+        self.assertEqual(synthetic_series["malIds"], [])
+        self.assertEqual(synthetic_series["aniListIds"], [])
 
     def test_recent_validation_feed_is_distinct_from_targeted_search(self):
         tv = {"t": ["tvsearch"], "cat": ["5040"], "offset": ["0"]}
@@ -61,6 +64,8 @@ class SyntheticSourceTest(unittest.TestCase):
         example = io.BytesIO(b'[{"errorMessage":"Unable to connect to http://private.invalid/?apikey=secret"}]')
         self.assertEqual(validation_category(example), "cannotConnect")
         self.assertEqual(validation_category(io.BytesIO(b'{}')), "validationUnknown")
+        sqlite_error = io.BytesIO(b'{"message":"NOT NULL constraint failed: Series.MalIds"}')
+        self.assertEqual(validation_category(sqlite_error), "missingSeriesAnimeIDArrays")
 
     def test_metadata_diagnostics_use_fixed_buckets(self):
         self.assertEqual(metadata_path_kind(f"/v1/tvdb/shows/en/{TVDB_ID}"), "sonarrSeries")

@@ -57,7 +57,17 @@ if [[ -n "$scenario" ]]; then
   scenario_args+=("$scenario")
 fi
 images="$("${compose[@]}" config --images)"
-"${compose[@]}" pull >&2
+for delay in 3 12 0; do
+  if "${compose[@]}" pull >"$run_dir/pull.log" 2>&1; then
+    cat "$run_dir/pull.log" >&2
+    break
+  fi
+  cat "$run_dir/pull.log" >&2
+  if [[ "$delay" == 0 ]] || ! grep -qiE 'toomanyrequests|too many requests' "$run_dir/pull.log"; then
+    exit 1
+  fi
+  sleep "$delay"
+done
 "${compose[@]}" up -d --no-build "${services[@]}" >&2
 (set -o noclobber
  "${compose[@]}" run --rm --no-deps -T probe python -B probe.py "$source_sha" "$images" ${scenario_args[@]+"${scenario_args[@]}"} > "$1")
