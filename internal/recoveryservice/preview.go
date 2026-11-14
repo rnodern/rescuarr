@@ -49,12 +49,19 @@ func (s *PreviewService) ImportPreview(ctx context.Context, id domain.CaseID, re
 		return heldPreview("Import preview supports jobs with up to eight identified targets.")
 	}
 	first := proof.Members[0]
-	for _, row := range proof.Members {
-		if row.Status != "completed" || row.TrackedState != "importPending" {
-			return heldPreview("Arr has not marked this download as complete and ready for import. Check the download in the Arr queue.")
+	filenameReview := proof.Case.Reason == domain.ReasonCode(observe.FindingSeriesIDOnly)
+	if filenameReview {
+		if len(proof.Members) != 1 || !importflow.SupportsEpisodeNameReview(proof.Instance.Product, proof.Instance.UpstreamVersion) {
+			return heldFilenameCheck("Filename matching requires one episode on a supported Sonarr version.")
 		}
-		if row.OutputPath == "" || row.OutputPath != first.OutputPath {
-			return heldPreview("Arr did not report one consistent download location for these targets. Check the download in Arr.")
+	} else {
+		for _, row := range proof.Members {
+			if row.Status != "completed" || row.TrackedState != "importPending" {
+				return heldPreview("Arr has not marked this download as complete and ready for import. Check the download in the Arr queue.")
+			}
+			if row.OutputPath == "" || row.OutputPath != first.OutputPath {
+				return heldPreview("Arr did not report one consistent download location for these targets. Check the download in Arr.")
+			}
 		}
 	}
 	key, err := s.secrets.ReadSecret(proof.Instance.SecretRef)
@@ -85,16 +92,13 @@ func (s *PreviewService) ImportPreview(ctx context.Context, id domain.CaseID, re
 	if err != nil {
 		return app.ImportPreview{}, err
 	}
-	if proof.Case.Reason == domain.ReasonCode(observe.FindingSeriesIDOnly) {
-		if len(proof.Members) != 1 || !importflow.SupportsEpisodeNameReview(proof.Instance.Product, status.Version) {
-			return heldPreview("Filename matching requires one episode on a supported Sonarr version. Review this download in Sonarr.")
-		}
+	if filenameReview {
 		match, err := client.ReviewEpisodeNames(ctx, first, style, roots)
 		if errors.Is(err, observe.ErrPartial) {
-			return heldPreview("Sonarr returned too many files to identify one episode. Review this download in Sonarr.")
+			return heldFilenameCheck("Sonarr returned too many files to identify one episode.")
 		}
 		if errors.Is(err, observe.ErrUnavailable) || errors.Is(err, observe.ErrNotFound) || errors.Is(err, observe.ErrResponse) {
-			return heldPreview("Rescuarr could not read the download’s file list from Sonarr. Open Manual Import in the Sonarr queue to review it.")
+			return heldFilenameCheck("Rescuarr could not read the download’s file list from Sonarr.")
 		}
 		if err != nil {
 			return app.ImportPreview{}, err
@@ -138,4 +142,8 @@ func (s *PreviewService) ImportPreview(ctx context.Context, id domain.CaseID, re
 
 func heldPreview(reason string) (app.ImportPreview, error) {
 	return app.ImportPreview{Hold: reason}, app.ErrHeld
+}
+
+func heldFilenameCheck(reason string) (app.ImportPreview, error) {
+	return app.ImportPreview{Episode: &app.EpisodeNameReview{Reason: reason}}, app.ErrHeld
 }

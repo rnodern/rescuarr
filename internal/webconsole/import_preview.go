@@ -58,21 +58,24 @@ func (c console) importPreview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	result, err := c.ImportPreview.ImportPreview(r.Context(), domain.CaseID(id), domain.Revision(revision))
+	title := "Import preview"
+	if result.Episode != nil {
+		title = "Episode filename check"
+	}
 	switch {
 	case errors.Is(err, app.ErrConflict):
 		c.render(w, r, http.StatusConflict, "approval-error", page{Title: "The case changed", Active: "cases", Body: id, Status: status})
 	case errors.Is(err, app.ErrHeld):
-		if result.Hold == "" {
-			result.Hold = "Check the current download in Arr, then return to this case for a fresh preview."
+		if result.Episode == nil {
+			title = "Import preview unavailable"
+			if result.Hold == "" {
+				result.Hold = "Check the current download in Arr, then return to this case for a fresh preview."
+			}
 		}
-		c.render(w, r, http.StatusConflict, "import-preview", page{Title: "Import preview unavailable", Active: "cases", Body: importPreviewView{id, result}, Status: status})
+		c.render(w, r, http.StatusConflict, "import-preview", page{Title: title, Active: "cases", Body: importPreviewView{id, result}, Status: status})
 	case err != nil:
 		c.readError(w, r, err)
 	default:
-		title := "Import preview"
-		if result.Episode != nil {
-			title = "Episode filename check"
-		}
 		c.render(w, r, http.StatusOK, "import-preview", page{Title: title, Active: "cases", Status: status, Body: importPreviewView{id, result}})
 	}
 }

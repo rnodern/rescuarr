@@ -25,10 +25,15 @@ func TestImportPreviewUsesExactSavedCaseAndReadOnlyRequests(t *testing.T) {
 		name           string
 		product        domain.Product
 		filenameReview bool
+		trackedState   string
+		wantRead       bool
 	}{
-		{"sonarr", domain.ProductSonarr, false},
-		{"radarr", domain.ProductRadarr, false},
-		{"sonarr filename review", domain.ProductSonarr, true},
+		{"sonarr import pending", domain.ProductSonarr, false, "importPending", true},
+		{"radarr import pending", domain.ProductRadarr, false, "importPending", true},
+		{"sonarr filename import pending", domain.ProductSonarr, true, "importPending", true},
+		{"sonarr filename import blocked", domain.ProductSonarr, true, "importBlocked", true},
+		{"sonarr filename without a tracked state", domain.ProductSonarr, true, "", false},
+		{"sonarr ordinary preview import blocked", domain.ProductSonarr, false, "importBlocked", false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			product := test.product
@@ -72,7 +77,8 @@ func TestImportPreviewUsesExactSavedCaseAndReadOnlyRequests(t *testing.T) {
 				case "/api/v3/system/status":
 					body = fmt.Sprintf(`{"appName":%q,"version":%q,"osName":"Alpine Linux","isLinux":true}`, product, version)
 				case "/api/v3/queue":
-					body = `{"page":1,"pageSize":100,"totalRecords":1,"records":[{"id":4,` + queueTarget + `,"downloadId":"private-original","downloadClient":"fixture-sab","protocol":"usenet","status":"completed","trackedDownloadState":"importPending","outputPath":` + fmt.Sprintf("%q", output) + `}]}`
+					body = `{"page":1,"pageSize":100,"totalRecords":1,"records":[{"id":4,` + queueTarget + `,"downloadId":"private-original","downloadClient":"fixture-sab","protocol":"usenet","status":"completed",` +
+						fmt.Sprintf(`"trackedDownloadState":%q,"outputPath":%q}]}`, test.trackedState, output)
 				case "/api/v3/rootfolder":
 					body = `[{"id":1,"path":"/private/library"}]`
 				case "/api/v3/episode/41":
@@ -123,6 +129,19 @@ func TestImportPreviewUsesExactSavedCaseAndReadOnlyRequests(t *testing.T) {
 				t.Fatalf("stale request reached Arr: %d calls, %v", calls, err)
 			}
 			got, err := svc.ImportPreview(ctx, item.ID, item.Revision)
+			if !test.wantRead {
+				if previews != 0 {
+					t.Fatal("an unsupported queue state reached Sonarr’s file preview")
+				}
+				if test.filenameReview {
+					if err != nil || got.Eligible != 0 || got.Episode == nil || got.Episode.Matched || got.Episode.Reason == "" {
+						t.Fatalf("expected a filename-specific hold: %+v, %+v, %v", got, got.Episode, err)
+					}
+				} else if err != app.ErrHeld || got.Episode != nil || got.Hold == "" {
+					t.Fatalf("expected an import preview hold: %+v, %v", got, err)
+				}
+				return
+			}
 			if test.filenameReview {
 				if err != nil || previews != 1 || got.Eligible != 0 || got.Episode == nil || !got.Episode.Matched ||
 					got.Episode.Folder != folder || got.Episode.Filename != folder+".mkv" || got.Episode.EpisodeTitle != "Signal Lost" {

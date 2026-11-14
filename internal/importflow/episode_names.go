@@ -38,11 +38,15 @@ type EpisodeNameReview struct {
 func (c *Client) ReviewEpisodeNames(ctx context.Context, row observe.QueueRecord, style PathStyle, roots []string) (EpisodeNameReview, error) {
 	if !SupportsEpisodeNameReview(c.instance.Product, c.instance.UpstreamVersion) ||
 		row.Target.Instance != c.instance.Ref || row.Target.Kind != domain.TargetEpisode ||
-		!row.Target.Valid() || row.DownloadID == "" || row.Status != "completed" || row.TrackedState != "importPending" ||
+		!row.Target.Valid() || row.DownloadID == "" ||
 		!slices.Contains(row.Findings, observe.FindingSeriesIDOnly) {
 		return EpisodeNameReview{}, ErrInvalid
 	}
 	review := EpisodeNameReview{Series: row.MediaTitle, Episode: row.Episode, EpisodeTitle: row.EpisodeTitle}
+	if row.Status != "completed" || (row.TrackedState != "importBlocked" && row.TrackedState != "importPending") {
+		review.Reason = "Sonarr is not reporting a completed download awaiting import or manual review. Check its current queue status."
+		return review, nil
+	}
 	if len(seriesWords(row.MediaTitle)) == 0 || !singleEpisode(row.Episode).valid() {
 		review.Reason = "Sonarr did not provide a series name and exact season and episode number."
 		return review, nil

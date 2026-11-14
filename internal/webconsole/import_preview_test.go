@@ -57,7 +57,11 @@ func TestOwnerEpisodeFilenameReviewOnSonarr3012(t *testing.T) {
 		detail.Case.Job.CompleteSet = true
 		c.Details["case-1"] = detail
 	})
+	var held bool
 	opts.ImportPreview = previewFixture(func(_ context.Context, _ domain.CaseID, _ domain.Revision) (app.ImportPreview, error) {
+		if held {
+			return app.ImportPreview{Episode: &app.EpisodeNameReview{Reason: "Sonarr returned too many files."}}, app.ErrHeld
+		}
 		return app.ImportPreview{Episode: &app.EpisodeNameReview{
 			Series: "Captain Wattle: The Animated Series", Episode: "S02E11", EpisodeTitle: "Signal Lost",
 			Filename: "Captain.Wattle.Animated.S02E11.mkv", Matched: true, ArrRejection: true,
@@ -68,4 +72,7 @@ func TestOwnerEpisodeFilenameReviewOnSonarr3012(t *testing.T) {
 	form := url.Values{"csrf": {csrf}, "revision": {"5"}}
 	expect(t, request(h, http.MethodPost, "/cases/case-1/import-preview", "owner", origin, form), 200,
 		"Likely episode match", "S02E11 · Signal Lost", "Captain.Wattle.Animated.S02E11.mkv", "Sonarr still reports an import rejection", "Activity → Queue → Manual Import")
+	held = true
+	expect(t, request(h, http.MethodPost, "/cases/case-1/import-preview", "owner", origin, form), 409,
+		"Episode filename check", "Match needs review", "Sonarr returned too many files.", "Activity → Queue → Manual Import")
 }

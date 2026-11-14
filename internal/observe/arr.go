@@ -229,7 +229,7 @@ func (a *Arr) queueRecord(row queueWire) QueueRecord {
 		DownloadID: exactToken(row.DownloadID, 256), Protocol: protocol(row.Protocol),
 		ClientLabel: boundedText(row.Client, 128), IndexerLabel: boundedText(row.Indexer, 128),
 		Status:        state(row.Status, "queued", "paused", "downloading", "completed", "failed", "warning", "delay", "downloadClientUnavailable", "fallback"),
-		TrackedState:  state(row.State, "downloading", "downloadFailed", "downloadFailedPending", "importPending", "importing", "imported", "ignored"),
+		TrackedState:  state(row.State, "downloading", "downloadFailed", "downloadFailedPending", "importBlocked", "importPending", "importing", "imported", "ignored"),
 		TrackedStatus: state(row.Tracked, "ok", "warning", "error"),
 		SizeBytes:     nonnegative(row.Size), AddedAt: row.AddedAt, Findings: findings,
 		OutputPath: exactToken(row.OutputPath, 4096),
