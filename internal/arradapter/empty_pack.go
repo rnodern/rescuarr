@@ -508,6 +508,8 @@ func packFailed(scope EmptyPackScope, history []packHistoryRow, sentAt, now time
 func validPackScope(scope EmptyPackScope) bool {
 	return validPackText(scope.DownloadID, 256) && validPackText(scope.Release, 300) &&
 		!strings.ContainsAny(scope.Release, "/\\") && scope.SeriesID > 0 && scope.SeriesID <= math.MaxInt32 &&
+		(scope.OutputPath == "" && scope.ClientLabel == "" ||
+			validPackText(scope.OutputPath, 4096) && validPackText(scope.ClientLabel, 128)) &&
 		len(scope.EpisodeIDs) >= 2 && len(scope.QueueIDs) == len(scope.EpisodeIDs) &&
 		validPackIDs(scope.QueueIDs) && validPackIDs(scope.EpisodeIDs)
 }
