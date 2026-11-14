@@ -19,7 +19,7 @@ Rescuarr is a planned, self-hosted download recovery assistant for **Sonarr**, *
 | Mode | Behaviour |
 | --- | --- |
 | Observe | Classify failures and suggest actions; read-only |
-| Assisted | Apply approved safe actions; confirm destructive operations |
+| Assist | Review and approve an eligible recovery action |
 | Autonomous | Apply explicitly enabled recovery policies with retry limits and auditing |
 
 ## Quick start (connectivity prototype)
@@ -46,9 +46,12 @@ Alternatively, once you have edited `.env`, run `docker compose up --build -d`. 
 
 - `src/rescuarr/` — connectivity API bootstrap
 - `tests/` — basic tests
-- `docs/ARCHITECTURE.md` — design and safety rules
-- `docs/ROADMAP.md` — implementation milestones
-- `docs/NAME_AND_RELEASE.md` — publishing and brand checklist
+- [Product and system design](docs/ARCHITECTURE.md)
+- [Recovery and deterministic learning](docs/RECOVERY_DESIGN.md)
+- [Service integration contracts](docs/INTEGRATIONS_DESIGN.md)
+- [Web console design](docs/UI_DESIGN.md)
+- [Delivery and verification plan](docs/ROADMAP.md)
+- [Publishing and brand checklist](docs/NAME_AND_RELEASE.md)
 
 ## Licence
 
