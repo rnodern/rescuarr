@@ -99,7 +99,8 @@ func TestManualReviewNavigationAndPackPlan(t *testing.T) {
 	manual.view.Processing = true
 	review := request(h, "GET", "/manual-review", "owner", "", nil)
 	expect(t, review, 200, "checking the approved action", "Refresh review")
-	if strings.Contains(review.Body.String(), ">Approve<") || strings.Contains(review.Body.String(), ">Decline<") {
+	if strings.Contains(review.Body.String(), ">Approve<") || strings.Contains(review.Body.String(), ">Decline<") ||
+		strings.Contains(review.Body.String(), "Close without confirmation") {
 		t.Fatal("Processing review exposed another decision")
 	}
 	observe = request(h, "POST", "/manual-review/mode", "owner", origin, url.Values{"csrf": {csrf}, "mode": {"observe"}})
@@ -170,5 +171,78 @@ func TestManualReviewEpisodeEvidenceEscapesAndHidesPaths(t *testing.T) {
 	expect(t, page, 200, "Audio tracks could not be verified.")
 	if strings.Contains(page.Body.String(), "Import the matching file into the library") {
 		t.Fatal("A cached filename match bypassed the audio decision")
+	}
+}
+
+func TestManualReviewCopyImportShowsFileAndRequiresAudioConfirmation(t *testing.T) {
+	opts := fixture()
+	dashboard := opts.Read.(*apptest.Console)
+	item := dashboard.Page.Cases[0]
+	service := &manualReviewFixture{
+		dashboard: dashboard,
+		view: app.ManualReviewView{
+			Case: &item, Token: "decline-token", ApprovalToken: "approve-copy", CanApprove: true, ImportAction: true,
+			Preview: app.ImportPreview{
+				Episode: &domain.EpisodeNameReview{
+					Matched: true, EpisodeTitle: "Fixture Episode", Filename: `C:\Fixture\Fixture.S02E03.mkv`,
+				},
+				Audio: []app.AudioLanguageReview{{
+					Label: "Download audio", AudioAssessment: domain.AudioAssessment{Decision: domain.AudioReview},
+				}},
+			},
+		},
+	}
+	opts.ManualReview = service
+	h := New(opts)
+	copyReview := request(h, "GET", "/manual-review", "owner", "", nil)
+	expect(t, copyReview, 200, "<strong>Fixture.S02E03.mkv</strong>", "Fixture Series · S02E03 · Fixture Episode",
+		"Keep the source file and the download client job.", "Rescuarr could not confirm the audio tracks.",
+		"Visually check the episode and listen to the audio", "I checked the video and audio. Approve",
+		`aria-describedby="confirm-copy-audio"`, `name="token" value="approve-copy"`)
+	body := copyReview.Body.String()
+	if strings.Contains(body, `C:\Fixture`) || strings.Contains(body, ">Approve Copy import<") {
+		t.Fatal("Copy review showed a raw path or an approval without the audio confirmation")
+	}
+
+	service.view.Preview.Audio[0].Decision = domain.AudioAccept
+	expect(t, request(h, "GET", "/manual-review", "owner", "", nil), 200, ">Approve Copy import<")
+
+	item.Display.EpisodeCheck = &domain.CaseEpisodeCheck{EpisodeNameReview: *service.view.Preview.Episode}
+	service.view.Preview.Episode = nil
+	held := request(h, "GET", "/manual-review", "owner", "", nil)
+	expect(t, held, 200, "Rescuarr can identify the selected file.", ">Decline<")
+	if strings.Contains(held.Body.String(), `name="decision" value="approve"`) {
+		t.Fatal("Copy review allowed approval with a cached filename")
+	}
+}
+
+func TestManualReviewCloseUnconfirmedIsAvailableWhilePaused(t *testing.T) {
+	opts := fixture()
+	dashboard := opts.Read.(*apptest.Console)
+	dashboard.Dashboard.Paused = true
+	item := dashboard.Page.Cases[0]
+	service := &manualReviewFixture{
+		dashboard: dashboard,
+		view: app.ManualReviewView{
+			Case: &item, Token: "case-selection", ImportAction: true, Processing: true, CanCloseUncertain: true,
+		},
+	}
+	opts.ManualReview = service
+	h := New(opts)
+	page := request(h, "GET", "/manual-review", "owner", "", nil)
+	expect(t, page, http.StatusOK, `data-manual-processing="uncertain"`, `name="decision" value="close_unconfirmed"`,
+		`name="token" value="case-selection"`, "Close without confirmation", "without retrying the import")
+	if strings.Contains(page.Body.String(), `name="decision" value="approve"`) || strings.Contains(page.Body.String(), "checking the approved action") {
+		t.Fatal("Uncertain import showed an approval or claimed it was sending")
+	}
+
+	form := url.Values{"csrf": {csrf}, "decision": {"close_unconfirmed"}, "token": {"case-selection"}}
+	expect(t, request(h, "POST", "/manual-review", "owner", "https://other.example.test", form), http.StatusForbidden)
+	expect(t, request(h, "POST", "/manual-review", "other", origin, form), http.StatusForbidden)
+	closed := request(h, "POST", "/manual-review", "owner", origin, form)
+	expect(t, closed, http.StatusSeeOther)
+	if closed.Header().Get("Location") != prefix+"/manual-review" || len(service.decisions) != 1 ||
+		service.decisions[0] != (app.ManualDecision{Token: "case-selection", CloseUncertain: true, Actor: "owner"}) {
+		t.Fatalf("Unexpected closure decision or redirect: %+v %q", service.decisions, closed.Header().Get("Location"))
 	}
 }

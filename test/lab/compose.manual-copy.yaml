@@ -1,0 +1,6 @@
+services:
+  probe:
+    tmpfs:
+      - /tmp
+    volumes:
+      - ${RESCUARR_LAB_RUN_DIR:?run via test/lab/run.sh}/rescuarr:/lab-tools/rescuarr:ro

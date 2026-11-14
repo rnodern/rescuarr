@@ -3,6 +3,7 @@ package importflow
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"io"
@@ -28,14 +29,16 @@ var (
 // SonarrV5Source is the private identity of the one native candidate selected
 // from the full tracked download, for independent source and route validation.
 type SonarrV5Source struct {
-	Instance   domain.Instance `json:"-"`
-	Job        domain.JobRef
-	Target     domain.TargetRef
-	DownloadID string `json:"-"`
-	Client     string `json:"-"`
-	OutputPath string `json:"-"`
-	Path       string `json:"-"`
-	Size       int64
+	Instance        domain.Instance `json:"-"`
+	Job             domain.JobRef
+	Target          domain.TargetRef
+	DownloadID      string `json:"-"`
+	Client          string `json:"-"`
+	OutputPath      string `json:"-"`
+	Path            string `json:"-"`
+	Size            int64
+	QueueID         int64
+	SelectionDigest [32]byte `json:"-"`
 }
 
 type QualifySonarrV5Source func(context.Context, SonarrV5Source) error
@@ -68,13 +71,46 @@ type sonarrV5ReprocessResult struct {
 	} `json:"episodes"`
 }
 
+type SonarrV5Inspection struct {
+	Source    SonarrV5Source
+	Episode   domain.EpisodeNameReview
+	Languages []domain.ImportLanguage
+}
+
+type sonarrV5Selection struct {
+	inspection SonarrV5Inspection
+	row        observe.QueueRecord
+	candidate  wireCandidate
+	episode    episodeMarker
+	request    sonarrV5ReprocessRequest
+}
+
+// InspectSonarrV5Import selects the one native candidate using read-only
+// requests. The same selection is repeated before sending reprocess.
+func (c *Client) InspectSonarrV5Import(ctx context.Context, job Job, now time.Time) (SonarrV5Inspection, error) {
+	if !c.supportsSonarrV5Import() {
+		return SonarrV5Inspection{}, ErrUnsupported
+	}
+	ctx, cancel := context.WithTimeout(ctx, readTimeout)
+	defer cancel()
+	started := time.Now()
+	select {
+	case c.slots <- struct{}{}:
+		defer func() { <-c.slots }()
+	case <-ctx.Done():
+		return SonarrV5Inspection{}, ctx.Err()
+	}
+	selection, err := c.selectSonarrV5Candidate(ctx, job, now, started)
+	return selection.inspection, err
+}
+
 // ReprocessSonarrV5 binds a verified ID-only queue item to one file. The caller
 // must independently qualify source preservation and the precise route before
 // the POST. Its response prepares a Copy selector for the action journal. It
 // never queues an import command.
 func (c *Client) ReprocessSonarrV5(ctx context.Context, job Job, now time.Time, qualify QualifySonarrV5Source) (domain.PreparedImport, error) {
 	var empty domain.PreparedImport
-	if c.instance.Product != domain.ProductSonarr || c.instance.UpstreamVersion != arrwire.SonarrIDOnlyImportVersion {
+	if !c.supportsSonarrV5Import() {
 		return empty, ErrUnsupported
 	}
 	if qualify == nil {
@@ -89,49 +125,93 @@ func (c *Client) ReprocessSonarrV5(ctx context.Context, job Job, now time.Time, 
 	case <-ctx.Done():
 		return empty, ctx.Err()
 	}
-	row, err := v5IDOnlyQueue(c.instance, job, now.Add(time.Since(started)))
+	selected, err := c.selectSonarrV5Candidate(ctx, job, now, started)
 	if err != nil {
 		return empty, err
 	}
-	rows, err := c.get(ctx, job.DownloadID)
-	if err != nil {
-		return empty, err
-	}
-	match := checkEpisodeNames(domain.EpisodeNameReview{}, row, job.PathStyle, job.LibraryRoots, rows)
-	if len(rows) != 1 || !match.Matched || !pathWithin(job.PathStyle, job.OutputPath, rows[0].Path, false) {
-		return empty, ErrSonarrV5Candidate
-	}
-	candidate := rows[0]
-	if candidate.DownloadID == nil || *candidate.DownloadID != row.DownloadID ||
-		!cleanText(candidate.FolderName, 512) || candidate.FolderName != match.Folder ||
-		(candidate.EpisodeFileID != nil && *candidate.EpisodeFileID != 0) {
-		return empty, ErrSonarrV5Candidate
-	}
-	episode := singleEpisode(row.Episode)
-	req, err := v5ReprocessRequest(row, episode, candidate)
-	if err != nil {
-		return empty, err
-	}
-	source := SonarrV5Source{Instance: c.instance, Job: job.Ref, Target: row.Target, DownloadID: row.DownloadID,
-		Client: row.ClientLabel, OutputPath: row.OutputPath, Path: candidate.Path, Size: candidate.Size}
-	if err := qualify(ctx, source); err != nil {
+	if err := qualify(ctx, selected.inspection.Source); err != nil {
 		return empty, ErrSonarrV5Qualification
 	}
 	if _, err := v5IDOnlyQueue(c.instance, job, now.Add(time.Since(started))); err != nil {
 		return empty, err
 	}
-	results, err := c.reprocessV5(ctx, req)
+	results, err := c.reprocessV5(ctx, selected.request)
 	if err != nil {
 		return empty, err
 	}
 	if _, err := v5IDOnlyQueue(c.instance, job, now.Add(time.Since(started))); err != nil {
 		return empty, err
 	}
-	file, ok := v5PreparedFile(results, candidate, row, episode)
+	file, ok := v5PreparedFile(results, selected.candidate, selected.row, selected.episode)
 	if !ok {
 		return empty, ErrSonarrV5Candidate
 	}
-	return domain.PreparedImport{DownloadID: row.DownloadID, Files: []domain.PreparedImportFile{file}}, nil
+	return domain.PreparedImport{DownloadID: selected.row.DownloadID, Files: []domain.PreparedImportFile{file}}, nil
+}
+
+func (c *Client) supportsSonarrV5Import() bool {
+	return c.instance.Product == domain.ProductSonarr && c.instance.UpstreamVersion == arrwire.SonarrIDOnlyImportVersion
+}
+
+func (c *Client) selectSonarrV5Candidate(ctx context.Context, job Job, now, started time.Time) (sonarrV5Selection, error) {
+	var selection sonarrV5Selection
+	row, err := v5IDOnlyQueue(c.instance, job, now.Add(time.Since(started)))
+	if err != nil {
+		return selection, err
+	}
+	rows, err := c.get(ctx, job.DownloadID)
+	if err != nil {
+		return selection, err
+	}
+	match := checkEpisodeNames(domain.EpisodeNameReview{Series: row.MediaTitle, Episode: row.Episode, EpisodeTitle: row.EpisodeTitle},
+		row, job.PathStyle, job.LibraryRoots, rows)
+	selection.inspection.Episode = match
+	if len(rows) != 1 || !match.Matched {
+		return selection, ErrSonarrV5Candidate
+	}
+	candidate := rows[0]
+	if candidate.DownloadID == nil || *candidate.DownloadID != row.DownloadID ||
+		(candidate.FolderName != "" && candidate.FolderName != match.Folder) ||
+		(candidate.EpisodeFileID != nil && *candidate.EpisodeFileID != 0) {
+		return selection, ErrSonarrV5Candidate
+	}
+	episode := singleEpisode(row.Episode)
+	req, err := v5ReprocessRequest(row, episode, candidate)
+	if err != nil {
+		return selection, err
+	}
+	if _, err := v5IDOnlyQueue(c.instance, job, now.Add(time.Since(started))); err != nil {
+		return selection, err
+	}
+	evidence, err := json.Marshal(struct {
+		QueueID     int64
+		Release     string
+		Client      string
+		OutputPath  string
+		TargetProof string
+		Match       domain.EpisodeNameReview
+		Candidate   wireCandidate
+		Request     sonarrV5ReprocessRequest
+	}{
+		QueueID: row.ID, Release: row.Release, Client: row.ClientLabel, OutputPath: row.OutputPath,
+		TargetProof: job.Targets[0].Evidence.ContentHash, Match: match, Candidate: candidate, Request: req,
+	})
+	if err != nil {
+		return selection, ErrSonarrV5Candidate
+	}
+	selection.inspection.Source = SonarrV5Source{
+		Instance: c.instance, Job: job.Ref, Target: row.Target, DownloadID: row.DownloadID,
+		Client: row.ClientLabel, OutputPath: row.OutputPath, Path: candidate.Path, Size: candidate.Size,
+		QueueID: row.ID, SelectionDigest: sha256.Sum256(evidence),
+	}
+	for _, language := range req.Languages {
+		selection.inspection.Languages = append(selection.inspection.Languages, domain.ImportLanguage(language))
+	}
+	// Sonarr's direct-file and fallback file scans can omit FolderName.
+	// Use the already checked parent of the exact candidate path.
+	candidate.FolderName = match.Folder
+	selection.row, selection.candidate, selection.episode, selection.request = row, candidate, episode, req
+	return selection, nil
 }
 
 func v5IDOnlyQueue(instance domain.Instance, job Job, now time.Time) (observe.QueueRecord, error) {

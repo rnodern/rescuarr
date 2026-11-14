@@ -102,7 +102,8 @@ for (const form of document.querySelectorAll("form[data-approval]")) {
   }
 }
 
-if (document.querySelector("[data-manual-processing]")) {
+const manualProcessing = document.querySelector("[data-manual-processing]");
+if (manualProcessing) {
   let checking = false;
   const checkReview = async () => {
     if (checking || document.hidden) return;
@@ -113,7 +114,8 @@ if (document.querySelector("[data-manual-processing]")) {
         window.location.reload();
       } else if (response.ok) {
         const page = new DOMParser().parseFromString(await response.text(), "text/html");
-        if (page.querySelector("[data-manual-review]") && !page.querySelector("[data-manual-processing]")) {
+        const latest = page.querySelector("[data-manual-processing]");
+        if (page.querySelector("[data-manual-review]") && latest?.dataset.manualProcessing !== manualProcessing.dataset.manualProcessing) {
           window.location.reload();
         }
       }

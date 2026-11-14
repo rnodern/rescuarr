@@ -55,7 +55,7 @@ func (c console) activity(w http.ResponseWriter, r *http.Request) {
 		}
 		state, event, attention := activityLabel(entry.Kind, entry.Reason)
 		row := activityRow{RecoveryActivityEntry: entry, Status: state, Event: event, Attention: attention}
-		if entry.Reason != "" && entry.Kind != "recovery_connection_removed" && entry.Kind != "recovery_empty_pack_done" && entry.Kind != "recovery_empty_pack_send_cancelled" && (entry.Kind != "action_readback_recorded" || state == "Recorded") {
+		if entry.Reason != "" && !strings.HasPrefix(string(entry.Kind), "recovery_manual_import_") && entry.Kind != "recovery_connection_removed" && entry.Kind != "recovery_empty_pack_done" && entry.Kind != "recovery_empty_pack_send_cancelled" && (entry.Kind != "action_readback_recorded" || state == "Recorded") {
 			row.Detail = reasonLabel(entry.Reason)
 		}
 		content.Rows = append(content.Rows, row)
@@ -103,6 +103,18 @@ func activityLabel(kind domain.EventKind, reason domain.ReasonCode) (status, eve
 		return "Recorded", "Switched to Manual mode", false
 	case "recovery_manual_mode_disabled":
 		return "Recorded", "Switched to Observe mode", false
+	case "recovery_manual_import_sending":
+		return "Pending", "Sending the approved Copy import to Sonarr", false
+	case "recovery_manual_import_verified":
+		return "Verified", "Copy import verified. Sonarr linked the approved episode and kept the source file.", false
+	case "recovery_manual_import_uncertain":
+		return "Needs review", "Waiting to confirm the Copy import in Sonarr", true
+	case "recovery_manual_import_failed":
+		return "Failed", "Copy import failed", true
+	case "recovery_manual_import_cancelled":
+		return "Cancelled", "Copy import cancelled before sending", true
+	case "recovery_manual_import_unconfirmed":
+		return "Unconfirmed", "Owner closed the review without import confirmation. Rescuarr did not retry.", true
 	case "recovery_external_import_verified":
 		return "Verified", "Sonarr import verified. Case closed.", false
 	case "recovery_queue_missing":

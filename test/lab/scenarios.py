@@ -15,6 +15,7 @@ from probe import (
     SONARR_V5_ADAPTER_PACK,
     SONARR_V5_ID_IMPORT,
     SONARR_V5_LANGUAGE_PACK,
+    SONARR_V5_MANUAL_COPY,
     SONARR_V5_SCENARIOS,
     TARGETS as ARR_BUILDS,
     arr_key,
@@ -548,7 +549,7 @@ def id_only_import_history(arr, download_id, episode_id, series_id, library, sou
     return row
 
 
-def id_only_import(arr, media, guard, report):
+def id_only_import(arr, media, guard, report, *, manual_review=None):
     episode_id, series_id = media["id"], media["seriesId"]
     guard_id = guard["id"]
     verify(guard["seriesId"] == series_id and guard_id != episode_id
@@ -599,28 +600,14 @@ def id_only_import(arr, media, guard, report):
     verify(candidate_series.get("id") in (None, series_id)
            and all(episode["id"] == episode_id for episode in (candidate.get("episodes") or [])),
            "conflictingIDOnlyCandidateIdentity")
-    reprocess = {**projection(candidate, MANUAL_IMPORT_FIELDS), "downloadId": download_id,
-                 "seriesId": series_id, "seasonNumber": media["seasonNumber"], "episodeIds": [episode_id]}
-    status, reprocessed = arr.api("manualimport", method="POST", body=[reprocess])
-    rescanned = candidate_for(arr, reprocessed, episode_id, download_id)
-    verify(rescanned["path"] == candidate["path"] and rescanned["seriesId"] == series_id
-           and rescanned["seasonNumber"] == media["seasonNumber"], "reprocessTargetOrPathChanged")
-    verify(set(MANUAL_IMPORT_FIELDS) <= rescanned.keys() and rescanned["quality"] and rescanned["languages"],
-           "reprocessMissingTypedCandidateMetadata")
-    report["preview"] = {"query": query, "candidateCount": 1, "rejectedBeforeReprocess": bool(candidate.get("rejections")),
-                         "reprocessRequest": reprocess, "reprocessStatus": status, "reprocessCount": 1}
-    verify(inventory(output, all_files=True) == before["source"] and sab_job(download_id) == before["client"]
-           and inventory(arr.library, all_files=True) == before["library"]
-           and arr.file_link(episode_id) == arr.file_link(guard_id) == 0
-           and {row["id"] for row in arr.history(downloadId=download_id)} == previous_ids,
-           "reprocessChangedIndependentState")
-    report["reprocessUnchanged"] = True
-
-    selected = {**projection(rescanned, MANUAL_IMPORT_FIELDS), "downloadId": download_id, "seriesId": series_id,
-                "episodeIds": [episode_id], "folderName": candidate.get("folderName")}
-    report["operation"] = {"method": "POST", "path": "/api/v3/command", "name": "ManualImport",
-                           "importMode": "copy", "files": [selected]}
-    report["response"] = arr.command_status("ManualImport", importMode="copy", files=[selected])
+    if manual_review:
+        report["preview"] = {"query": query, "candidateCount": 1, "rejectedBeforeReprocess": bool(candidate.get("rejections")),
+                             "candidateHasMatchingDownloadID": candidate.get("downloadId") == download_id,
+                             "candidateHasMatchingFolderName": candidate.get("folderName") == output.name,
+                             "candidateHasMatchingSize": candidate.get("size") == expected["bytes"]}
+        report["response"] = manual_review(download_id, original_title, output, source, media, guard, report)
+    else:
+        native_id_only_copy(arr, media, guard, report, download_id, output, before, previous_ids, query, candidate)
     library = poll(lambda: arr.library_file(episode_id), "importFileLinkMissing")
     history = poll(lambda: id_only_import_history(arr, download_id, episode_id, series_id, library, source, previous_ids),
                    "importProvenanceMissing")
@@ -642,6 +629,35 @@ def id_only_import(arr, media, guard, report):
     verify(not after["arrQueue"], "IDOnlyImportStillQueued")
     verify(len(installed) == len(expected_source) == len(after["library"]) == 1 and installed[0]["sha256"] == expected_source[0]["sha256"]
            and installed[0]["bytes"] == expected_source[0]["bytes"], "libraryFileContentMismatch")
+    if manual_review:
+        verify(not source.samefile(linked), "manualCopySharesOriginalFileIdentity")
+        report["copyIsSeparateFile"] = True
+
+
+def native_id_only_copy(arr, media, guard, report, download_id, output, before, previous_ids, query, candidate):
+    episode_id, series_id = media["id"], media["seriesId"]
+    reprocess = {**projection(candidate, MANUAL_IMPORT_FIELDS), "downloadId": download_id,
+                 "seriesId": series_id, "seasonNumber": media["seasonNumber"], "episodeIds": [episode_id]}
+    status, reprocessed = arr.api("manualimport", method="POST", body=[reprocess])
+    rescanned = candidate_for(arr, reprocessed, episode_id, download_id)
+    verify(rescanned["path"] == candidate["path"] and rescanned["seriesId"] == series_id
+           and rescanned["seasonNumber"] == media["seasonNumber"], "reprocessTargetOrPathChanged")
+    verify(set(MANUAL_IMPORT_FIELDS) <= rescanned.keys() and rescanned["quality"] and rescanned["languages"],
+           "reprocessMissingTypedCandidateMetadata")
+    report["preview"] = {"query": query, "candidateCount": 1, "rejectedBeforeReprocess": bool(candidate.get("rejections")),
+                         "reprocessRequest": reprocess, "reprocessStatus": status, "reprocessCount": 1}
+    verify(inventory(output, all_files=True) == before["source"] and sab_job(download_id) == before["client"]
+           and inventory(arr.library, all_files=True) == before["library"]
+           and arr.file_link(episode_id) == arr.file_link(guard["id"]) == 0
+           and {row["id"] for row in arr.history(downloadId=download_id)} == previous_ids,
+           "reprocessChangedIndependentState")
+    report["reprocessUnchanged"] = True
+
+    selected = {**projection(rescanned, MANUAL_IMPORT_FIELDS), "downloadId": download_id, "seriesId": series_id,
+                "episodeIds": [episode_id], "folderName": candidate.get("folderName")}
+    report["operation"] = {"method": "POST", "path": "/api/v3/command", "name": "ManualImport",
+                           "importMode": "copy", "files": [selected]}
+    report["response"] = arr.command_status("ManualImport", importMode="copy", files=[selected])
 
 
 def delete_queue(arr, row, flags, lose_response):
@@ -877,7 +893,7 @@ def run_scenarios(report, scenario):
         arr = Arr(product)
         result["stage"] = "arrSetup"
         terminal_case = case == "replace-terminal"
-        id_only_case = scenario == SONARR_V5_ID_IMPORT
+        id_only_case = scenario in (SONARR_V5_ID_IMPORT, SONARR_V5_MANUAL_COPY)
         language_case = scenario == SONARR_V5_LANGUAGE_PACK
         # Sonarr 5 hides completed downloads from Activity when completed
         # handling is off, including jobs that its checker already blocked.
@@ -901,7 +917,11 @@ def run_scenarios(report, scenario):
                 empty_pack_replacement(arr, targets[0], targets[1], result, adapter=run_go_adapter)
             else:
                 empty_pack_replacement(arr, targets[0], targets[1], result)
-        elif scenario == SONARR_V5_ID_IMPORT:
+        elif scenario == SONARR_V5_MANUAL_COPY:
+            from manual_import_browser import run_packaged_id_only_copy
+            run_packaged_id_only_copy(arr, targets[0], targets[1], result, Path("/lab-tools/rescuarr"), report["sourceSHA"],
+                                      lambda stage: result.update(stage=stage))
+        elif id_only_case:
             id_only_import(arr, targets[0], targets[1], result)
         elif case == "import":
             original_import(arr, targets[0], result)

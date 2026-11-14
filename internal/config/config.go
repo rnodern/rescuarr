@@ -20,18 +20,20 @@ import (
 const DefaultListen = "127.0.0.1:8787"
 
 type Config struct {
-	Listen               string
-	DataDir              string
-	BasePath             string
-	PublicURL            *url.URL
-	TrustedProxies       []netip.Prefix
-	Input                string
-	Output               string
-	ProwlDelivery        bool
-	SonarrConnection     string
-	ManualPackConnection string
-	ManualPackProfile    [32]byte
-	Sources              map[string]string
+	Listen                 string
+	DataDir                string
+	BasePath               string
+	PublicURL              *url.URL
+	TrustedProxies         []netip.Prefix
+	Input                  string
+	Output                 string
+	ProwlDelivery          bool
+	SonarrConnection       string
+	ManualPackConnection   string
+	ManualPackProfile      [32]byte
+	ManualImportConnection string
+	ManualImportProfile    [32]byte
+	Sources                map[string]string
 }
 
 // Parse applies explicit flags over nonempty environment values and platform defaults.
@@ -77,19 +79,14 @@ func Parse(args []string, getenv func(string) string) (Config, error) {
 		return Config{}, errors.New("Prowl delivery must be true or false")
 	}
 	cfg.ProwlDelivery = *prowl == "true"
-	cfg.ManualPackConnection = getenv("RESCUARR_MANUAL_EMPTY_PACK_CONNECTION")
-	profile := getenv("RESCUARR_MANUAL_EMPTY_PACK_PROFILE")
-	sab := getenv("RESCUARR_MANUAL_EMPTY_PACK_SAB_VERSION")
-	if cfg.ManualPackConnection != "" || profile != "" || sab != "" {
-		fingerprint, err := hex.DecodeString(profile)
-		if !validManualConnectionID(cfg.ManualPackConnection) ||
-			err != nil || len(fingerprint) != len(cfg.ManualPackProfile) || sab != "5.1.3" {
-			return Config{}, errors.New("manual empty-pack recovery requires a connection ID, profile SHA-256 and verified SABnzbd 5.1.3")
-		}
-		copy(cfg.ManualPackProfile[:], fingerprint)
-		if cfg.ManualPackProfile == ([32]byte{}) {
-			return Config{}, errors.New("manual empty-pack profile SHA-256 is empty")
-		}
+	var qualificationErr error
+	cfg.ManualPackConnection, cfg.ManualPackProfile, qualificationErr = manualRoutePin(getenv, "RESCUARR_MANUAL_EMPTY_PACK", "empty-pack")
+	if qualificationErr != nil {
+		return Config{}, qualificationErr
+	}
+	cfg.ManualImportConnection, cfg.ManualImportProfile, qualificationErr = manualRoutePin(getenv, "RESCUARR_MANUAL_IMPORT", "import")
+	if qualificationErr != nil {
+		return Config{}, qualificationErr
 	}
 
 	if cfg.DataDir == "" && cfg.Sources["RESCUARR_DATA_DIR"] == "default" {
@@ -146,6 +143,23 @@ func Parse(args []string, getenv func(string) string) (Config, error) {
 		}
 	}
 	return cfg, nil
+}
+
+func manualRoutePin(getenv func(string) string, prefix, route string) (string, [32]byte, error) {
+	connection, digest, sab := getenv(prefix+"_CONNECTION"), getenv(prefix+"_PROFILE"), getenv(prefix+"_SAB_VERSION")
+	var fingerprint [32]byte
+	if connection == "" && digest == "" && sab == "" {
+		return "", fingerprint, nil
+	}
+	decoded, err := hex.DecodeString(digest)
+	if !validManualConnectionID(connection) || err != nil || len(decoded) != len(fingerprint) || sab != "5.1.3" {
+		return "", fingerprint, fmt.Errorf("manual %s recovery requires a connection ID, profile SHA-256 and verified SABnzbd 5.1.3", route)
+	}
+	copy(fingerprint[:], decoded)
+	if fingerprint == ([32]byte{}) {
+		return "", fingerprint, fmt.Errorf("manual %s profile SHA-256 is empty", route)
+	}
+	return connection, fingerprint, nil
 }
 
 func validManualConnectionID(value string) bool {

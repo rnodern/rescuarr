@@ -24,14 +24,17 @@ import (
 
 type ManualEmptyPackQualification func(context.Context, domain.Instance) (*arradapter.EmptyPackAdapter, error)
 
+const manualApprovalWindow = 5 * time.Minute
+
 type ManualReviews struct {
-	local      *store.Store
-	cases      *observeservice.Service
-	preview    *PreviewService
-	transport  http.RoundTripper
-	clock      app.Clock
-	qualified  ManualEmptyPackQualification
-	signingKey [32]byte
+	local           *store.Store
+	cases           *observeservice.Service
+	preview         *PreviewService
+	transport       http.RoundTripper
+	clock           app.Clock
+	qualified       ManualEmptyPackQualification
+	importQualified ManualImportQualification
+	signingKey      [32]byte
 }
 
 var _ app.ManualReviewService = (*ManualReviews)(nil)
@@ -44,9 +47,10 @@ func NewManualReviews(local *store.Store, cases *observeservice.Service, preview
 }
 
 type manualSlot struct {
-	id    domain.CaseID
-	token string
-	state string
+	id     domain.CaseID
+	token  string
+	state  string
+	action string
 }
 
 func (s *ManualReviews) SetManualMode(ctx context.Context, enabled bool, actor domain.ActorID) error {
@@ -72,7 +76,8 @@ func (s *ManualReviews) SetManualMode(ctx context.Context, enabled bool, actor d
 		if _, err := tx.ExecContext(ctx, `UPDATE manual_reviews SET token = ?, state = 'pending',
 			search_ids = '[]', scope_hash = '', updated_at = ?
 			WHERE state IN ('pending', 'approved')
-			AND NOT EXISTS (SELECT 1 FROM empty_pack_recovery AS r WHERE r.case_id = manual_reviews.case_id)`,
+			AND NOT EXISTS (SELECT 1 FROM empty_pack_recovery AS r WHERE r.case_id = manual_reviews.case_id)
+			AND NOT EXISTS (SELECT 1 FROM manual_import_attempts AS r WHERE r.case_id = manual_reviews.case_id)`,
 			store.NewID(), emptyPackStamp(s.clock.Now())); err != nil {
 			return err
 		}
@@ -100,8 +105,8 @@ func (s *ManualReviews) activeSlot(ctx context.Context) (manualSlot, error) {
 		if mode != domain.ModeAssist {
 			return app.ErrHeld
 		}
-		err := tx.QueryRowContext(ctx, `SELECT case_id, token, state FROM manual_reviews WHERE state IN ('pending', 'approved')`).
-			Scan(&slot.id, &slot.token, &slot.state)
+		err := tx.QueryRowContext(ctx, `SELECT case_id, token, state, action FROM manual_reviews WHERE state IN ('pending', 'approved')`).
+			Scan(&slot.id, &slot.token, &slot.state, &slot.action)
 		if !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
@@ -141,6 +146,9 @@ func (s *ManualReviews) ManualReview(ctx context.Context) (app.ManualReviewView,
 	}
 	view := app.ManualReviewView{Case: &item, Token: slot.token, Processing: slot.state == "approved"}
 	if view.Processing {
+		if slot.action == "import" {
+			return s.manualImportProcessing(ctx, slot, view)
+		}
 		var stage string
 		err := s.local.Read(ctx, func(tx *sql.Tx) error {
 			return tx.QueryRowContext(ctx, `SELECT stage FROM empty_pack_recovery WHERE manual_token = ?`, slot.token).Scan(&stage)
@@ -163,16 +171,7 @@ func (s *ManualReviews) ManualReview(ctx context.Context) (app.ManualReviewView,
 		return view, nil
 	}
 	if item.Reason != domain.ReasonCode(observe.FindingNoEligibleFiles) {
-		view.Diagnosis = "Sonarr identified the series from the grab history. The episode needs review before import."
-		preview, err := s.preview.ImportPreview(ctx, item.ID, item.Revision)
-		if err == nil || errors.Is(err, app.ErrHeld) {
-			view.Preview = preview
-		}
-		if view.Preview.Episode == nil && item.Display.EpisodeCheck != nil {
-			view.Preview.Episode = &item.Display.EpisodeCheck.EpisodeNameReview
-		}
-		view.Hold = "Import approval is unavailable in this build. Decline to move on."
-		return view, nil
+		return s.manualImportView(ctx, slot, view), nil
 	}
 	view.Diagnosis = "Sonarr found no eligible files to import from this download."
 	plan, err := prepareManualEmptyPack(ctx, s.cases, s.local, s.clock, s.transport, item.ID, item.Revision)
@@ -194,9 +193,7 @@ func (s *ManualReviews) ManualReview(ctx context.Context) (app.ManualReviewView,
 		view.Hold = "The replacement plan is available for review. Approval requires an unpaused, verified Sonarr connection."
 		return view, nil
 	}
-	expires := s.clock.Now().Add(5 * time.Minute).Unix()
-	until := strconv.FormatInt(expires, 10)
-	view.ApprovalToken = slot.token + "." + until + "." + s.sign(slot.token, until, plan.scopeHash)
+	view.ApprovalToken = s.approvalToken(slot.token, plan.scopeHash)
 	view.CanApprove = true
 	return view, nil
 }
@@ -206,15 +203,8 @@ func (s *ManualReviews) validateApproval(ctx context.Context, item domain.Case, 
 		plan.preview.UnclearCount != 0 || len(item.Incidents) != 0 {
 		return app.ErrHeld
 	}
-	var paused, reconcile bool
-	err := s.local.Read(ctx, func(tx *sql.Tx) error {
-		return tx.QueryRowContext(ctx, `SELECT paused, reconcile_required FROM action_pause JOIN app_state USING (singleton)`).Scan(&paused, &reconcile)
-	})
-	if err != nil {
+	if err := s.manualApprovalAllowed(ctx); err != nil {
 		return err
-	}
-	if paused || reconcile {
-		return app.ErrHeld
 	}
 	instance, err := s.cases.RecoveryInstance(ctx, plan.checkpoint.Key.Job.Instance, plan.checkpoint.ConnectionRevision)
 	if err != nil {
@@ -227,6 +217,23 @@ func (s *ManualReviews) validateApproval(ctx context.Context, item domain.Case, 
 	return adapter.Preflight(ctx, emptyPackScope(plan.checkpoint))
 }
 
+func (s *ManualReviews) manualApprovalAllowed(ctx context.Context) error {
+	var allowed bool
+	err := s.local.Read(ctx, func(tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx, `SELECT mode = 'assist' AND NOT paused AND NOT reconcile_required
+			FROM action_pause JOIN app_state USING (singleton)`).Scan(&allowed)
+	})
+	if err == nil && !allowed {
+		return app.ErrHeld
+	}
+	return err
+}
+
+func (s *ManualReviews) approvalToken(slot, scope string) string {
+	until := strconv.FormatInt(s.clock.Now().Add(manualApprovalWindow).Unix(), 10)
+	return slot + "." + until + "." + s.sign(slot, until, scope)
+}
+
 func (s *ManualReviews) sign(slot, until, scope string) string {
 	mac := hmac.New(sha256.New, s.signingKey[:])
 	mac.Write([]byte(slot + "." + until + "." + scope))
@@ -236,6 +243,12 @@ func (s *ManualReviews) sign(slot, until, scope string) string {
 func (s *ManualReviews) DecideManualReview(ctx context.Context, choice app.ManualDecision) error {
 	if len(choice.Token) > 160 || !emptyPackToken(string(choice.Actor), 128) {
 		return app.ErrConflict
+	}
+	if choice.CloseUncertain {
+		if choice.Approve {
+			return app.ErrConflict
+		}
+		return s.closeUncertainManualImport(ctx, choice)
 	}
 	token, until, sig := choice.Token, "", ""
 	if choice.Approve {
@@ -261,7 +274,7 @@ func (s *ManualReviews) DecideManualReview(ctx context.Context, choice app.Manua
 		return err
 	}
 	state, kind := "declined", domain.EventKind("recovery_manual_declined")
-	hash, search := "", "[]"
+	hash, search, action := "", "[]", "empty_pack"
 	var revision domain.Revision
 	if choice.Approve {
 		detail, err := s.cases.Case(ctx, id)
@@ -269,27 +282,39 @@ func (s *ManualReviews) DecideManualReview(ctx context.Context, choice app.Manua
 			return err
 		}
 		revision = detail.Case.Revision
-		plan, err := prepareManualEmptyPack(ctx, s.cases, s.local, s.clock, s.transport, id, revision)
-		if err != nil || !hmac.Equal([]byte(sig), []byte(s.sign(token, until, plan.scopeHash))) {
-			return app.ErrConflict
+		if detail.Case.Reason == domain.ReasonCode(observe.FindingSeriesIDOnly) {
+			plan, err := prepareManualImport(ctx, s.cases, s.local, s.clock, s.transport, id, revision)
+			if err != nil || !hmac.Equal([]byte(sig), []byte(s.sign(token, until, plan.scopeHash))) {
+				return app.ErrConflict
+			}
+			if _, err := s.qualifyImportApproval(ctx, plan); err != nil {
+				return app.ErrHeld
+			}
+			hash, action = plan.scopeHash, "import"
+		} else {
+			plan, err := prepareManualEmptyPack(ctx, s.cases, s.local, s.clock, s.transport, id, revision)
+			if err != nil || !hmac.Equal([]byte(sig), []byte(s.sign(token, until, plan.scopeHash))) {
+				return app.ErrConflict
+			}
+			if err := s.validateApproval(ctx, detail.Case, plan); err != nil {
+				return app.ErrHeld
+			}
+			encoded, err := json.Marshal(append([]int64{}, plan.searchIDs...))
+			if err != nil {
+				return err
+			}
+			hash, search = plan.scopeHash, string(encoded)
 		}
-		if err := s.validateApproval(ctx, detail.Case, plan); err != nil {
-			return app.ErrHeld
-		}
-		encoded, err := json.Marshal(append([]int64{}, plan.searchIDs...))
-		if err != nil {
-			return err
-		}
-		hash, search, state, kind = plan.scopeHash, string(encoded), "approved", "recovery_manual_approved"
+		state, kind = "approved", "recovery_manual_approved"
 	}
 	now := s.clock.Now()
 	return s.local.Write(ctx, func(tx *sql.Tx) error {
-		result, err := tx.ExecContext(ctx, `UPDATE manual_reviews SET state = ?, scope_hash = ?, search_ids = ?,
+		result, err := tx.ExecContext(ctx, `UPDATE manual_reviews SET state = ?, scope_hash = ?, search_ids = ?, action = ?,
 			case_revision = CASE WHEN ? > 0 THEN ? ELSE case_revision END, actor = ?, updated_at = ?
 			WHERE case_id = ? AND token = ? AND state = 'pending' AND (SELECT mode FROM app_state) = 'assist'
 			AND (? = 0 OR (EXISTS (SELECT 1 FROM observe_cases WHERE id = ? AND revision = ? AND state = 'held')
 				AND (SELECT NOT reconcile_required FROM app_state) AND (SELECT NOT paused FROM action_pause)))`,
-			state, hash, search, revision, revision, choice.Actor, emptyPackStamp(now), id, token, revision, id, revision)
+			state, hash, search, action, revision, revision, choice.Actor, emptyPackStamp(now), id, token, revision, id, revision)
 		if err != nil {
 			return err
 		}
@@ -310,8 +335,9 @@ func resetManualReview(ctx context.Context, local *store.Store, id domain.CaseID
 	return local.Write(ctx, func(tx *sql.Tx) error {
 		result, err := tx.ExecContext(ctx, `UPDATE manual_reviews SET token = ?, state = 'pending', search_ids = '[]', scope_hash = '', updated_at = ?
 			WHERE case_id = ? AND token = ? AND state = 'approved'
-			AND NOT EXISTS (SELECT 1 FROM empty_pack_recovery WHERE case_id = ?)`,
-			store.NewID(), emptyPackStamp(now), id, token, id)
+			AND NOT EXISTS (SELECT 1 FROM empty_pack_recovery WHERE case_id = ?)
+			AND NOT EXISTS (SELECT 1 FROM manual_import_attempts WHERE case_id = ?)`,
+			store.NewID(), emptyPackStamp(now), id, token, id, id)
 		if err != nil {
 			return err
 		}

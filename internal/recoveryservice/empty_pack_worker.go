@@ -54,7 +54,7 @@ func RunEmptyPackRecovery(ctx context.Context, cases *observeservice.Service, lo
 		return qualified(instance)
 	})
 	worker.instance = instance
-	return runEmptyPackPasses(ctx, worker.step, onError)
+	return runRecoveryPasses(ctx, worker.step, onError)
 }
 
 // RunManualEmptyPackRecovery resumes only the pack explicitly approved by the
@@ -64,7 +64,7 @@ func RunManualEmptyPackRecovery(ctx context.Context, cases *observeservice.Servi
 	if cases == nil || local == nil || clock == nil || transport == nil || qualified == nil {
 		return arradapter.ErrQualification
 	}
-	return runEmptyPackPasses(ctx, func(pass context.Context) error {
+	return runRecoveryPasses(ctx, func(pass context.Context) error {
 		worker := newEmptyPackWorker(pass, cases, local, clock, transport, qualified)
 		return worker.manualStep(pass, transport)
 	}, onError)
@@ -92,7 +92,7 @@ func newEmptyPackWorker(ctx context.Context, cases *observeservice.Service, loca
 	}
 }
 
-func runEmptyPackPasses(ctx context.Context, step func(context.Context) error, onError func(error)) error {
+func runRecoveryPasses(ctx context.Context, step func(context.Context) error, onError func(error)) error {
 	timer := time.NewTimer(0)
 	defer timer.Stop()
 	for {
@@ -264,7 +264,8 @@ func (w *emptyPackWorker) manualStep(ctx context.Context, transport http.RoundTr
 		return tx.QueryRowContext(ctx, `SELECT m.case_id, m.case_revision, m.token, m.scope_hash, m.search_ids
 			FROM manual_reviews AS m
 			JOIN app_state AS s ON s.singleton = 1 JOIN action_pause AS p ON p.singleton = 1
-			WHERE m.state = 'approved' AND s.mode = 'assist' AND s.reconcile_required = 0 AND p.paused = 0`).
+			WHERE m.state = 'approved' AND m.action = 'empty_pack' AND s.mode = 'assist'
+			AND s.reconcile_required = 0 AND p.paused = 0`).
 			Scan(&id, &revision, &token, &scopeHash, &searchJSON)
 	})
 	if errors.Is(err, sql.ErrNoRows) {

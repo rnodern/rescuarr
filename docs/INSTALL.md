@@ -86,11 +86,20 @@ The example publishes only on `127.0.0.1`. The default browser address uses `RES
 
 ## Manual Review
 
-Open Overview and choose **Enter Manual mode**. Manual Review shows one download until you approve or decline. A decline is recorded in Activity. The first approval workflow covers completed Sonarr season packs with no eligible files. It removes the pack from Sonarr, blocklists the release and searches the episodes shown in the review that are still missing. It retains the SABnzbd job. Import assessments can be reviewed while import execution is still being qualified.
+Open Overview and choose **Switch to Manual**. Manual Review shows one download until you approve or decline. A decline is recorded in Activity.
 
-Approval requires a locally verified connection. The tested setup uses Sonarr 5.0.0.2941 develop with SABnzbd 5.1.3, completed download handling enabled, both automatic redownload settings enabled, and both download client removal settings disabled. The lab used storage directly visible to Sonarr without remote path mappings.
+For a completed season pack with no eligible files, approval removes it from Sonarr, blocklists the exact release and searches only the reviewed episodes that are still missing. It retains the SABnzbd job.
 
-To inspect a connection, check its queue in Rescuarr, stop Rescuarr, and run `rescuarr check-empty-pack --data-dir /path/to/data --sonarr-connection ID`. For a verified installation, configure the service with `RESCUARR_MANUAL_EMPTY_PACK_CONNECTION` set to that ID, `RESCUARR_MANUAL_EMPTY_PACK_PROFILE` set to the reported SHA-256, and `RESCUARR_MANUAL_EMPTY_PACK_SAB_VERSION=5.1.3` after checking SABnzbd on its host. The profile is compared again before dispatch. You can leave Manual mode from Overview. An in-flight action retains its journal record.
+For a completed Usenet download that Sonarr matched by series ID, Manual Review can approve one exact video file for one monitored episode that still needs its first library file. Copy import preserves the source. When the audio decision is **Review**, confirm the video and audio before approving. Activity records the result after Rescuarr checks the Sonarr command, the new episode file and the retained source.
+
+Each approval route requires a locally verified connection. Check its queue in Rescuarr, stop the app, and run the diagnostic for the route you want to enable. Supply the same data directory that Rescuarr normally uses.
+
+| Route | Diagnostic | Environment variable prefix |
+| --- | --- | --- |
+| Empty season pack | `rescuarr check-empty-pack --data-dir /path/to/data --sonarr-connection ID` | `RESCUARR_MANUAL_EMPTY_PACK` |
+| Sonarr Copy import | `rescuarr check-manual-import --data-dir /path/to/data --sonarr-connection ID` | `RESCUARR_MANUAL_IMPORT` |
+
+For a verified route, add `_CONNECTION` with the connection ID, `_PROFILE` with the reported SHA-256, and `_SAB_VERSION` with the version verified on the SABnzbd host to the route's prefix. The tested versions are Sonarr 5.0.0.2941 develop and SABnzbd 5.1.3. The diagnostic checks route-specific Sonarr settings, including path mappings and download cleanup. Rescuarr checks the profile again before dispatch. You can leave Manual mode from Overview. An in-flight action retains its journal record.
 
 ## Reverse proxy
 

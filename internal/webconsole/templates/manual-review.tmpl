@@ -21,7 +21,7 @@
     <h2>Assessment</h2>
     {{$folder := $.Body.Folder}}
     {{with $.Body.Episode}}
-    {{if .Matched}}<p>The folder and filename match the series and episode number.{{if and .EpisodeTitle (not .TitleInNames)}} The names omit the episode title.{{end}}{{if .ArrRejection}} Sonarr still reports an import rejection.{{end}}</p>
+    {{if .Matched}}<p>The folder and filename match the series and episode number.{{if and .EpisodeTitle (not .TitleInNames)}} The names omit the episode title.{{end}}{{if .ArrRejection}} {{if $.Body.ImportAction}}Sonarr reported a rejection during the initial import check.{{else}}Sonarr still reports an import rejection.{{end}}{{end}}</p>
     {{else if .Reason}}<p>{{.Reason}}</p>{{end}}
     <dl>
       {{if .Folder}}<dt>Download folder</dt><dd>{{.Folder}}</dd>
@@ -50,12 +50,31 @@
     {{else}}<li>Finish without a search.</li>{{end}}
   </ol>
   {{end}}
+  {{else if $.Body.ImportAction}}
+    {{if and $.Body.Episode $.Body.Episode.Filename}}
+    <p>Copy <strong>{{$.Body.Episode.Filename}}</strong> to the library for <strong>{{caseTitle $.Body.Case}}{{if $.Body.Episode.EpisodeTitle}} · {{$.Body.Episode.EpisodeTitle}}{{end}}</strong>.</p>
+    {{else}}<p>Copy the approved video file to the library for this episode.</p>{{end}}
+    <p>Keep the source file and the download client job.</p>
+    {{if and $.Body.CanApprove $.Body.ConfirmCopyAudio (not $.Body.Processing)}}
+    <p class="notice" id="confirm-copy-audio">Rescuarr could not confirm the audio tracks. Visually check the episode and listen to the audio in the selected file before approving.</p>
+    {{end}}
   {{else if and $.Body.Episode $.Body.Episode.Matched}}
     {{if and $.Body.Preview.Audio (eq (index $.Body.Preview.Audio 0).Decision "accept")}}<p>Import the matching file into the library.</p>
     {{else if not $.Body.Preview.Audio}}<p>Audio tracks could not be verified.</p>{{end}}
   {{else if not $.Body.Processing}}<p>Waiting for enough evidence to propose an action.</p>{{end}}
   {{if $.Body.Hold}}<p class="notice">{{$.Body.Hold}}</p>{{end}}
-  {{if $.Body.Processing}}<p class="notice" data-manual-processing>Rescuarr is checking the approved action.{{if $.HasRecoveryActivity}} See <a href="{{$.Base}}/activity">Activity</a> for updates.{{end}}</p>
+  {{if $.Body.Processing}}
+  {{if and $.Body.CanCloseUncertain $.Body.Token}}
+  <p data-manual-processing="uncertain">Closing this review records an unconfirmed outcome and advances to the next download without retrying the import.</p>
+  <form method="post" action="{{$.Base}}/manual-review" data-approval>
+    <input type="hidden" name="csrf" value="{{$.CSRF}}">
+    <input type="hidden" name="token" value="{{$.Body.Token}}">
+    <input type="hidden" name="decision" value="close_unconfirmed">
+    <button class="button-quiet" type="submit">Close without confirmation</button>
+  </form>
+  {{else}}
+  <p class="notice" data-manual-processing="checking">Rescuarr is checking the approved action.{{if $.HasRecoveryActivity}} See <a href="{{$.Base}}/activity">Activity</a> for updates.{{end}}</p>
+  {{end}}
   <p><a href="{{$.Base}}/manual-review">Refresh review</a></p>
   {{else}}<div class="connection-actions section">
     {{if and $.Body.CanApprove $.Body.ApprovalToken}}
@@ -63,7 +82,9 @@
       <input type="hidden" name="csrf" value="{{$.CSRF}}">
       <input type="hidden" name="token" value="{{$.Body.ApprovalToken}}">
       <input type="hidden" name="decision" value="approve">
-      <button type="submit">Approve</button>
+      {{if $.Body.ConfirmCopyAudio}}<button type="submit" aria-describedby="confirm-copy-audio">I checked the video and audio. Approve</button>
+      {{else if $.Body.ImportAction}}<button type="submit">Approve Copy import</button>
+      {{else}}<button type="submit">Approve</button>{{end}}
     </form>
     {{end}}
     {{if $.Body.Token}}

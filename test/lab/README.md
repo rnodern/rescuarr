@@ -33,6 +33,12 @@ An episode search grabs a synthetic release with an abbreviated series title and
 
 The evidence records the imported file ID, contents, matching history and disappearance of the exact queue row. It independently compares the original folder inventory and bytes, downloader state and the neighbouring episode before and after. The scenario exercises the upstream path in the lab. Runtime approval and effects in the Rescuarr application require their own evidence.
 
+### Packaged Sonarr 5 Manual Copy
+
+On Linux amd64, run `test/lab/run.sh /tmp/rescuarr-sonarr-v5-manual-copy.json sonarr/v5-manual-copy` with the repository's Go toolchain and Python 3.12 or newer. The workflow can run the same scenario on the PR head or via dispatch and uploads `sonarr-v5-manual-copy-evidence` (the dispatch job uses `upstream-lab-evidence`). The Windows workflow runs the same fixture against its portable Sonarr and SABnzbd binaries and uploads `sonarr-windows-v5-manual-copy-evidence`.
+
+The runner starts the packaged executable and uses authenticated owner forms in two disposable app installations on the same synthetic queue. A loopback request recorder checks that decline and waiting for approval send no upstream writes. After approval the runner checks the exact metadata reprocess and single native Copy request, then independently verifies the linked episode file, matching history, distinct filesystem identity, identical file bytes, retained download, unchanged neighbouring episode, and the app's Activity result. The fixture uses local source and library paths and the wizard explicitly accepts unavailable download audio evidence.
+
 ### Sonarr 5 completed season pack with no eligible files
 
 Run `test/lab/run.sh /tmp/rescuarr-sonarr-v5-empty-pack.json sonarr/v5-empty-pack`, or dispatch the workflow with `-f scenario=sonarr/v5-empty-pack` on a ref containing this scenario. The PR job also runs on the exact PR head and uploads `sonarr-v5-empty-pack-evidence`.

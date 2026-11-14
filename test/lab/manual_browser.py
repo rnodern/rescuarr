@@ -1,4 +1,4 @@
-"""Drive the packaged owner console against the disposable Windows Sonarr lab."""
+"""Drive the packaged owner console against disposable Sonarr."""
 
 import json
 import os
@@ -117,6 +117,13 @@ class OwnerBrowser:
         self.post(REVIEW + "/mode", REVIEW, fields)
         verify('href="/manual-review"' in self.get("/"), "manualNavMissing")
 
+    def allow_unknown_audio(self):
+        path = "/settings/language"
+        fields = self.form(path + "?wizard=1", path)
+        fields.update(preferred_language="en", foreign_audio="original",
+                      unknown_audio="accept", prefer_single_audio="true")
+        self.post(path, path + "?saved=1", fields)
+
     def review(self, title, folder):
         def checked():
             page = self.get(REVIEW)
@@ -138,8 +145,8 @@ class OwnerBrowser:
 
         return poll(checked, "manualBrowserReviewDeadline", timeout=60)
 
-    def activity(self, marker):
-        return poll(lambda: marker in self.get("/activity"), "manualBrowserActivityDeadline", timeout=45)
+    def activity(self, marker, *, timeout=45):
+        return poll(lambda: marker in self.get("/activity"), "manualBrowserActivityDeadline", timeout=timeout)
 
 
 class PackagedManualLab:
@@ -166,6 +173,7 @@ class PackagedManualLab:
                      "selected Sonarr connection's API key": "localCredential",
                      "Sonarr system status:": "systemStatus",
                      "Sonarr download client:": "downloadClient",
+                     "Sonarr media management:": "mediaManagement",
                      "Sonarr remote path mappings:": "remotePathMappings",
                      "one enabled SABnzbd client": "upstreamProfile",
                      "data directory is already in use": "localLock"}
@@ -186,18 +194,21 @@ class PackagedManualLab:
         self.await_ready(proc, ready, "manualBrowser")
         return proc, browser
 
-    def setup_manual_review(self, arr, directory):
+    def setup_manual_review(self, arr, directory, *, operation="empty-pack", allow_unknown=False):
         proc, browser = self.start(directory)
         browser.setup(directory)
         connection_id = browser.connect(arr)
+        if allow_unknown:
+            browser.allow_unknown_audio()
         self.stop(proc)
-        profile = self.command("check-empty-pack", "--data-dir", directory, "--sonarr-connection", connection_id)
+        profile = self.command("check-" + operation, "--data-dir", directory, "--sonarr-connection", connection_id)
         found = re.search(r"^Profile SHA-256: ([a-f0-9]{64})$", profile, flags=re.MULTILINE)
         verify(found is not None, "manualBrowserProfileStampMissing")
+        prefix = "RESCUARR_" + ("MANUAL_" if operation == "empty-pack" else "") + operation.upper().replace("-", "_")
         settings = {
-            "RESCUARR_MANUAL_EMPTY_PACK_CONNECTION": connection_id,
-            "RESCUARR_MANUAL_EMPTY_PACK_PROFILE": found[1],
-            "RESCUARR_MANUAL_EMPTY_PACK_SAB_VERSION": SAB_VERSION,
+            prefix + "_CONNECTION": connection_id,
+            prefix + "_PROFILE": found[1],
+            prefix + "_SAB_VERSION": SAB_VERSION,
         }
         proc, browser = self.start(directory, settings)
         browser.login()
@@ -258,3 +269,26 @@ class PackagedManualLab:
                                    "noChangesBeforeApproval": True, "searchRecordedInActivity": True,
                                    "searchCommandId": records[0][2]}
         return records[0][2]
+
+
+def start_process(stack, command, cwd, env=None):
+    proc = subprocess.Popen(command, cwd=cwd, stdin=subprocess.DEVNULL,
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
+    stack.callback(stop_process, proc)
+    return proc
+
+
+def stop_process(proc):
+    if proc.poll() is None:
+        proc.kill()
+        proc.wait(timeout=10)
+
+
+def require_ready(proc, read, stage):
+    def observe():
+        verify(proc.poll() is None, f"{stage}Exited")
+        try:
+            return read()
+        except (OSError, ValueError, KeyError):
+            return None
+    return poll(observe, f"{stage}Deadline", timeout=120)

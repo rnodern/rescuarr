@@ -176,3 +176,56 @@ func TestSonarrV5ReprocessHasNoQualificationFallback(t *testing.T) {
 		t.Fatalf("expected qualification requirement, got %v", err)
 	}
 }
+
+func TestSonarrV5InspectionReadsExactWindowsSource(t *testing.T) {
+	cfg, job := sample(domain.ProductSonarr, 41)
+	cfg.Instance.UpstreamVersion, cfg.Instance.ConnectionRevision = arrwire.SonarrIDOnlyImportVersion, 7
+	job.Ref.Generation, job.PathStyle = 1, WindowsPath
+	job.LibraryRoots = []string{`Z:\library`}
+	const folder = `C:\downloads\` + v5FixtureFolder
+	const file = folder + `\` + v5FixtureFolder + ".mkv"
+	job.OutputPath = folder
+	row := &job.Queue.Records[0]
+	row.ClientLabel, row.Protocol, row.OutputPath = "SAB fixture", domain.ProtocolUsenet, job.OutputPath
+	row.TrackedState, row.Findings = "importBlocked", []observe.QueueFinding{observe.FindingSeriesIDOnly}
+	row.MediaTitle, row.Episode = "Fixture Series", "S01E13"
+	size, calls := 4096, 0
+	client, err := New(cfg, fixtureTransport(func(r *http.Request) (*http.Response, error) {
+		calls++
+		if r.Method != http.MethodGet || r.URL.Path != "/prefix/api/v3/manualimport" ||
+			r.URL.Query().Get("downloadId") != job.DownloadID || r.URL.Query().Get("filterExistingFiles") != "false" {
+			t.Fatalf("unexpected read %s %s", r.Method, r.URL.Path)
+		}
+		name := fmt.Sprintf("%q", v5FixtureFolder)
+		if job.OutputPath == file {
+			name = "null"
+		}
+		return response(http.StatusOK, "application/json", fmt.Sprintf(
+			`[{"path":%q,"downloadId":%q,"folderName":%s,"size":%d,"series":null,"rejections":[{"type":"permanent","reason":"Unknown episode"}],%s}]`,
+			file, job.DownloadID, name, size, v5FixtureMetadata)), nil
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	read := func() SonarrV5Source {
+		t.Helper()
+		result, err := client.InspectSonarrV5Import(t.Context(), job, fixtureTime)
+		if err != nil || !result.Episode.Matched || result.Episode.Folder != v5FixtureFolder ||
+			result.Source.Path != file || result.Source.OutputPath != job.OutputPath || result.Source.Size != int64(size) ||
+			result.Source.QueueID != row.ID || result.Source.SelectionDigest == [32]byte{} ||
+			len(result.Languages) != 1 || result.Languages[0].Name != "English" {
+			t.Fatalf("inspection %v with %+v", err, result.Episode)
+		}
+		return result.Source
+	}
+	folderSource := read()
+	job.OutputPath, row.OutputPath = file, file
+	direct := read()
+	if direct.SelectionDigest == folderSource.SelectionDigest {
+		t.Fatal("changed queue path did not invalidate the approval")
+	}
+	size++
+	if changed := read(); changed.SelectionDigest == direct.SelectionDigest || calls != 3 {
+		t.Fatal("changed file size did not invalidate the approval")
+	}
+}

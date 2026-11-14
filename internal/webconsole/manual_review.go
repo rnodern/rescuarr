@@ -13,7 +13,8 @@ import (
 
 type manualReviewPage struct {
 	app.ManualReviewView
-	Episode *domain.EpisodeNameReview
+	Episode          *domain.EpisodeNameReview
+	ConfirmCopyAudio bool
 }
 
 func (c console) manualReview(w http.ResponseWriter, r *http.Request) {
@@ -45,6 +46,15 @@ func (c console) manualReview(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	view.Folder = manualBaseName(view.Folder)
+	if view.ImportAction && view.Case != nil {
+		if view.CanApprove && (view.Preview.Episode == nil || view.Episode.Filename == "") {
+			view.CanApprove = false
+			view.Hold = "Open the review again so Rescuarr can identify the selected file."
+		}
+		for _, audio := range view.Preview.Audio {
+			view.ConfirmCopyAudio = view.ConfirmCopyAudio || audio.Decision == domain.AudioReview
+		}
+	}
 	c.render(w, r, http.StatusOK, "manual-review", page{Title: "Manual Review", Active: "manual-review", Status: status, Body: view})
 }
 
@@ -89,7 +99,7 @@ func (c console) decideManualReview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	decision, token := r.PostForm.Get("decision"), r.PostForm.Get("token")
-	if (decision != "approve" && decision != "decline") || token == "" || len(token) > 1024 {
+	if (decision != "approve" && decision != "decline" && decision != "close_unconfirmed") || token == "" || len(token) > 1024 {
 		c.errorPage(w, r, http.StatusBadRequest, "manual-review", "Invalid review decision", "Open Manual Review and try again.")
 		return
 	}
@@ -103,7 +113,7 @@ func (c console) decideManualReview(w http.ResponseWriter, r *http.Request) {
 	}
 	session := currentSession(r)
 	err := c.ManualReview.DecideManualReview(r.Context(), app.ManualDecision{
-		Token: token, Approve: decision == "approve", Actor: session.Actor,
+		Token: token, Approve: decision == "approve", CloseUncertain: decision == "close_unconfirmed", Actor: session.Actor,
 	})
 	if err != nil {
 		c.manualReviewError(w, r, err)
