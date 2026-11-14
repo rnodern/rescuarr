@@ -100,7 +100,9 @@ type Store interface {
 	BeginReconcile(context.Context, domain.AttemptID, time.Time) (Reconciliation, error)
 	// RecordOutcome stores effect evidence and any outbox entry atomically.
 	// An unresolved effect retains its relevant hold and never requeues dispatch.
-	RecordOutcome(context.Context, Reconciliation, domain.Outcome) error
+	// The returned outcome is the committed aggregate, including prior evidence
+	// and conflicts, which may differ from this reconciliation's observation.
+	RecordOutcome(context.Context, Reconciliation, domain.Outcome) (domain.Outcome, error)
 }
 
 type Executor struct {
@@ -223,10 +225,14 @@ func (e *Executor) Reconcile(ctx context.Context, attemptID domain.AttemptID) (d
 	out := normaliseOutcome(lease.Attempt, observed, e.clock.Now())
 	journalCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), journalTimeout)
 	defer cancel()
-	if err := e.store.RecordOutcome(journalCtx, lease, out); err != nil {
+	committed, err := e.store.RecordOutcome(journalCtx, lease, out)
+	if err != nil {
 		return domain.Outcome{}, e.checkStore(err)
 	}
-	return out, nil
+	if committed.AttemptID != attemptID || committed.Verification == "" {
+		return domain.Outcome{}, e.checkStore(ErrJournal)
+	}
+	return committed, nil
 }
 
 func (e *Executor) cancelReserved(ctx context.Context, reservation Reservation, reason domain.ReasonCode) error {

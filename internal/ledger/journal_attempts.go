@@ -200,11 +200,12 @@ func (j *Journal) BeginReconcile(ctx context.Context, id domain.AttemptID, now t
 	return lease, nil
 }
 
-func (j *Journal) RecordOutcome(ctx context.Context, lease Reconciliation, outcome domain.Outcome) error {
+func (j *Journal) RecordOutcome(ctx context.Context, lease Reconciliation, outcome domain.Outcome) (domain.Outcome, error) {
 	if outcome.AttemptID != lease.Attempt.ID || outcome.ObservedAt.IsZero() {
-		return ErrInvalid
+		return domain.Outcome{}, ErrInvalid
 	}
-	return j.local.Write(ctx, func(tx *sql.Tx) error {
+	var committed domain.Outcome
+	err := j.local.Write(ctx, func(tx *sql.Tx) error {
 		row, err := intentForAttempt(ctx, tx, outcome.AttemptID)
 		if err != nil {
 			return err
@@ -254,8 +255,16 @@ func (j *Journal) RecordOutcome(ctx context.Context, lease Reconciliation, outco
 			}
 		}
 		slices.Sort(evidence)
-		return actionEvent(ctx, tx, row.intent, "action_readback_recorded", reason, current.ObservedAt, slices.Compact(evidence)...)
+		if err := actionEvent(ctx, tx, row.intent, "action_readback_recorded", reason, current.ObservedAt, slices.Compact(evidence)...); err != nil {
+			return err
+		}
+		committed = current
+		return nil
 	})
+	if err != nil {
+		return domain.Outcome{}, err
+	}
+	return committed, nil
 }
 
 func mergeReadback(attempt journalAttempt, current domain.Outcome) (domain.Outcome, bool) {

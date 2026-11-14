@@ -169,7 +169,7 @@ func TestSQLiteSendMarkerAndPauseSurviveReopen(t *testing.T) {
 	if err := j.RecordNotSent(t.Context(), send, "late_sender", at); !errors.Is(err, ErrConflict) {
 		t.Fatalf("old send fence cleared its successor: %v", err)
 	}
-	if err := j.RecordOutcome(t.Context(), reconcile, verifiedReadback(send, at)); err != nil {
+	if _, err := j.RecordOutcome(t.Context(), reconcile, verifiedReadback(send, at)); err != nil {
 		t.Fatal(err)
 	}
 	second := input
@@ -257,7 +257,7 @@ func TestSQLiteEffectProofPreservedAcrossReadbackFailure(t *testing.T) {
 		case 2:
 			outcome.Effects = outcome.Effects[1:]
 		}
-		if err := j.RecordOutcome(t.Context(), read, outcome); err != nil {
+		if _, err := j.RecordOutcome(t.Context(), read, outcome); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -265,6 +265,75 @@ func TestSQLiteEffectProofPreservedAcrossReadbackFailure(t *testing.T) {
 		t.Fatalf("separately verified effects did not complete after transient readback failures: %v", err)
 	}
 	assertActionAudit(t, local, "action_readback_recorded", 3)
+}
+
+func TestSQLiteExecutorReturnsCommittedReadback(t *testing.T) {
+	for _, contradiction := range []bool{false, true} {
+		name := "retained evidence"
+		if contradiction {
+			name = "contradiction"
+		}
+		t.Run(name, func(t *testing.T) {
+			local, j := openJournal(t, filepath.Join(t.TempDir(), "state"), fixtureAuthorize)
+			setFixtureMode(t, local)
+			intent := authorisedFixture(t, j, fixtureApproval(), fixtureTime)
+			_, send := beginFixture(t, j, intent)
+			if err := j.RecordDispatch(t.Context(), send, domain.Acknowledgement{State: domain.DispatchUncertain}, fixtureTime); err != nil {
+				t.Fatal(err)
+			}
+			clock := &advancingClock{time: fixtureTime.Add(time.Second)}
+			probes := 0
+			adapter := fixtureAdapter{Read: func(_ context.Context, attempt domain.Attempt) (domain.Outcome, error) {
+				probes++
+				outcome := verifiedReadback(send, clock.Now())
+				switch {
+				case probes == 1:
+					outcome.Effects = outcome.Effects[:1]
+					if contradiction {
+						outcome.Effects[0].Verification = domain.VerificationNoEffect
+					}
+				case !contradiction:
+					outcome.Effects = outcome.Effects[1:]
+				}
+				return outcome, nil
+			}}
+			executor, err := NewExecutor(j, adapter, gateFunc(freshFacts), clock)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := executor.Reconcile(t.Context(), send.Attempt.ID); err != nil {
+				t.Fatal(err)
+			}
+			clock.time = clock.time.Add(time.Second)
+			outcome, err := executor.Reconcile(t.Context(), send.Attempt.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := domain.VerificationEffect
+			if contradiction {
+				want = domain.VerificationPartial
+			}
+			if outcome.Verification != want {
+				t.Fatalf("executor reported latest probe instead of the committed %s outcome: %+v", want, outcome)
+			}
+			if contradiction && outcome.Effects[0].Verification != domain.VerificationNoEffect {
+				t.Fatalf("executor reported a contradicted effect as verified: %+v", outcome.Effects)
+			}
+			if err := local.Read(t.Context(), func(tx *sql.Tx) error {
+				var stored string
+				if err := tx.QueryRowContext(t.Context(), "SELECT outcome FROM action_attempts WHERE id = ?", send.Attempt.ID).Scan(&stored); err != nil {
+					return err
+				}
+				canonical, err := marshalJournal(outcome)
+				if err == nil && canonical != stored {
+					t.Fatalf("executor returned %s, journal committed %s", canonical, stored)
+				}
+				return err
+			}); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
 }
 
 func TestSQLiteAuditFailureRollsBackSendingMarker(t *testing.T) {
@@ -351,7 +420,7 @@ func TestSQLiteReservationBudgetPersistsAndUnsentRefunds(t *testing.T) {
 		for i := range outcome.Effects {
 			outcome.Effects[i].Verification = domain.VerificationNoEffect
 		}
-		if err := j.RecordOutcome(t.Context(), read, outcome); err != nil {
+		if _, err := j.RecordOutcome(t.Context(), read, outcome); err != nil {
 			t.Fatal(err)
 		}
 	}
