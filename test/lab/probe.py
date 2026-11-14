@@ -35,7 +35,7 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 HTTP = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
 
 
-def call_json(origin, path, query=None, headers=None, *, method="GET", body=None):
+def call_json(origin, path, query=None, headers=None, *, method="GET", body=None, timeout=5):
     headers = dict(headers or {})
     data = None
     if body is not None:
@@ -47,7 +47,7 @@ def call_json(origin, path, query=None, headers=None, *, method="GET", body=None
         method=method,
         data=data,
     )
-    with HTTP.open(request, timeout=5) as response:
+    with HTTP.open(request, timeout=timeout) as response:
         contents = response.read(2_000_001)
         if len(contents) > 2_000_000:
             raise ValueError("Lab response exceeded the JSON budget")

@@ -55,6 +55,8 @@ def series_metadata():
         "status": "ended",
         "originalLanguage": "en",
         "runtime": 15,
+        "malIds": [],
+        "aniListIds": [],
         "seasons": [{"seasonNumber": 1, "images": []}],
         "episodes": [
             {"tvdbId": TVDB_ID + number, "seasonNumber": 1, "episodeNumber": number, "title": f"Episode {number}",
@@ -247,6 +249,16 @@ class News(socketserver.StreamRequestHandler):
             self.multiline(article)
 
 
+def metadata_path_kind(path):
+    if path == f"/v1/tvdb/shows/en/{TVDB_ID}":
+        return "sonarrSeries"
+    if path in (f"/v1/movie/{movie_id}" for movie_id in TMDB_IDS):
+        return "radarrMovie"
+    if path.startswith("/v1/"):
+        return "unmatchedMetadata"
+    return None
+
+
 class Source(BaseHTTPRequestHandler):
     def log_message(self, *args):
         # HTTP inputs can have credential query strings. The scenario captures selected keys.
@@ -275,11 +287,19 @@ class Source(BaseHTTPRequestHandler):
     def do_GET(self):
         url = urlsplit(self.path)
         path, query = url.path, parse_qs(url.query)
+        kind = metadata_path_kind(path)
+        if kind is not None:
+            with self.server.lock:
+                self.server.metadata[kind] += 1
         if path == "/health":
             self.write({"seed": SEED})
-        elif path == f"/v1/tvdb/shows/en/{TVDB_ID}":
+        elif path == "/lab/metadata":
+            with self.server.lock:
+                result = dict(self.server.metadata)
+            self.write(result)
+        elif kind == "sonarrSeries":
             self.write(series_metadata())
-        elif path in (f"/v1/movie/{movie_id}" for movie_id in TMDB_IDS):
+        elif kind == "radarrMovie":
             self.write(movie_metadata(TMDB_IDS.index(int(path.split("/")[-1]))))
         elif path in ("/sonarr/api", "/radarr/api"):
             self.write_index(path.split("/")[1], query)
@@ -328,11 +348,13 @@ def main():
     # The fixture state is shared between both HTTP listeners.
     lock = threading.Lock()
     phases, searches = {}, []
+    metadata = {"sonarrSeries": 0, "radarrMovie": 0, "unmatchedMetadata": 0}
     started = datetime.now(timezone.utc).timestamp()
     for server in (plain, secure):
         server.lock = lock
         server.phases = phases
         server.searches = searches
+        server.metadata = metadata
         server.media = media
         server.started = started
     news.media = media
