@@ -24,18 +24,49 @@ func validOperation(op domain.Operation) bool {
 		}
 		effects[effect] = true
 	}
+	jobEffect := func(kind domain.EffectKind) bool { return effects[domain.Effect{Kind: kind}] }
+	switch op.Action {
+	case domain.ActionImport:
+		if !jobEffect(domain.EffectSourceRetained) {
+			return false
+		}
+		for _, target := range op.Targets {
+			if !effects[domain.Effect{Kind: domain.EffectLibraryImport, Target: target}] {
+				return false
+			}
+		}
+	case domain.ActionReject:
+		if !jobEffect(domain.EffectQueueRemoval) || !jobEffect(domain.EffectBlocklist) {
+			return false
+		}
+		kept := jobEffect(domain.EffectSourceRetained)
+		if jobEffect(domain.EffectClientRemoval) == kept || jobEffect(domain.EffectDataRemoval) == kept {
+			return false
+		}
+	case domain.ActionSearch:
+		for _, target := range op.Targets {
+			if !effects[domain.Effect{Kind: domain.EffectSearchDispatch, Target: target}] {
+				return false
+			}
+		}
+	default:
+		return false
+	}
 	return true
 }
 
 func effectPermitted(action domain.Action, effect domain.Effect, targets map[domain.TargetRef]bool) bool {
+	jobScope := effect.Target == (domain.TargetRef{})
 	switch effect.Kind {
 	case domain.EffectLibraryImport:
 		return action == domain.ActionImport && targets[effect.Target]
 	case domain.EffectSourceRetained:
-		return (action == domain.ActionImport || action == domain.ActionReject) && (effect.Target == (domain.TargetRef{}) || targets[effect.Target])
+		return (action == domain.ActionImport || action == domain.ActionReject) && jobScope
 	case domain.EffectQueueRemoval, domain.EffectClientRemoval, domain.EffectDataRemoval, domain.EffectBlocklist:
-		return action == domain.ActionReject && (effect.Target == (domain.TargetRef{}) || targets[effect.Target])
-	case domain.EffectSearchDispatch, domain.EffectReplacementGrab:
+		return action == domain.ActionReject && jobScope
+	case domain.EffectSearchDispatch:
+		return (action == domain.ActionReject && jobScope) || (action == domain.ActionSearch && targets[effect.Target])
+	case domain.EffectReplacementGrab:
 		return action == domain.ActionSearch && targets[effect.Target]
 	default:
 		return false
@@ -83,7 +114,7 @@ func normaliseOutcome(attempt domain.Attempt, observed domain.Outcome, now time.
 func normaliseEffect(result domain.EffectResult) domain.EffectResult {
 	switch result.Verification {
 	case domain.VerificationEffect, domain.VerificationNoEffect, domain.VerificationPartial, domain.VerificationExternal:
-		if len(result.Evidence) > 0 && len(result.Evidence) <= maxPreflightFacts {
+		if len(result.Evidence) > 0 && len(result.Evidence) <= maxEffectFacts {
 			for _, id := range result.Evidence {
 				if id == "" {
 					return domain.EffectResult{Effect: result.Effect, Verification: domain.VerificationUnresolved}

@@ -14,10 +14,13 @@ import (
 
 const (
 	// Mutation calls and verification reads each get their own bounded context.
-	operationTimeout  = 10 * time.Second
-	journalTimeout    = 5 * time.Second
-	maxPreflightAge   = 30 * time.Second
-	maxPreflightFacts = 64
+	operationTimeout = 10 * time.Second
+	journalTimeout   = 5 * time.Second
+	maxPreflightAge  = 30 * time.Second
+	// A 128-target pack can reference target, profile, candidate, capacity,
+	// and provenance facts for each member plus job-wide facts.
+	maxPreflightFacts = 2048
+	maxEffectFacts    = 64
 )
 
 var (
@@ -35,6 +38,12 @@ type Reservation struct {
 	Fence  uint64
 }
 
+type SendLease struct {
+	Attempt   domain.Attempt
+	Fence     uint64
+	ExpiresAt time.Time
+}
+
 type Reconciliation struct {
 	Attempt domain.Attempt
 	Fence   uint64
@@ -45,9 +54,12 @@ type Preflight struct {
 	CaseRevision       domain.Revision
 	PolicyRevision     domain.Revision
 	CapabilityRevision domain.Revision
-	Evidence           []domain.EvidenceID
-	ObservedAt         time.Time
-	ExpiresAt          time.Time
+	// ArrOwnsImplicitSearch attests that the exact reject configuration
+	// permits and expects Arr to trigger its own search. It is readback-only.
+	ArrOwnsImplicitSearch bool
+	Evidence              []domain.EvidenceID
+	ObservedAt            time.Time
+	ExpiresAt             time.Time
 }
 
 // Gate performs only fresh read-side checks. A positive result must match the
@@ -75,10 +87,14 @@ type Store interface {
 	CancelReserved(context.Context, Reservation, domain.ReasonCode, time.Time) error
 	// BeginSend validates the lease, expiry, pause, epoch and exact decision,
 	// then durably commits the sending marker and evidence before returning.
-	BeginSend(context.Context, Reservation, Preflight, time.Time) (domain.Attempt, error)
+	BeginSend(context.Context, Reservation, Preflight, time.Time) (SendLease, error)
+	// RecordNotSent closes a fenced attempt only on the exact sending lease
+	// and only when its executor never called the adapter. If lease ownership
+	// changed, leave the attempt in reconciliation instead of releasing locks.
+	RecordNotSent(context.Context, SendLease, domain.ReasonCode, time.Time) error
 	// RecordDispatch attaches acknowledgement or uncertainty to the attempt.
 	// Any write error or conflict leaves the committed sending marker recoverable.
-	RecordDispatch(context.Context, domain.AttemptID, domain.Acknowledgement, time.Time) error
+	RecordDispatch(context.Context, SendLease, domain.Acknowledgement, time.Time) error
 	// BeginReconcile acquires a readback lease for a sent or possibly sent
 	// attempt. A still-active send must be excluded until its lease expires.
 	BeginReconcile(context.Context, domain.AttemptID, time.Time) (Reconciliation, error)
@@ -132,7 +148,7 @@ func (e *Executor) Dispatch(ctx context.Context, intentID domain.IntentID) (doma
 		return "", ErrHeld
 	}
 
-	attempt, err := e.store.BeginSend(ctx, reservation, checked, now)
+	lease, err := e.store.BeginSend(ctx, reservation, checked, now)
 	if errors.Is(err, ErrHeld) {
 		if err := e.cancelReserved(ctx, reservation, "dispatch_revalidated"); err != nil {
 			return "", err
@@ -142,27 +158,40 @@ func (e *Executor) Dispatch(ctx context.Context, intentID domain.IntentID) (doma
 	if err != nil {
 		return "", e.checkStore(err)
 	}
-	if attempt.ID == "" || attempt.IntentID != intent.ID || attempt.SentAt.IsZero() || !attempt.SentAt.Equal(now) || attempt.Acknowledgement != (domain.Acknowledgement{}) ||
+	attempt := lease.Attempt
+	if lease.Fence == 0 || !lease.ExpiresAt.After(now) || attempt.ID == "" || attempt.IntentID != intent.ID || attempt.SentAt.IsZero() || !attempt.SentAt.Equal(now) || attempt.Acknowledgement != (domain.Acknowledgement{}) ||
 		!reflect.DeepEqual(attempt.Operation, intent.Proposal.Operation) || !reflect.DeepEqual(attempt.Preflight, checked.Evidence) {
 		return attempt.ID, e.checkStore(ErrJournal)
 	}
 
-	ack := domain.Acknowledgement{State: domain.DispatchUncertain, Reason: "dispatch_uncertain"}
-	if ctx.Err() == nil && !e.halted.Load() {
-		sendCtx, cancel := context.WithTimeout(ctx, operationTimeout)
-		observed, sendErr := e.adapter.Dispatch(sendCtx, attempt.Operation)
-		sendInTime := sendCtx.Err() == nil
-		cancel()
-		if sendErr == nil && sendInTime && (observed.State == domain.DispatchAcknowledged || observed.State == domain.DispatchRejectedBeforeEffect) {
-			ack = observed
+	// A slow journal commit can consume proposal freshness and the lease.
+	// Pause linearises at BeginSend. A parked or stale lease is never sent.
+	sendAt := e.clock.Now()
+	if ctx.Err() != nil || e.halted.Load() || sendAt.Before(now) || !eligible(intent.Proposal, checked, sendAt) ||
+		lease.ExpiresAt.Sub(sendAt) < operationTimeout {
+		journalCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), journalTimeout)
+		defer cancel()
+		if err := e.store.RecordNotSent(journalCtx, lease, "dispatch_not_started", sendAt); err != nil {
+			e.halted.Store(true)
+			return attempt.ID, ErrJournal
 		}
+		return attempt.ID, ErrHeld
+	}
+
+	ack := domain.Acknowledgement{State: domain.DispatchUncertain, Reason: "dispatch_uncertain"}
+	sendCtx, cancelSend := context.WithTimeout(ctx, operationTimeout)
+	observed, sendErr := e.adapter.Dispatch(sendCtx, attempt.Operation)
+	sendInTime := sendCtx.Err() == nil
+	cancelSend()
+	if sendErr == nil && sendInTime && (observed.State == domain.DispatchAcknowledged || observed.State == domain.DispatchRejectedBeforeEffect) {
+		ack = observed
 	}
 
 	// The original caller may have disconnected while the operation was in
 	// flight. Complete the local journal step even when its context expired.
 	journalCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), journalTimeout)
 	defer cancel()
-	if err := e.store.RecordDispatch(journalCtx, attempt.ID, ack, e.clock.Now()); err != nil {
+	if err := e.store.RecordDispatch(journalCtx, lease, ack, e.clock.Now()); err != nil {
 		// Once an attempt is fenced, any failed journal acknowledgement is
 		// ambiguous even if a transaction reports cancellation or a conflict.
 		e.halted.Store(true)
@@ -236,6 +265,10 @@ func eligible(proposal domain.Proposal, current Preflight, now time.Time) bool {
 		!now.Before(proposal.ExpiresAt) || !now.Before(current.ExpiresAt) || current.ObservedAt.IsZero() ||
 		now.Before(current.ObservedAt) || now.Sub(current.ObservedAt) > maxPreflightAge ||
 		len(current.Evidence) == 0 || len(current.Evidence) > maxPreflightFacts {
+		return false
+	}
+	implicitSearch := proposal.Operation.Action == domain.ActionReject && slices.Contains(proposal.Operation.Effects, domain.Effect{Kind: domain.EffectSearchDispatch})
+	if implicitSearch != current.ArrOwnsImplicitSearch {
 		return false
 	}
 	for _, guard := range proposal.Guards {
