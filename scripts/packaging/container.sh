@@ -16,13 +16,18 @@ mkdir "$output"
 archive="$output/rescuarr-linux-$architecture.oci.tar"
 export RESCUARR_IMAGE="rescuarr:candidate-$architecture"
 export RESCUARR_HOST_PORT="${RESCUARR_HOST_PORT:-18787}"
+unset RESCUARR_PUBLIC_URL RESCUARR_BASE_PATH RESCUARR_TRUSTED_PROXIES
+unset COMPOSE_FILE COMPOSE_PROJECT_NAME COMPOSE_PROFILES COMPOSE_ENV_FILES COMPOSE_REMOVE_ORPHANS COMPOSE_IGNORE_ORPHANS
 
-project="rescuarr-smoke-$architecture-$$"
-compose=(docker compose --file deploy/container/compose.yaml --project-name "$project")
+
 scratch=$(mktemp -d)
+project="rescuarr-smoke-$architecture-$(basename "$scratch" | tr '[:upper:]' '[:lower:]' | tr -cd '[:alnum:]')"
+compose=(docker compose --env-file /dev/null --file deploy/container/compose.yaml --project-name "$project")
 cleanup() {
-  "${compose[@]}" down --volumes --remove-orphans || true
-  rm -rf "$scratch"
+  local status=$?
+  "${compose[@]}" down --volumes --remove-orphans || status=1
+  rm -rf "$scratch" || status=1
+  exit "$status"
 }
 trap cleanup EXIT
 git archive HEAD go.mod go.sum cmd internal deploy/container |

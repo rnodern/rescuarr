@@ -12,6 +12,10 @@ services:
     restart: unless-stopped
     ports:
       - "127.0.0.1:${RESCUARR_HOST_PORT:-8787}:8787"
+    environment:
+      RESCUARR_PUBLIC_URL: ${RESCUARR_PUBLIC_URL:-http://127.0.0.1:${RESCUARR_HOST_PORT:-8787}}
+      RESCUARR_BASE_PATH: ${RESCUARR_BASE_PATH:-}
+      RESCUARR_TRUSTED_PROXIES: ${RESCUARR_TRUSTED_PROXIES:-}
     read_only: true
     cap_drop:
       - ALL

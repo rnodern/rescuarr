@@ -41,7 +41,12 @@ jobs:
           python-version: '3.13'
       - name: Build, archive and run the extracted binary
         run: python scripts/packaging/native.py --os ${{ matrix.os }} --arch ${{ matrix.arch }} --version "$CANDIDATE_VERSION" --output dist/native
+        if: runner.os != 'Windows'
         shell: bash
+      - name: Build, archive and run the extracted Windows binary
+        if: runner.os == 'Windows'
+        run: python scripts/packaging/native.py --os windows --arch ${{ matrix.arch }} --version $env:CANDIDATE_VERSION --output dist/native
+        shell: pwsh
       - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: rescuarr-${{ github.event.pull_request.head.sha || github.sha }}-${{ matrix.os }}-${{ matrix.arch }}

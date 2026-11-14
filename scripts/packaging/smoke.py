@@ -25,6 +25,13 @@ def wait_for_http(base_url, running):
     raise RuntimeError(f"Packaged process did not become ready: {last_error}")
 
 
+def check_setup_page(base_url):
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    with opener.open(base_url + "/", timeout=5) as response:
+        if response.geturl() != base_url + "/setup" or b"Set owner password" not in response.read(64 * 1024):
+            raise RuntimeError("Packaged browser did not open the first-run setup page")
+
+
 def installation_state(database):
     with closing(sqlite3.connect(database.as_uri() + "?mode=ro", uri=True)) as connection:
         result = connection.execute(

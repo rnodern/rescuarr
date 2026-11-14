@@ -12,7 +12,7 @@ import subprocess
 import tempfile
 
 from artifact import check_version, checksum, command, commit, sbom, source_archive, version_arg, write_checksums, write_json
-from smoke import check_setup_token, installation_state, wait_for_http
+from smoke import check_setup_page, check_setup_token, installation_state, wait_for_http
 
 
 @contextmanager
@@ -26,7 +26,9 @@ def server(binary, data):
     with (data.parent / "smoke.log").open("wb") as log:
         process = subprocess.Popen(args, stdout=log, stderr=subprocess.STDOUT, env=environment)
         try:
-            wait_for_http(f"http://127.0.0.1:{port}", lambda: process.poll() is None)
+            base = f"http://127.0.0.1:{port}"
+            wait_for_http(base, lambda: process.poll() is None)
+            check_setup_page(base)
             yield
         finally:
             if process.poll() is None:
@@ -77,7 +79,7 @@ def build(args):
     with tempfile.TemporaryDirectory(prefix="rescuarr-native-") as temporary:
         scratch = Path(temporary)
         source = scratch / "source"
-        source_archive(source, "go.mod", "go.sum", "cmd", "internal", "docs/INSTALL.md")
+        source_archive(source, "go.mod", "go.sum", "cmd", "internal", "docs/INSTALL.md", "deploy")
         package = scratch / "package"
         package.mkdir()
         binary = package / ("rescuarr.exe" if args.os == "windows" else "rescuarr")
@@ -90,7 +92,9 @@ def build(args):
         )
         if args.sign_hook:
             subprocess.run([str(args.sign_hook.resolve()), str(binary)], check=True)
-        shutil.copyfile(source / "docs/INSTALL.md", package / "INSTALL.md")
+        (package / "docs").mkdir()
+        shutil.copyfile(source / "docs/INSTALL.md", package / "docs/INSTALL.md")
+        shutil.copytree(source / "deploy", package / "deploy")
         name = f"rescuarr-{args.version}-{args.os}-{args.arch}"
         archive_format = "gztar" if args.os == "linux" else "zip"
         archive = Path(shutil.make_archive(str(output / name), archive_format, root_dir=package))
@@ -111,7 +115,7 @@ def build(args):
             "go": command("go", "version"), "archive": archive.name,
             "archive_sha256": checksum(archive), "binary_sha256": checksum(installed),
             "runtime": {"runner": os.environ.get("RUNNER_NAME", platform.platform()),
-                        "checks": ["version", "health", "readiness", "restart", "backup", "restore"]},
+                        "checks": ["version", "health", "readiness", "setup page", "restart", "backup", "restore"]},
             "signing": "external hook completed" if args.sign_hook else "unsigned",
             "notarisation": (
                 "external hook completed" if args.notarise_hook else

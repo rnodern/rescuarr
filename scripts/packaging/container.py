@@ -8,7 +8,7 @@ import sys
 import tarfile
 
 from artifact import check_version, checksum, command, sbom, write_checksums, write_json
-from smoke import installation_state, wait_for_http
+from smoke import check_setup_page, installation_state, wait_for_http
 
 
 def image_manifest(archive, architecture):
@@ -30,7 +30,7 @@ def image_manifest(archive, architecture):
 
 
 def verify(architecture, version, revision, archive, project, scratch):
-    compose = ["docker", "compose", "--file", "deploy/container/compose.yaml", "--project-name", project]
+    compose = ["docker", "compose", "--env-file", "/dev/null", "--file", "deploy/container/compose.yaml", "--project-name", project]
     run = [*compose, "exec", "-T", "rescuarr"]
     manifest_digest, config_digest = image_manifest(archive, architecture)
     container = command(*compose, "ps", "-q", "rescuarr")
@@ -56,6 +56,7 @@ def verify(architecture, version, revision, archive, project, scratch):
     check_version(command(*run, "rescuarr", "version"), version, revision)
     base_url = f"http://127.0.0.1:{port}"
     wait_for_http(base_url, lambda: True)
+    check_setup_page(base_url)
     subprocess.run([*run, "test", "-s", "/data/setup-token"], check=True)
     if command(*run, "stat", "-c", "%a", "/data/setup-token") != "600":
         raise RuntimeError("Setup token is not private inside the container")
@@ -68,14 +69,20 @@ def verify(architecture, version, revision, archive, project, scratch):
         directory = command(*compose, "ps", "-aq", "rescuarr")
         destination = scratch / f"{name}.sqlite3"
         command("docker", "cp", f"{directory}:{backup}", str(destination))
-        command(*compose, "run", "--rm", "--no-deps", "-T", "--entrypoint", "/bin/rm", "rescuarr", backup)
-        return installation_state(destination)[0]
+        return installation_state(destination)
 
-    install_id = snapshot("original")
+    install_id, _, _ = snapshot("original")
     command(*compose, "up", "--detach", "--no-build", "--pull", "never", "--force-recreate")
     wait_for_http(base_url, lambda: True)
-    if snapshot("restarted") != install_id:
+    check_setup_page(base_url)
+    if snapshot("restarted")[0] != install_id:
         raise RuntimeError("Installation ID changed after replacing the container")
+    command(*compose, "run", "--rm", "--no-deps", "-T", "rescuarr", "restore", "--input", "/data/original.sqlite3")
+    command(*compose, "up", "--detach", "--no-build", "--pull", "never")
+    wait_for_http(base_url, lambda: True)
+    check_setup_page(base_url)
+    if snapshot("restored") != (install_id, "observe", 1):
+        raise RuntimeError("Container restore failed to preserve the installation ID and gate recovery")
 
     container = command(*compose, "ps", "-aq", "rescuarr")
     binary = scratch / "rescuarr"
@@ -92,8 +99,8 @@ def verify(architecture, version, revision, archive, project, scratch):
         "archive": archive.name, "archive_sha256": checksum(archive),
         "oci_manifest_digest": manifest_digest, "oci_config_digest": config_digest,
         "runtime": {"runner": os.environ.get("RUNNER_NAME", os.uname().machine),
-                    "checks": ["version", "health", "readiness", "non-root", "confinement",
-                               "backup", "persistence after recreate"]},
+                    "checks": ["version", "health", "readiness", "setup page", "non-root", "confinement",
+                               "backup", "persistence after recreate", "restore"]},
         "signing": "unsigned",
     })
     write_checksums(output)

@@ -82,7 +82,7 @@ The `--insecure-policy` flag selects signature-policy bypass for this local unsi
 
 To build locally from the candidate checkout, run `docker compose -f deploy/container/compose.yaml build` then `up -d --no-build --pull never` with the same Compose file. Keep the same Compose project name across upgrades to reuse the existing named volume. Start with the `data` named volume, which uses the image's `0700` directory owned by UID and GID `10001`. For a bind mount, prepare a private local directory owned by the daemon-mapped runtime UID and GID before starting. `docker compose -f deploy/container/compose.yaml down` stops the app and preserves its named volume. The `--volumes`/ `-v` option deletes that data.
 
-The example publishes only on `127.0.0.1`. If you change the host port, set `RESCUARR_PUBLIC_URL` in the Compose service's environment to the exact operator-facing URL, including the port. When an integration supports file-based credentials, mount the individual file read-only, accessible to the runtime user, then configure its reference in Rescuarr. Avoid storing credentials in image layers or Compose YAML.
+The example publishes only on `127.0.0.1`. The default browser address uses `RESCUARR_HOST_PORT`. Set `RESCUARR_PUBLIC_URL` to the exact operator-facing URL when using a reverse proxy. When an integration supports file-based credentials, mount the individual file read-only, accessible to the runtime user, then configure its reference in Rescuarr. Avoid storing credentials in image layers or Compose YAML.
 
 ## Reverse proxy
 
