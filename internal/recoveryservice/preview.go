@@ -28,7 +28,7 @@ func NewPreviewService(cases *observeservice.Service, secrets interface{ ReadSec
 }
 
 // ImportPreview displays Arr's current assessment for the exact completed job.
-// The browser receives aggregates only. No candidates become write proposals.
+// The filename review also shows the two basenames used to identify an episode.
 func (s *PreviewService) ImportPreview(ctx context.Context, id domain.CaseID, revision domain.Revision) (app.ImportPreview, error) {
 	select {
 	case s.slots <- struct{}{}:
@@ -81,6 +81,27 @@ func (s *PreviewService) ImportPreview(ctx context.Context, id domain.CaseID, re
 	if err != nil {
 		return app.ImportPreview{}, err
 	}
+	client, err := importflow.New(cfg, s.transport)
+	if err != nil {
+		return app.ImportPreview{}, err
+	}
+	if proof.Case.Reason == domain.ReasonCode(observe.FindingSeriesIDOnly) {
+		if len(proof.Members) != 1 || !importflow.SupportsEpisodeNameReview(proof.Instance.Product, status.Version) {
+			return heldPreview("Filename matching requires one episode on a supported Sonarr version. Review this download in Sonarr.")
+		}
+		match, err := client.ReviewEpisodeNames(ctx, first, style, roots)
+		if errors.Is(err, observe.ErrPartial) {
+			return heldPreview("Sonarr returned too many files to identify one episode. Review this download in Sonarr.")
+		}
+		if errors.Is(err, observe.ErrUnavailable) || errors.Is(err, observe.ErrNotFound) || errors.Is(err, observe.ErrResponse) {
+			return heldPreview("Rescuarr could not read the download’s file list from Sonarr. Open Manual Import in the Sonarr queue to review it.")
+		}
+		if err != nil {
+			return app.ImportPreview{}, err
+		}
+		review := app.EpisodeNameReview(match)
+		return app.ImportPreview{Episode: &review}, nil
+	}
 	job := importflow.Job{Ref: proof.Case.Job.Ref, DownloadID: first.DownloadID, OutputPath: first.OutputPath,
 		LibraryRoots: roots, PathStyle: style, Queue: proof.Queue, TrackingComplete: true}
 	for _, target := range proof.Case.Targets {
@@ -101,10 +122,6 @@ func (s *PreviewService) ImportPreview(ctx context.Context, id domain.CaseID, re
 			Ref: snapshot.Ref, ProfileID: snapshot.ProfileID, ProfileRevision: snapshot.ProfileRevision,
 			Monitored: true, Intent: policy.NeedFirstImport, Evidence: snapshot.Evidence,
 		})
-	}
-	client, err := importflow.New(cfg, s.transport)
-	if err != nil {
-		return app.ImportPreview{}, err
 	}
 	result, err := client.Discover(ctx, job, s.clock.Now())
 	if err != nil {

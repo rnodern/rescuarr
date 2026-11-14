@@ -9,6 +9,7 @@ import (
 	"github.com/rnodern/rescuarr/internal/app"
 	"github.com/rnodern/rescuarr/internal/domain"
 	"github.com/rnodern/rescuarr/internal/importflow"
+	"github.com/rnodern/rescuarr/internal/observe"
 	"github.com/rnodern/rescuarr/internal/observeservice"
 )
 
@@ -23,6 +24,7 @@ type casesView struct {
 type caseView struct {
 	app.CaseDetail
 	PreviewHold string
+	ReviewNames bool
 }
 
 var caseStates = []domain.CaseState{
@@ -110,7 +112,16 @@ func (c console) caseDetail(w http.ResponseWriter, r *http.Request) {
 		c.readError(w, r, err)
 		return
 	}
-	body := caseView{CaseDetail: detail, PreviewHold: previewVersionHold(detail.Case.Display)}
+	display := detail.Case.Display
+	body := caseView{CaseDetail: detail, PreviewHold: previewVersionHold(display)}
+	if detail.Case.Reason == domain.ReasonCode(observe.FindingSeriesIDOnly) {
+		body.ReviewNames = len(detail.Case.Targets) == 1 && importflow.SupportsEpisodeNameReview(display.Product, display.Version)
+		if body.ReviewNames {
+			body.PreviewHold = ""
+		} else {
+			body.PreviewHold = "Open Manual Import in Sonarr to review this download."
+		}
+	}
 	c.render(w, r, http.StatusOK, "case", page{Title: caseTitle(detail.Case), Active: "cases", Status: status, Body: body})
 }
 

@@ -154,10 +154,10 @@ func TestBrowserUsesOwnerSessionAndLocalState(t *testing.T) {
 	}
 	detail := perform(detailPath[1], session.Token).Body.String()
 	if !strings.Contains(cases, "Fixture Show · S02E04") || !strings.Contains(cases, "Fixture.Show.S02E04.1080p") ||
-		!strings.Contains(detail, "S02E04 · Fixture Episode") || !strings.Contains(detail, "Import preview is currently supported on Sonarr 4.0.20.3014") ||
-		!strings.Contains(detail, "Sonarr found the series by ID") || !strings.Contains(detail, "choose Manual Import") ||
+		!strings.Contains(detail, "S02E04 · Fixture Episode") || !strings.Contains(detail, "Check episode filename") ||
+		!strings.Contains(detail, "Sonarr found the series by ID") ||
 		strings.Contains(detail, "Check Arr import candidates") {
-		t.Fatal("case did not show the job identity and version-specific limitation")
+		t.Fatal("case did not show the job identity and available filename check")
 	}
 	for _, query := range []string{"fixture+show", "s02e04", "fixture+episode", "1080p"} {
 		if !strings.Contains(perform(base+"/cases?q="+query, session.Token).Body.String(), detailPath[1]) {

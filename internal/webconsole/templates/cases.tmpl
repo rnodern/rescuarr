@@ -47,7 +47,6 @@
   <section class="panel">
     <h2>Diagnosis</h2>
     <p>{{reason .Body.Case.Reason}}</p>
-    {{if eq .Body.Case.Reason "series_matched_by_id"}}<p>If you’ve checked the episode, open Sonarr → Activity → Queue and choose Manual Import for this download. Check the series and episode in the import dialog.</p>{{end}}
     <dl><dt>Service</dt><dd>{{serviceLabel .Body.Case.Display.Service .Body.Case.Display.Product}}{{if .Body.Case.Display.Version}} {{.Body.Case.Display.Version}}{{end}}</dd>
     {{if and .Body.Case.Display.Title .Body.Case.Display.Release}}<dt>Download release</dt><dd>{{.Body.Case.Display.Release}}</dd>{{end}}
     <dt>Next check</dt><dd>{{when .Body.Case.NextCheckAt}}</dd>
@@ -66,7 +65,7 @@
     <form method="post" action="{{$base}}/cases/{{.Body.Case.ID}}/import-preview">
       <input type="hidden" name="csrf" value="{{.CSRF}}">
       <input type="hidden" name="revision" value="{{.Body.Case.Revision}}">
-      <button type="submit">Check Arr import candidates</button>
+      <button type="submit">{{if .Body.ReviewNames}}Check episode filename{{else}}Check Arr import candidates{{end}}</button>
     </form>
     {{end}}
   </section>
@@ -93,6 +92,22 @@
 <p><a href="{{.Base}}/cases/{{.Body.CaseID}}">Back to case</a></p>
 <h1>{{.Title}}</h1>
 {{if .Body.Result.Hold}}<p class="notice">{{.Body.Result.Hold}}</p>
+{{else if .Body.Result.Episode}}
+{{with .Body.Result.Episode}}
+<section class="panel">
+  {{if .Matched}}<h2>Likely episode match</h2>
+  <p>The folder and filename identify the same series and episode number as the Sonarr queue.{{if .ArrRejection}} Sonarr still reports an import rejection for this file.{{end}}</p>
+  {{else}}<h2>Match needs review</h2><p class="notice">{{.Reason}}</p>{{end}}
+  <dl>
+    {{if .Series}}<dt>Series</dt><dd>{{.Series}}</dd>{{end}}
+    {{if .Episode}}<dt>Episode</dt><dd>{{.Episode}}{{if .EpisodeTitle}} · {{.EpisodeTitle}}{{end}}</dd>{{end}}
+    {{if and .Matched .EpisodeTitle}}<dt>Episode title in the names</dt><dd>{{if .TitleInNames}}Matches Sonarr{{else}}Neither name includes the episode title{{end}}</dd>{{end}}
+    {{if .Folder}}<dt>Download folder</dt><dd>{{.Folder}}</dd>{{end}}
+    {{if .Filename}}<dt>Video file</dt><dd>{{.Filename}}</dd>{{end}}
+  </dl>
+  <p>In Sonarr, go to <strong>Activity → Queue → Manual Import</strong> for this download. Confirm the selected file, series and episode before importing.</p>
+</section>
+{{end}}
 {{else}}
 <p>{{.Body.Summary}}</p>
 <dl>

@@ -46,3 +46,26 @@ func TestOwnerImportPreview(t *testing.T) {
 		t.Fatalf("unexpected number of preview calls: %d", calls)
 	}
 }
+
+func TestOwnerEpisodeFilenameReviewOnSonarr3012(t *testing.T) {
+	opts := fixture(func(c *apptest.Console) {
+		detail := c.Details["case-1"]
+		detail.Case.Reason = "series_matched_by_id"
+		detail.Case.Display.Product = domain.ProductSonarr
+		detail.Case.Display.Version = "4.0.20.3012"
+		detail.Case.Targets = []domain.Target{{Ref: domain.TargetRef{Kind: domain.TargetEpisode, ID: 41, SeriesID: 12}}}
+		detail.Case.Job.CompleteSet = true
+		c.Details["case-1"] = detail
+	})
+	opts.ImportPreview = previewFixture(func(_ context.Context, _ domain.CaseID, _ domain.Revision) (app.ImportPreview, error) {
+		return app.ImportPreview{Episode: &app.EpisodeNameReview{
+			Series: "Captain Wattle: The Animated Series", Episode: "S02E11", EpisodeTitle: "Signal Lost",
+			Filename: "Captain.Wattle.Animated.S02E11.mkv", Matched: true, ArrRejection: true,
+		}}, nil
+	})
+	h := New(opts)
+	expect(t, request(h, http.MethodGet, "/cases/case-1", "owner", "", nil), 200, "Check episode filename")
+	form := url.Values{"csrf": {csrf}, "revision": {"5"}}
+	expect(t, request(h, http.MethodPost, "/cases/case-1/import-preview", "owner", origin, form), 200,
+		"Likely episode match", "S02E11 · Signal Lost", "Captain.Wattle.Animated.S02E11.mkv", "Sonarr still reports an import rejection", "Activity → Queue → Manual Import")
+}

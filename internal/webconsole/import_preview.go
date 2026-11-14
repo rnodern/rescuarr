@@ -69,6 +69,10 @@ func (c console) importPreview(w http.ResponseWriter, r *http.Request) {
 	case err != nil:
 		c.readError(w, r, err)
 	default:
-		c.render(w, r, http.StatusOK, "import-preview", page{Title: "Import preview", Active: "cases", Status: status, Body: importPreviewView{id, result}})
+		title := "Import preview"
+		if result.Episode != nil {
+			title = "Episode filename check"
+		}
+		c.render(w, r, http.StatusOK, "import-preview", page{Title: title, Active: "cases", Status: status, Body: importPreviewView{id, result}})
 	}
 }

@@ -21,8 +21,17 @@ type fixtureTransport func(*http.Request) (*http.Response, error)
 func (f fixtureTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
 func TestImportPreviewUsesExactSavedCaseAndReadOnlyRequests(t *testing.T) {
-	for _, product := range []domain.Product{domain.ProductSonarr, domain.ProductRadarr} {
-		t.Run(string(product), func(t *testing.T) {
+	for _, test := range []struct {
+		name           string
+		product        domain.Product
+		filenameReview bool
+	}{
+		{"sonarr", domain.ProductSonarr, false},
+		{"radarr", domain.ProductRadarr, false},
+		{"sonarr filename review", domain.ProductSonarr, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			product := test.product
 			ctx := t.Context()
 			dir := filepath.Join(t.TempDir(), "state")
 			local, err := store.Open(ctx, dir)
@@ -45,6 +54,13 @@ func TestImportPreviewUsesExactSavedCaseAndReadOnlyRequests(t *testing.T) {
 				media = `"movie":{"id":41,"qualityProfileId":3,"movieFileId":0}`
 				source, modifier, language = "webdl", `,"modifier":"none"`, `,"language":{"id":1}`
 			}
+			const folder = "Captain.Wattle.Animated.S02E11.Captain.Wattle.Animated.720p.FIXTURE.WEB-DL.AAC2.0.x264-Lab"
+			output := "/private/downloads/original"
+			if test.filenameReview {
+				version, output = "4.0.20.3012", "/private/downloads/"+folder
+				queueTarget += `,"series":{"id":12,"title":"Captain Wattle: The Animated Series"},"episode":{"id":41,"seriesId":12,"seasonNumber":2,"episodeNumber":11,"title":"Signal Lost"}` +
+					`,"statusMessages":[{"title":"Fixture","messages":["Found matching series via grab history, but release was matched to series by ID. Automatic import is not possible. See the FAQ for details."]}]`
+			}
 			var calls, previews int
 			transport := fixtureTransport(func(r *http.Request) (*http.Response, error) {
 				calls++
@@ -56,10 +72,13 @@ func TestImportPreviewUsesExactSavedCaseAndReadOnlyRequests(t *testing.T) {
 				case "/api/v3/system/status":
 					body = fmt.Sprintf(`{"appName":%q,"version":%q,"osName":"Alpine Linux","isLinux":true}`, product, version)
 				case "/api/v3/queue":
-					body = `{"page":1,"pageSize":100,"totalRecords":1,"records":[{"id":4,` + queueTarget + `,"downloadId":"private-original","downloadClient":"fixture-sab","protocol":"usenet","status":"completed","trackedDownloadState":"importPending","outputPath":"/private/downloads/original"}]}`
+					body = `{"page":1,"pageSize":100,"totalRecords":1,"records":[{"id":4,` + queueTarget + `,"downloadId":"private-original","downloadClient":"fixture-sab","protocol":"usenet","status":"completed","trackedDownloadState":"importPending","outputPath":` + fmt.Sprintf("%q", output) + `}]}`
 				case "/api/v3/rootfolder":
 					body = `[{"id":1,"path":"/private/library"}]`
 				case "/api/v3/episode/41":
+					if test.filenameReview {
+						t.Fatal("filename review reached the import eligibility contract")
+					}
 					body = `{"id":41,"seriesId":12,"seasonNumber":1,"episodeFileId":0,"hasFile":false,"monitored":true}`
 				case "/api/v3/series/12":
 					body = `{"id":12,"qualityProfileId":3,"monitored":true,"path":"/private/library/series","rootFolderPath":"/private/library"}`
@@ -72,6 +91,10 @@ func TestImportPreviewUsesExactSavedCaseAndReadOnlyRequests(t *testing.T) {
 						t.Fatal("preview did not use the saved scoped selector")
 					}
 					previews++
+					if test.filenameReview {
+						body = fmt.Sprintf(`[{"path":%q,"size":4096,"rejections":[{"type":"permanent"}]}]`, output+"/"+folder+".mkv")
+						break
+					}
 					body = `[{"path":"/private/downloads/original/media.mkv","size":4096,"folderName":"original",` + media +
 						`,"quality":{"quality":{"id":5,"name":"WEBDL-720p","source":"` + source + `","resolution":720` + modifier +
 						`},"revision":{"version":1,"real":0,"isRepack":false}},"languages":[{"id":1,"name":"English"}],"customFormats":[],"customFormatScore":0,"indexerFlags":0,"releaseGroup":"fixture","rejections":[]}]`
@@ -100,6 +123,13 @@ func TestImportPreviewUsesExactSavedCaseAndReadOnlyRequests(t *testing.T) {
 				t.Fatalf("stale request reached Arr: %d calls, %v", calls, err)
 			}
 			got, err := svc.ImportPreview(ctx, item.ID, item.Revision)
+			if test.filenameReview {
+				if err != nil || previews != 1 || got.Eligible != 0 || got.Episode == nil || !got.Episode.Matched ||
+					got.Episode.Folder != folder || got.Episode.Filename != folder+".mkv" || got.Episode.EpisodeTitle != "Signal Lost" {
+					t.Fatalf("unexpected episode review: %+v, %+v with %d preview requests: %v", got, got.Episode, previews, err)
+				}
+				return
+			}
 			if err != nil || got.Candidates != 1 || got.Eligible != 1 || previews != 1 {
 				t.Fatalf("unexpected import assessment: %+v with %d preview requests, %v", got, previews, err)
 			}
