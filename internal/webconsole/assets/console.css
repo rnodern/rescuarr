@@ -1,29 +1,9 @@
 :root {
-  color-scheme: dark;
-  --background: #1b1e25;
-  --surface: #22262e;
-  --sidebar: #15171d;
-  --masthead: #70212c;
-  --ink: #eef0f4;
-  --muted: #adb4bf;
-  --line: #3b414c;
-  --control-line: #626a78;
-  --link: #ff939e;
-  --accent: #ff6979;
-  --highlight: #3d2830;
-  --button: #a62e40;
-  --button-hover: #bd354a;
-  --hold: #ffcd86;
-  --hold-bg: #40311d;
   --header-height: 3.5rem;
-  font: 100%/1.45 Inter, system-ui, sans-serif;
 }
 
-* { box-sizing: border-box; }
-body { margin: 0; color: var(--ink); background: var(--background); }
 a { color: var(--link); text-underline-offset: .18em; }
-a:hover { color: #ffb1b9; }
-:focus-visible { outline: 2px solid #ffb1b9; outline-offset: 3px; }
+a:hover { color: var(--focus); }
 .skip { position: fixed; left: .5rem; top: -5rem; z-index: 3; background: var(--surface); padding: .5rem; }
 .skip:focus { top: .5rem; }
 .sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
@@ -127,7 +107,7 @@ input, select, button, .button {
   font: inherit;
 }
 input[type=checkbox] { accent-color: var(--button-hover); width: 1rem; height: 1rem; min-height: 0; margin: 0; }
-button, .button { padding-inline: .72rem; cursor: pointer; background: var(--button); border-color: #d05266; color: #fff; font-size: .87rem; font-weight: 660; }
+button, .button { padding-inline: .72rem; cursor: pointer; background: var(--button); border-color: var(--button-border); color: #fff; font-size: .87rem; font-weight: 660; }
 .button { display: inline-flex; align-items: center; text-decoration: none; }
 button:hover, .button:hover { background: var(--button-hover); color: #fff; }
 button:disabled { opacity: .65; cursor: wait; }

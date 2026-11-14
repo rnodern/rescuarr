@@ -85,6 +85,22 @@ func TestConsoleSetupAuthenticationAndCSRF(t *testing.T) {
 
 	setup := request(http.MethodGet, "/tools/setup", "", nil)
 	status(setup, http.StatusOK)
+	for name, mediaType := range map[string]string{
+		"theme.css": "text/css", "access.css": "text/css", "lifebuoy.png": "image/png",
+	} {
+		path := "/tools/assets/" + name
+		if !strings.Contains(setup.Body.String(), `"`+path+`"`) {
+			t.Errorf("setup did not reference %s", path)
+		}
+		asset := request(http.MethodGet, path, "", nil)
+		status(asset, http.StatusOK)
+		if !strings.HasPrefix(asset.Header().Get("Content-Type"), mediaType) || asset.Body.Len() == 0 {
+			t.Errorf("unexpected asset response for %s", path)
+		}
+	}
+	status(request(http.MethodGet, "/tools/assets/console.css", "", nil), http.StatusUnauthorized)
+	status(request(http.MethodGet, "/tools/assets/console.js", "", nil), http.StatusUnauthorized)
+
 	preAuth := namedCookie(t, setup, "rescuarr_form")
 	const password = "synthetic browser passphrase"
 	form := url.Values{"password": {password}, "token": {strings.TrimSpace(string(token))}, "csrf": {preAuth.Value}}
@@ -96,6 +112,17 @@ func TestConsoleSetupAuthenticationAndCSRF(t *testing.T) {
 
 	login := request(http.MethodGet, "/tools/login", "", nil)
 	status(login, http.StatusOK)
+	if !strings.Contains(login.Body.String(), `href="/tools/assets/access.css"`) ||
+		!strings.Contains(login.Body.String(), `src="/tools/assets/lifebuoy.png"`) {
+		t.Fatal("login did not reference its branding assets")
+	}
+	policy := login.Header().Get("Content-Security-Policy")
+	for _, directive := range []string{"default-src 'none'", "style-src 'self'", "img-src 'self'", "form-action 'self'"} {
+		if !strings.Contains(policy, directive) {
+			t.Errorf("login CSP missing %s", directive)
+		}
+	}
+
 	preAuth = namedCookie(t, login, "rescuarr_form")
 	loggedIn := request(http.MethodPost, "/tools/login", browserURL, url.Values{"password": {password}, "csrf": {preAuth.Value}}, preAuth)
 	status(loggedIn, http.StatusSeeOther)

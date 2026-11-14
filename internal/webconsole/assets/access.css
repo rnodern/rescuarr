@@ -1,0 +1,88 @@
+.access-page {
+  padding: clamp(2rem, 9vh, 5rem) 1rem 2rem;
+}
+
+.access-card {
+  max-width: 25rem;
+  margin-inline: auto;
+  padding: clamp(1.25rem, 6vw, 2rem);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: .85rem;
+  box-shadow: 0 .6rem 1.8rem rgb(0 0 0 / 14%);
+}
+
+.access-header {
+  display: grid;
+  justify-items: center;
+  gap: .55rem;
+  margin-bottom: 1.65rem;
+  text-align: center;
+}
+
+.access-header img { display: block; }
+
+.access-brand {
+  margin: 0;
+  font-size: 1.45rem;
+  font-weight: 700;
+  letter-spacing: -.025em;
+}
+
+.access-header h1 {
+  margin: .35rem 0 0;
+  color: var(--muted);
+  font-size: .875rem;
+  font-weight: 650;
+  letter-spacing: .065em;
+  text-transform: uppercase;
+}
+
+.access-token-help,
+.access-error {
+  margin: 0 0 1rem;
+  font-size: .9rem;
+  overflow-wrap: anywhere;
+}
+
+.access-token-help { color: var(--muted); }
+.access-token-help code { color: var(--ink); }
+
+.access-error {
+  padding: .65rem .75rem;
+  background: var(--highlight);
+  border: 1px solid var(--button-border);
+  border-radius: .45rem;
+  color: var(--focus);
+}
+
+.access-form { display: grid; gap: 1rem; }
+.access-field { display: grid; gap: .4rem; }
+.access-field label { font-size: .875rem; font-weight: 600; }
+
+.access-field input,
+.access-submit {
+  width: 100%;
+  min-width: 0;
+  min-height: 2.875rem;
+  padding: .65rem .8rem;
+  border: 1px solid var(--control-line);
+  border-radius: .45rem;
+  font: inherit;
+}
+
+.access-field input {
+  background: var(--background);
+  color: var(--ink);
+}
+
+.access-submit {
+  margin-top: .2rem;
+  border-color: var(--button-border);
+  background: var(--button);
+  color: #fff;
+  cursor: pointer;
+  font-weight: 650;
+}
+
+.access-submit:hover { background: var(--button-hover); }

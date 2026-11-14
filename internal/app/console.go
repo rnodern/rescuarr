@@ -15,6 +15,7 @@ import (
 	"github.com/rnodern/rescuarr/internal/config"
 	"github.com/rnodern/rescuarr/internal/domain"
 	"github.com/rnodern/rescuarr/internal/store"
+	"github.com/rnodern/rescuarr/internal/webconsole/assets"
 )
 
 //go:embed assets/access.html
@@ -50,6 +51,11 @@ func ConsoleHandler(cfg config.Config, auth *access.Auth, local *store.Store, br
 	mux.HandleFunc("GET "+base+"/login", c.showLogin)
 	mux.HandleFunc("POST "+base+"/login", c.submitLogin)
 	mux.HandleFunc("POST "+base+"/logout", c.logout)
+	for _, name := range []string{"theme.css", "access.css", "lifebuoy.png"} {
+		mux.HandleFunc("GET "+base+"/assets/"+name, func(w http.ResponseWriter, r *http.Request) {
+			http.ServeFileFS(w, r, assets.Files, name)
+		})
+	}
 	mux.Handle(base+"/", c.authenticatedBrowser(browser))
 	return withStatus(local.Ready, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		headers(w)
@@ -117,17 +123,22 @@ func (c *console) showLogin(w http.ResponseWriter, r *http.Request) {
 
 func (c *console) renderAccess(w http.ResponseWriter, r *http.Request, setup bool, status int, message string) {
 	data := struct {
+		Base   string
 		Title  string
 		Action string
 		CSRF   string
 		Error  string
 		Setup  bool
-	}{"Sign in", c.cfg.BasePath + "/login", access.BrowserToken(), message, setup}
+	}{
+		Base: c.cfg.BasePath, Title: "Sign in", Action: c.cfg.BasePath + "/login",
+		CSRF: access.BrowserToken(), Error: message, Setup: setup,
+	}
 	if setup {
 		data.Title = "Set owner password"
 		data.Action = c.cfg.BasePath + "/setup"
 	}
 	c.setCookie(w, r, "rescuarr_form", data.CSRF, 900)
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'self'; img-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
 	_ = consoleTemplates.ExecuteTemplate(w, "access", data)

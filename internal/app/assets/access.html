@@ -4,19 +4,39 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#1b1e25">
   <title>{{.Title}} · Rescuarr</title>
+  <link rel="icon" type="image/png" href="{{.Base}}/assets/lifebuoy.png">
+  <link rel="stylesheet" href="{{.Base}}/assets/theme.css">
+  <link rel="stylesheet" href="{{.Base}}/assets/access.css">
 </head>
 <body>
-  <main>
-    <h1>{{.Title}}</h1>
-    {{if .Error}}<p role="alert">{{.Error}}</p>{{end}}
-    {{if .Setup}}<p>Retrieve the current setup or recovery token from the private <code>setup-token</code> file in the Rescuarr data directory.</p>{{end}}
-    <form method="post" action="{{.Action}}">
-      <input type="hidden" name="csrf" value="{{.CSRF}}">
-      {{if .Setup}}<p><label>Setup or recovery token <input name="token" autocomplete="off" required></label></p>{{end}}
-      <p><label>Password <input name="password" type="password" autocomplete="{{if .Setup}}new-password{{else}}current-password{{end}}" maxlength="256" required></label></p>
-      <button type="submit">{{.Title}}</button>
-    </form>
+  <main class="access-page">
+    <section class="access-card" aria-labelledby="access-title">
+      <header class="access-header">
+        <img src="{{.Base}}/assets/lifebuoy.png" width="64" height="64" alt="">
+        <p class="access-brand">Rescuarr</p>
+        <h1 id="access-title">{{.Title}}</h1>
+      </header>
+      {{if .Error}}<p class="access-error" role="alert">{{.Error}}</p>{{end}}
+      {{if .Setup}}
+      <p id="setup-token-help" class="access-token-help">Open the private <code>setup-token</code> file in the Rescuarr data directory and paste its token below.</p>
+      {{end}}
+      <form class="access-form" method="post" action="{{.Action}}">
+        <input type="hidden" name="csrf" value="{{.CSRF}}">
+        {{if .Setup}}
+        <div class="access-field">
+          <label for="setup-token">Setup or recovery token</label>
+          <input id="setup-token" name="token" autocomplete="off" spellcheck="false" autocapitalize="none" aria-describedby="setup-token-help" required>
+        </div>
+        {{end}}
+        <div class="access-field">
+          <label for="owner-password">Password</label>
+          <input id="owner-password" name="password" type="password" autocomplete="{{if .Setup}}new-password{{else}}current-password{{end}}" maxlength="256" required>
+        </div>
+        <button class="access-submit" type="submit">{{.Title}}</button>
+      </form>
+    </section>
   </main>
 </body>
 </html>
