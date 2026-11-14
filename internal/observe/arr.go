@@ -49,6 +49,7 @@ type SystemStatus struct {
 	Branch    string
 	Package   string
 	OSFamily  string
+	PathOS    string
 	URLBase   string
 	StartedAt time.Time
 }
@@ -60,6 +61,9 @@ func (a *Arr) Status(ctx context.Context) (SystemStatus, error) {
 		Branch    string    `json:"branch"`
 		Package   string    `json:"packageVersion"`
 		OSName    string    `json:"osName"`
+		IsLinux   bool      `json:"isLinux"`
+		IsOSX     bool      `json:"isOsx"`
+		IsWindows bool      `json:"isWindows"`
 		URLBase   string    `json:"urlBase"`
 		StartedAt time.Time `json:"startTime"`
 	}
@@ -69,9 +73,16 @@ func (a *Arr) Status(ctx context.Context) (SystemStatus, error) {
 	if !strings.EqualFold(wire.Name, string(a.reader.product)) || !arrVersion.MatchString(wire.Version) {
 		return SystemStatus{}, ErrResponse
 	}
+	var pathOS string
+	switch {
+	case wire.IsWindows && !wire.IsLinux && !wire.IsOSX:
+		pathOS = "windows"
+	case !wire.IsWindows && wire.IsLinux != wire.IsOSX:
+		pathOS = "unix"
+	}
 	return SystemStatus{
 		Product: a.reader.product, Version: wire.Version, Branch: boundedText(wire.Branch, 64),
-		Package: boundedText(wire.Package, 128), OSFamily: boundedText(wire.OSName, 64),
+		Package: boundedText(wire.Package, 128), OSFamily: boundedText(wire.OSName, 64), PathOS: pathOS,
 		URLBase: boundedText(wire.URLBase, 512), StartedAt: wire.StartedAt,
 	}, nil
 }
