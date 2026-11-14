@@ -73,6 +73,10 @@ func InspectBackup(ctx context.Context, input string) (BackupInfo, error) {
 		return BackupInfo{}, err
 	}
 	defer db.Close()
+	return inspectDatabase(ctx, db)
+}
+
+func inspectDatabase(ctx context.Context, db *sql.DB) (BackupInfo, error) {
 	var check string
 	if err := db.QueryRowContext(ctx, "PRAGMA integrity_check").Scan(&check); err != nil {
 		return BackupInfo{}, fmt.Errorf("check backup integrity: %w", err)
@@ -106,6 +110,9 @@ func InspectBackup(ctx context.Context, input string) (BackupInfo, error) {
 	if err := db.QueryRowContext(ctx, "SELECT installation_id FROM app_state WHERE singleton = 1").Scan(&installationID); err != nil {
 		return BackupInfo{}, fmt.Errorf("check backup installation: %w", err)
 	}
+	if installationID == "" {
+		return BackupInfo{}, errors.New("backup has an empty installation ID")
+	}
 	return BackupInfo{SchemaRevision: known[applied-1].number}, nil
 }
 
@@ -122,16 +129,20 @@ func Restore(ctx context.Context, dir, input string, now time.Time) (string, err
 	if err != nil {
 		return "", err
 	}
+	if _, err := inspectDatabase(ctx, source); err != nil {
+		_ = source.Close()
+		return "", err
+	}
 	staging, shotErr := snapshot(ctx, source, dir)
 	if err := errors.Join(shotErr, source.Close()); err != nil {
 		return "", err
 	}
 	defer os.Remove(staging)
-	if _, err := InspectBackup(ctx, staging); err != nil {
-		return "", err
-	}
 	if err := prepareRestore(ctx, staging, now); err != nil {
 		return "", err
+	}
+	if _, err := InspectBackup(ctx, staging); err != nil {
+		return "", fmt.Errorf("verify staged restore: %w", err)
 	}
 
 	destination := filepath.Join(dir, DatabaseName)

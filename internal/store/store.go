@@ -4,16 +4,13 @@ package store
 import (
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
 	"database/sql"
 	"embed"
 	"errors"
 	"fmt"
-	"io/fs"
 	"net/url"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync/atomic"
 
@@ -241,99 +238,4 @@ func openDB(path, mode string, connections int) (*sql.DB, error) {
 	db.SetMaxOpenConns(connections)
 	db.SetMaxIdleConns(connections)
 	return db, nil
-}
-
-type revision struct {
-	number int
-	body   string
-	hash   string
-}
-
-func revisions(source fs.FS) ([]revision, error) {
-	paths, err := fs.Glob(source, "migrations/*.sql")
-	if err != nil {
-		return nil, err
-	}
-	var result []revision
-	for _, path := range paths {
-		name := filepath.Base(path)
-		prefix, _, ok := strings.Cut(name, "_")
-		number, err := strconv.Atoi(prefix)
-		if err != nil || !ok || len(prefix) != 4 || number <= 0 ||
-			len(result) > 0 && result[len(result)-1].number >= number {
-			return nil, fmt.Errorf("invalid migration order or filename %q", name)
-		}
-		body, err := fs.ReadFile(source, path)
-		if err != nil {
-			return nil, err
-		}
-		result = append(result, revision{number: number, body: string(body), hash: fmt.Sprintf("%x", sha256.Sum256(body))})
-	}
-	return result, nil
-}
-
-func checkMigrations(ctx context.Context, db *sql.DB, known []revision) (int, error) {
-	rows, err := db.QueryContext(ctx, "SELECT revision, checksum FROM schema_migrations ORDER BY revision")
-	if err != nil {
-		return 0, err
-	}
-	defer rows.Close()
-	var applied int
-	for rows.Next() {
-		var number int
-		var checksum string
-		if err := rows.Scan(&number, &checksum); err != nil {
-			return 0, err
-		}
-		if applied == len(known) || known[applied].number != number || known[applied].hash != checksum {
-			return 0, fmt.Errorf("schema revision %d is incompatible with this binary", number)
-		}
-		applied++
-	}
-	return applied, rows.Err()
-}
-
-func migrate(ctx context.Context, db *sql.DB, source fs.FS, existed bool) error {
-	known, err := revisions(source)
-	if err != nil {
-		return err
-	}
-	if !existed {
-		if _, err := db.ExecContext(ctx, `CREATE TABLE schema_migrations (
-			revision INTEGER PRIMARY KEY, checksum TEXT NOT NULL) STRICT`); err != nil {
-			return err
-		}
-	}
-	applied, err := checkMigrations(ctx, db, known)
-	if err != nil {
-		return fmt.Errorf("check schema: %w", err)
-	}
-	if applied > 0 && applied < len(known) {
-		var path string
-		if err := db.QueryRowContext(ctx, "SELECT file FROM pragma_database_list WHERE name = 'main'").Scan(&path); err != nil {
-			return err
-		}
-		output := filepath.Join(filepath.Dir(path), fmt.Sprintf("pre-migration-%04d-%s.sqlite3", known[applied-1].number, NewID()))
-		if _, err := publishSnapshot(ctx, db, output); err != nil {
-			return fmt.Errorf("preserve pre-migration database: %w", err)
-		}
-	}
-	for _, migration := range known[applied:] {
-		tx, err := db.BeginTx(ctx, nil)
-		if err != nil {
-			return err
-		}
-		_, err = tx.ExecContext(ctx, migration.body)
-		if err == nil {
-			_, err = tx.ExecContext(ctx, "INSERT INTO schema_migrations (revision, checksum) VALUES (?, ?)", migration.number, migration.hash)
-		}
-		if err != nil {
-			_ = tx.Rollback()
-			return fmt.Errorf("apply migration %04d: %w", migration.number, err)
-		}
-		if err := tx.Commit(); err != nil {
-			return fmt.Errorf("commit migration %04d: %w", migration.number, err)
-		}
-	}
-	return nil
 }

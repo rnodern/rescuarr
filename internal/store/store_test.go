@@ -206,3 +206,81 @@ func TestSecretReferences(t *testing.T) {
 		}
 	}
 }
+
+func TestMalformedBackupDoesNotReplaceLocalState(t *testing.T) {
+	ctx := t.Context()
+	dir := filepath.Join(t.TempDir(), "state")
+	s, err := Open(ctx, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = s.Close() }()
+	if err := s.Write(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, "UPDATE app_state SET mode = 'assist'")
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	before, err := s.State(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, change := range []struct {
+		name string
+		sql  string
+	}{
+		{"missing owner table", "DROP TABLE owner"},
+		{"changed owner table", "ALTER TABLE owner RENAME COLUMN password_hash TO wrong_hash"},
+		{"unexpected view", "CREATE VIEW unexpected AS SELECT * FROM app_state"},
+	} {
+		t.Run(change.name, func(t *testing.T) {
+			backup := filepath.Join(t.TempDir(), "backup.sqlite")
+			if _, err := s.Backup(t.Context(), backup); err != nil {
+				t.Fatal(err)
+			}
+			db, err := openDB(backup, "rw", 1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, editErr := db.ExecContext(t.Context(), change.sql)
+			if err := errors.Join(editErr, db.Close()); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := InspectBackup(t.Context(), backup); err == nil {
+				t.Fatal("doctor accepted an altered schema with an intact migration ledger")
+			}
+			if err := s.Close(); err != nil {
+				t.Fatal(err)
+			}
+			previous, restoreErr := Restore(t.Context(), dir, backup, time.Now())
+			s, err = Open(t.Context(), dir)
+			if err != nil {
+				t.Fatalf("valid destination became unusable: %v", err)
+			}
+			if restoreErr == nil || previous != "" {
+				t.Fatalf("malformed backup reached the replacement step: %q, %v", previous, restoreErr)
+			}
+			after, err := s.State(t.Context())
+			if err != nil || after != before {
+				t.Fatalf("valid destination was changed: %+v, %v", after, err)
+			}
+		})
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err := openDB(DatabasePath(dir), "rw", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, editErr := db.ExecContext(ctx, "DROP TABLE owner")
+	if err := errors.Join(editErr, db.Close()); err != nil {
+		t.Fatal(err)
+	}
+	if broken, err := Open(ctx, dir); err == nil {
+		_ = broken.Close()
+		t.Fatal("startup accepted an altered schema with an intact migration ledger")
+	}
+}
