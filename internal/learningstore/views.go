@@ -219,3 +219,39 @@ func Replay(ctx context.Context, snapshot Snapshot, cases []learning.FrozenCase,
 func validEpochs(epochs learning.Epochs) bool {
 	return validRef(epochs.Installation) && epochs.Adapter > 0 && epochs.Config > 0 && epochs.Policy > 0
 }
+
+// CatalogueEntry is a bounded owner projection that does not designate any
+// pattern as active. Recommendations require independently current epochs.
+type CatalogueEntry struct {
+	ID       domain.PatternID
+	Product  domain.Product
+	Family   learning.Family
+	Reason   domain.ReasonCode
+	Paused   bool
+	Revision domain.Revision
+}
+
+func (s *Store) Catalogue(ctx context.Context, after domain.PatternID, limit int) ([]CatalogueEntry, error) {
+	if (after != "" && !validPatternID(after)) || limit <= 0 || limit > maxPage {
+		return nil, learning.ErrInvalid
+	}
+	var result []CatalogueEntry
+	err := s.local.Read(ctx, func(tx *sql.Tx) error {
+		rows, err := tx.QueryContext(ctx, "SELECT "+patternColumns+" FROM learning_patterns WHERE id > ? ORDER BY id LIMIT ?", after, limit)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			record, err := scanPattern(rows)
+			if err != nil {
+				return err
+			}
+			result = append(result, CatalogueEntry{ID: record.id, Product: record.pattern.Signature.Product,
+				Family: record.pattern.Signature.Family, Reason: record.pattern.Signature.Reason,
+				Paused: record.controls.Paused, Revision: record.controls.Revision})
+		}
+		return rows.Err()
+	})
+	return result, err
+}

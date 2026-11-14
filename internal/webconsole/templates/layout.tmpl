@@ -31,6 +31,7 @@
       </a>{{end}}
       {{if .HasConnections}}<a href="{{.Base}}/connections"{{if eq .Active "connections"}} aria-current="page"{{end}}>Connections</a>{{end}}
       {{if .HasNotifications}}<a href="{{.Base}}/notifications"{{if eq .Active "notifications"}} aria-current="page"{{end}}>Notifications</a>{{end}}
+      {{if .HasLearning}}<a href="{{.Base}}/learning"{{if eq .Active "learning"}} aria-current="page"{{end}}>Learning</a>{{end}}
     </nav>
   </aside>
   <main id="main" tabindex="-1">

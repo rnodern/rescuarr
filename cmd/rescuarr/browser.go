@@ -6,6 +6,7 @@ import (
 	"github.com/rnodern/rescuarr/internal/access"
 	"github.com/rnodern/rescuarr/internal/app"
 	"github.com/rnodern/rescuarr/internal/config"
+	"github.com/rnodern/rescuarr/internal/learningstore"
 	"github.com/rnodern/rescuarr/internal/observeservice"
 	"github.com/rnodern/rescuarr/internal/recoveryservice"
 	"github.com/rnodern/rescuarr/internal/store"
@@ -13,6 +14,7 @@ import (
 )
 
 func browserHandler(cfg config.Config, auth *access.Auth, local *store.Store, observations *observeservice.Service, notifications webconsole.NotificationService, recoveryPause webconsole.RecoveryPause) http.Handler {
+	patterns, _ := learningstore.New(local)
 	browser := webconsole.New(webconsole.Options{
 		BasePath:         cfg.BasePath,
 		Read:             recoveryViews{ConsoleReader: observations, local: local},
@@ -21,6 +23,7 @@ func browserHandler(cfg config.Config, auth *access.Auth, local *store.Store, ob
 		ImportPreview:    recoveryservice.NewPreviewService(observations, local, nil, app.SystemClock{}),
 		Authorize:        app.CurrentBrowserSession,
 		Notifications:    notifications,
+		Learning:         patterns,
 		RecoveryPause:    recoveryPause,
 		ProwlDelivery:    cfg.ProwlDelivery,
 	})
