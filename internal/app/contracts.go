@@ -26,18 +26,20 @@ type Overview struct {
 	Mode              domain.Mode
 	Paused            bool
 	ReconcileRequired bool
+	ScanningEpisodes  bool
 	Cases             int
 	HeldCases         int
 	OpenIncidents     int
 }
 
 type CaseQuery struct {
-	Instance domain.InstanceID
-	State    domain.CaseState
-	Reason   domain.ReasonCode
-	Search   string
-	After    string
-	Limit    int
+	ExcludeClosed bool
+	Instance      domain.InstanceID
+	State         domain.CaseState
+	Reason        domain.ReasonCode
+	Search        string
+	After         string
+	Limit         int
 }
 
 type CasePage struct {

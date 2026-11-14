@@ -55,7 +55,7 @@ func (c console) activity(w http.ResponseWriter, r *http.Request) {
 		}
 		state, event, attention := activityLabel(entry.Kind, entry.Reason)
 		row := activityRow{RecoveryActivityEntry: entry, Status: state, Event: event, Attention: attention}
-		if entry.Reason != "" && (entry.Kind != "action_readback_recorded" || state == "Recorded") {
+		if entry.Reason != "" && entry.Kind != "recovery_connection_removed" && (entry.Kind != "action_readback_recorded" || state == "Recorded") {
 			row.Detail = reasonLabel(entry.Reason)
 		}
 		content.Rows = append(content.Rows, row)
@@ -97,6 +97,8 @@ func activityLabel(kind domain.EventKind, reason domain.ReasonCode) (status, eve
 		return "Verified", "Sonarr import verified. Case closed.", false
 	case "recovery_queue_missing":
 		return "Closed", "Download left the queue", true
+	case "recovery_connection_removed":
+		return "Closed", "Closed after connection removal", false
 	case "recovery_verified":
 		return "Verified", "Recovery verified", false
 	case "action_readback_recorded", "action_outcome":

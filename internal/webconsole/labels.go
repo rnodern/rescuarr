@@ -64,6 +64,8 @@ func reasonLabel(code domain.ReasonCode) string {
 		return "The download left the queue. An import could not be verified."
 	case "queue_presence_unknown":
 		return "The download is missing from the latest queue scan"
+	case "connection_removed":
+		return "The service connection was removed"
 	case "download_failed":
 		return "Download failed"
 	case "target_ambiguous":

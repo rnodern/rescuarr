@@ -226,6 +226,14 @@ func (j *Journal) allowed(ctx context.Context, tx *sql.Tx, approval Approval, no
 		(approval.Actor == automaticImportActor && mode != domain.ModeAutonomous) {
 		return ErrHeld
 	}
+	var removed bool
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM observe_instances WHERE id = ? AND health = 'removed')`,
+		approval.Proposal.Operation.Job.Instance.ID).Scan(&removed); err != nil {
+		return err
+	}
+	if removed {
+		return ErrHeld
+	}
 	return j.authorize(ctx, tx, approval, now)
 }
 

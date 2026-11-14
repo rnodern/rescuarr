@@ -16,7 +16,6 @@ import (
 type casesView struct {
 	Cases    []domain.Case
 	Query    app.CaseQuery
-	States   []domain.CaseState
 	Next     string
 	Services []observeservice.InstanceStatus
 }
@@ -36,12 +35,13 @@ var caseStates = []domain.CaseState{
 func (c console) cases(w http.ResponseWriter, r *http.Request) {
 	params := r.URL.Query()
 	query := app.CaseQuery{
-		Instance: domain.InstanceID(params.Get("instance")),
-		State:    domain.CaseState(params.Get("state")),
-		Reason:   domain.ReasonCode(params.Get("cause")),
-		Search:   strings.TrimSpace(params.Get("q")),
-		After:    params.Get("after"),
-		Limit:    50,
+		ExcludeClosed: params.Get("exclude_closed") == "1",
+		Instance:      domain.InstanceID(params.Get("instance")),
+		State:         domain.CaseState(params.Get("state")),
+		Reason:        domain.ReasonCode(params.Get("cause")),
+		Search:        strings.TrimSpace(params.Get("q")),
+		After:         params.Get("after"),
+		Limit:         50,
 	}
 	if raw := params.Get("limit"); raw != "" {
 		limit, err := strconv.Atoi(raw)
@@ -55,7 +55,7 @@ func (c console) cases(w http.ResponseWriter, r *http.Request) {
 		(query.Reason != "" && !localID(string(query.Reason))) ||
 		(query.State != "" && !slicesState(query.State)) ||
 		len(query.Search) > 128 || len(query.After) > 128 {
-		c.errorPage(w, r, http.StatusBadRequest, "cases", "Invalid case filters", "Remove the filters or start again from Cases.")
+		c.errorPage(w, r, http.StatusBadRequest, "cases", "Invalid queue filters", "Remove the filters or start again from the Recovery Queue.")
 		return
 	}
 	status, ok := c.loadStatus(w, r)
@@ -67,7 +67,7 @@ func (c console) cases(w http.ResponseWriter, r *http.Request) {
 		c.readError(w, r, err)
 		return
 	}
-	content := casesView{Cases: cases.Cases, Query: query, States: caseStates}
+	content := casesView{Cases: cases.Cases, Query: query}
 	if c.Connections != nil {
 		content.Services, err = c.Connections.Instances(r.Context())
 		if err != nil {
@@ -77,7 +77,7 @@ func (c console) cases(w http.ResponseWriter, r *http.Request) {
 	}
 	if cases.After != "" {
 		next := url.Values{}
-		for _, key := range []string{"instance", "state", "cause", "q", "limit"} {
+		for _, key := range []string{"instance", "state", "cause", "q", "limit", "exclude_closed"} {
 			if v := params.Get(key); v != "" {
 				next.Set(key, v)
 			}
@@ -85,7 +85,7 @@ func (c console) cases(w http.ResponseWriter, r *http.Request) {
 		next.Set("after", cases.After)
 		content.Next = c.BasePath + "/cases?" + next.Encode()
 	}
-	c.render(w, r, http.StatusOK, "cases", page{Title: "Cases", Active: "cases", Status: status, Body: content})
+	c.render(w, r, http.StatusOK, "cases", page{Title: "Recovery Queue", Active: "cases", Status: status, Body: content})
 }
 
 func slicesState(state domain.CaseState) bool {

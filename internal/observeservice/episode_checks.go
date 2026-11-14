@@ -41,6 +41,8 @@ func (s *Service) reviewEpisodeNames(ctx context.Context, cfg observe.Config, ar
 	if len(rows) == 0 {
 		return nil
 	}
+	s.episodeScans.Add(1)
+	defer s.episodeScans.Add(-1)
 	ctx, cancel := context.WithTimeout(ctx, episodeCheckBudget)
 	defer cancel()
 	roots, err := arr.RootPaths(ctx)

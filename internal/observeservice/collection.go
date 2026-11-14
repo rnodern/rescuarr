@@ -55,7 +55,7 @@ func (s *Service) collect(ctx context.Context, id domain.InstanceID) error {
 	var generation, complete uint64
 	localErr := s.store.Read(ctx, func(tx *sql.Tx) error {
 		return tx.QueryRowContext(ctx, `SELECT epoch, product, display_name, base_url, secret_ref, connection_revision, version, generation, complete_scans
-			FROM observe_instances WHERE id = ?`, id).Scan(&instance.Ref.Epoch, &instance.Product, &instance.DisplayName, &instance.BaseURL,
+			FROM observe_instances WHERE id = ? AND health <> ?`, id, removedConnection).Scan(&instance.Ref.Epoch, &instance.Product, &instance.DisplayName, &instance.BaseURL,
 			&instance.SecretRef, &instance.ConnectionRevision, &instance.UpstreamVersion, &generation, &complete)
 	})
 	if errors.Is(localErr, sql.ErrNoRows) {

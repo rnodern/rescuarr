@@ -78,6 +78,8 @@ func New(options Options) http.Handler {
 		mux.HandleFunc("GET "+base+"/connections", c.connections)
 		mux.HandleFunc("POST "+base+"/connections", c.addConnection)
 		mux.HandleFunc("POST "+base+"/connections/{id}/check", c.checkConnection)
+		mux.HandleFunc("GET "+base+"/connections/{id}/remove", c.confirmRemoveConnection)
+		mux.HandleFunc("POST "+base+"/connections/{id}/remove", c.removeConnection)
 	}
 	if c.Notifications != nil {
 		mux.HandleFunc("GET "+base+"/notifications", c.notifications)
@@ -89,14 +91,14 @@ func New(options Options) http.Handler {
 	if err != nil {
 		panic(err)
 	}
-	for _, name := range []string{"console.css", "console.js"} {
+	for _, name := range []string{"console.css", "console.js", "lifebuoy.png"} {
 		mux.HandleFunc("GET "+base+"/assets/"+name, func(w http.ResponseWriter, r *http.Request) {
 			http.ServeFileFS(w, r, assets, name)
 		})
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "private, no-store")
-		w.Header().Set("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
+		w.Header().Set("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
 		w.Header().Set("Referrer-Policy", "same-origin")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		if c.Authorize != nil && c.Read != nil {
@@ -145,7 +147,7 @@ func (c console) errorPage(w http.ResponseWriter, r *http.Request, code int, act
 
 func (c console) readError(w http.ResponseWriter, r *http.Request, err error) {
 	if errors.Is(err, app.ErrNotFound) {
-		c.errorPage(w, r, http.StatusNotFound, "cases", "Record unavailable", "Return to Cases to choose a current record.")
+		c.errorPage(w, r, http.StatusNotFound, "cases", "Record unavailable", "Return to the Recovery Queue to choose a current download.")
 		return
 	}
 	c.errorPage(w, r, http.StatusServiceUnavailable, "", "Local data is unavailable", "Try refreshing after the local service recovers.")

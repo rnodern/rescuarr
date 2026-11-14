@@ -11,7 +11,7 @@
         {{else if .CaseTitle}}{{.CaseTitle}}{{else if .CaseID}}Case {{.CaseID}}{{else}}Rescuarr{{end}}</th>
       <td data-label="Status"><span class="chip{{if .Attention}} hold{{end}}">{{.Status}}</span></td>
       <td data-label="What happened">{{.Event}}{{if .Detail}}<span class="row-note">{{.Detail}}</span>{{end}}</td>
-      <td data-label="Time"><time datetime="{{.OccurredAt.UTC.Format "2006-01-02T15:04:05Z"}}">{{when .OccurredAt}}</time></td>
+      <td data-label="Time">{{template "local-time" .OccurredAt}}</td>
     </tr>{{end}}
   </tbody>
 </table>

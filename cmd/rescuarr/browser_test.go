@@ -35,7 +35,6 @@ func TestBrowserUsesOwnerSessionAndLocalState(t *testing.T) {
 		t.Fatal(err)
 	}
 	const key = "synthetic-connection-key"
-	const keyFile = "fixture-key"
 	const upstream = "http://sonarr.invalid/arr"
 	calls := 0
 	var importedAt time.Time
@@ -138,15 +137,8 @@ func TestBrowserUsesOwnerSessionAndLocalState(t *testing.T) {
 		}
 	}
 	const origin = "http://127.0.0.1:8787"
-	privateDir := filepath.Join(cfg.DataDir, "secrets")
-	if err := os.Mkdir(privateDir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(privateDir, keyFile), []byte(key+"\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
 	form := url.Values{"csrf": {session.CSRF}, "product": {"sonarr"}, "name": {"Test Sonarr <lab>"},
-		"url": {upstream}, "secret_ref": {keyFile}}
+		"url": {upstream}, "api_key": {key}}
 	if response := request(http.MethodPost, base+"/connections", session.Token, "https://external.invalid", form); response.Code != http.StatusForbidden {
 		t.Fatalf("cross-origin connection add returned %d", response.Code)
 	}
@@ -155,7 +147,9 @@ func TestBrowserUsesOwnerSessionAndLocalState(t *testing.T) {
 	}
 	connections := perform(base+"/connections", session.Token).Body.String()
 	check := regexp.MustCompile(`action="(/rescuarr/connections/[^/]+/check)"`).FindStringSubmatch(connections)
-	if len(check) != 2 || !strings.Contains(connections, "Awaiting first check") || !strings.Contains(connections, "Test Sonarr &lt;lab&gt;") {
+	remove := regexp.MustCompile(`href="(/rescuarr/connections/[^/]+/remove)"`).FindStringSubmatch(connections)
+	if len(check) != 2 || len(remove) != 2 || !strings.Contains(connections, "Awaiting first check") ||
+		!strings.Contains(connections, "Test Sonarr &lt;lab&gt;") || !strings.Contains(connections, `name="api_key" type="password"`) {
 		t.Fatal("saved connection or its check form did not render")
 	}
 	if response := perform(check[1], session.Token); response.Code != http.StatusMethodNotAllowed || calls != 0 {
@@ -192,7 +186,7 @@ func TestBrowserUsesOwnerSessionAndLocalState(t *testing.T) {
 			t.Fatalf("search did not find the saved case for %q", query)
 		}
 	}
-	for _, private := range []string{key, keyFile, upstream, "fixture-job", "/private/fixture-path", "fixture unclassified message"} {
+	for _, private := range []string{key, upstream, "fixture-job", "/private/fixture-path", "fixture unclassified message"} {
 		if strings.Contains(connections, private) || strings.Contains(cases, private) || strings.Contains(detail, private) || strings.Contains(activity, private) {
 			t.Fatal("private connection or queue data appeared in the console")
 		}
@@ -220,6 +214,33 @@ func TestBrowserUsesOwnerSessionAndLocalState(t *testing.T) {
 	activity = perform(base+"/activity", session.Token).Body.String()
 	if strings.Count(activity, "Sonarr import verified. Case closed.") != 1 || !strings.Contains(activity, "An import could not be verified") {
 		t.Fatal("import verification and preceding closure did not appear exactly once in activity")
+	}
+
+	beforeRemove := calls
+	if response := perform(remove[1], session.Token); response.Code != http.StatusOK ||
+		!strings.Contains(response.Body.String(), "Past activity stays available") || calls != beforeRemove {
+		t.Fatalf("connection removal confirmation returned %d", response.Code)
+	}
+	csrf := url.Values{"csrf": {session.CSRF}}
+	for _, attempt := range []struct {
+		origin string
+		form   url.Values
+	}{{"https://external.invalid", csrf}, {origin, url.Values{"csrf": {"invalid"}}}} {
+		if response := request(http.MethodPost, remove[1], session.Token, attempt.origin, attempt.form); response.Code != http.StatusForbidden {
+			t.Fatalf("untrusted removal returned %d", response.Code)
+		}
+	}
+	if response := request(http.MethodPost, remove[1], session.Token, origin, csrf); response.Code != http.StatusSeeOther ||
+		response.Header().Get("Location") != base+"/connections" {
+		t.Fatalf("connection removal returned %d", response.Code)
+	}
+	if response := request(http.MethodPost, check[1], session.Token, origin, csrf); response.Code != http.StatusNotFound || calls != beforeRemove {
+		t.Fatalf("removed queue check returned %d with %d additional upstream requests", response.Code, calls-beforeRemove)
+	}
+	if strings.Contains(perform(base+"/connections", session.Token).Body.String(), "Test Sonarr") ||
+		!strings.Contains(perform(base+"/activity", session.Token).Body.String(), "Sonarr import verified. Case closed.") ||
+		!strings.Contains(perform(detailPath[1], session.Token).Body.String(), "Sonarr imported this download and linked the episode") {
+		t.Fatal("the removed connection remained listed or its recovery history disappeared")
 	}
 }
 

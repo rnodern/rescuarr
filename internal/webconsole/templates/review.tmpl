@@ -1,6 +1,6 @@
 {{define "review"}}
 {{template "start" .}}
-<p><a href="{{.Base}}/cases/{{.Body.Proposal.CaseID}}">Back to case {{.Body.Proposal.CaseID}}</a></p>
+<p><a href="{{.Base}}/cases/{{.Body.Proposal.CaseID}}">Back to download</a></p>
 <h1>{{.Title}}</h1>
 {{if .Body.Hold}}<p class="notice">{{.Body.Hold}}</p>{{end}}
 <div class="case-grid">
@@ -14,7 +14,7 @@
     {{if .Body.Proposal.Guards}}<ul class="links">{{range .Body.Proposal.Guards}}<li>{{reason .Reason}}<span>{{if .Passed}}Passed{{else}}Held{{end}}</span>
       {{if .Evidence}}<details><summary>Evidence references</summary><ul>{{range .Evidence}}<li>{{.}}</li>{{end}}</ul></details>{{end}}
     </li>{{end}}</ul>{{else}}<p>Eligibility evidence is unavailable.</p>{{end}}
-    <dl><dt>Approval deadline</dt><dd>{{when .Body.Proposal.ExpiresAt}}</dd>
+    <dl><dt>Approval deadline</dt><dd>{{template "local-time" .Body.Proposal.ExpiresAt}}</dd>
       <dt>Case revision</dt><dd>{{.Body.Proposal.CaseRevision}}</dd>
       <dt>Policy revision</dt><dd>{{.Body.Proposal.PolicyRevision}}</dd>
       <dt>Capability revision</dt><dd>{{.Body.Proposal.CapabilityRevision}}</dd></dl>
@@ -34,12 +34,12 @@
 
 {{define "intent"}}
 {{template "start" .}}
-<p><a href="{{.Base}}/cases/{{.Body.Proposal.CaseID}}">Back to case {{.Body.Proposal.CaseID}}</a></p>
+<p><a href="{{.Base}}/cases/{{.Body.Proposal.CaseID}}">Back to download</a></p>
 <h1>{{.Title}}</h1>
 <p>{{intent .Body.State}}</p>
 <section class="panel section">
   <h2>Requested {{action .Body.Proposal.Operation.Action}}</h2>
-  <p>Created {{when .Body.CreatedAt}}</p>
+  <p>Created {{template "local-time" .Body.CreatedAt}}</p>
   <ul class="links">{{range .Body.Proposal.Operation.Effects}}<li>{{effect .Kind}}<span>{{target .Target}}</span></li>{{end}}</ul>
 </section>
 {{template "end" .}}

@@ -20,6 +20,7 @@ func (s *Service) Overview(ctx context.Context) (app.Overview, error) {
 			FROM observe_revision, app_state WHERE observe_revision.singleton = 1 AND app_state.singleton = 1`).
 			Scan(&result.Revision, &result.Mode, &result.ReconcileRequired, &result.Cases, &result.HeldCases)
 	})
+	result.ScanningEpisodes = s.episodeScans.Load() > 0
 	return result, err
 }
 
@@ -39,7 +40,10 @@ func (s *Service) Cases(ctx context.Context, query app.CaseQuery) (app.CasePage,
 		criteria, args = append(criteria, "c.instance_id = ?"), append(args, query.Instance)
 	}
 	if query.State != "" {
-		criteria, args = append(criteria, "state = ?"), append(args, query.State)
+		criteria, args = append(criteria, "c.state = ?"), append(args, query.State)
+	}
+	if query.ExcludeClosed {
+		criteria, args = append(criteria, "c.state <> ?"), append(args, domain.CaseClosed)
 	}
 	if query.Reason != "" {
 		criteria, args = append(criteria, "reason = ?"), append(args, query.Reason)

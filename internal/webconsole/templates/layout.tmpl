@@ -3,40 +3,51 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#70212c">
   <title>{{.Title}} · Rescuarr</title>
+  <link rel="icon" type="image/png" href="{{.Base}}/assets/lifebuoy.png">
   <link rel="stylesheet" href="{{.Base}}/assets/console.css">
   <script src="{{.Base}}/assets/console.js" defer></script>
 </head>
 <body>
 <a class="skip" href="#main">Skip to content</a>
+<header class="masthead">
+  <a class="brand" href="{{.Base}}/"><img src="{{.Base}}/assets/lifebuoy.png" width="36" height="36" alt="">Rescuarr</a>
+  <div class="masthead-actions">
+    {{if .Status.Mode}}<div data-status-url="{{.Base}}/fragments/status" aria-live="polite">{{template "status" .}}</div>{{end}}
+    {{if .CSRF}}<form method="post" action="{{.Base}}/logout">
+      <input type="hidden" name="csrf" value="{{.CSRF}}">
+      <button class="sign-out" type="submit">Sign out</button>
+    </form>{{end}}
+  </div>
+</header>
 <div class="shell">
   <aside class="sidebar">
-    <a class="brand" href="{{.Base}}/">Rescuarr</a>
     <nav aria-label="Main navigation">
       <a href="{{.Base}}/"{{if eq .Active "overview"}} aria-current="page"{{end}}>Overview</a>
-      <a href="{{.Base}}/cases"{{if eq .Active "cases"}} aria-current="page"{{end}}>Cases</a>
-      {{if .HasRecoveryActivity}}<a href="{{.Base}}/activity"{{if eq .Active "activity"}} aria-current="page"{{end}}>Activity</a>{{end}}
+      <a href="{{.Base}}/cases"{{if eq .Active "cases"}} aria-current="page"{{end}}>Recovery Queue</a>
+      {{if .HasRecoveryActivity}}<a href="{{.Base}}/activity"{{if eq .Active "activity"}} aria-current="page"{{end}}>Activity
+        <span class="activity-spinner" id="episode-scanning" role="status"{{if not .Status.ScanningEpisodes}} hidden{{end}}><span class="sr-only">Checking episode filenames</span></span>
+      </a>{{end}}
       {{if .HasConnections}}<a href="{{.Base}}/connections"{{if eq .Active "connections"}} aria-current="page"{{end}}>Connections</a>{{end}}
       {{if .HasNotifications}}<a href="{{.Base}}/notifications"{{if eq .Active "notifications"}} aria-current="page"{{end}}>Notifications</a>{{end}}
     </nav>
-    {{if .CSRF}}<form method="post" action="{{.Base}}/logout">
-      <input type="hidden" name="csrf" value="{{.CSRF}}">
-      <button type="submit">Sign out</button>
-    </form>{{end}}
   </aside>
-  <div class="workspace">
-    {{if .Status.Mode}}<header class="topbar">
-      <div data-status-url="{{.Base}}/fragments/status" aria-live="polite">{{template "status" .}}</div>
-    </header>{{end}}
-    <main id="main" tabindex="-1">
+  <main id="main" tabindex="-1">
 {{end}}
 
-{{define "end"}}</main></div></div></body></html>{{end}}
+{{define "end"}}</main></div></body></html>{{end}}
 
 {{define "status"}}
-  {{if .Status.Paused}}<span class="chip hold">Actions paused</span>
-  {{else if .Status.ReconcileRequired}}<span class="chip hold">Reconciliation required</span>
-  {{else}}<span class="chip">{{mode .Status.Mode}}</span>{{end}}
+  <span class="chip{{if or .Status.Paused .Status.ReconcileRequired}} hold{{end}}" data-episode-scanning="{{.Status.ScanningEpisodes}}">
+  {{- if .Status.Paused}}Actions paused
+  {{- else if .Status.ReconcileRequired}}Reconciliation required
+  {{- else}}{{mode .Status.Mode}}{{end -}}
+  </span>
+{{end}}
+
+{{define "local-time"}}
+  {{- if .IsZero}}{{when .}}{{else}}<time datetime="{{.UTC.Format "2006-01-02T15:04:05Z"}}" data-local-time>{{when .}}</time>{{end -}}
 {{end}}
 
 {{define "error"}}
@@ -49,7 +60,7 @@
 {{define "approval-error"}}
 {{template "start" .}}
 <h1>{{.Title}}</h1>
-<p>Return to the case and open the current review.</p>
-<a href="{{.Base}}/cases/{{.Body}}">Return to case</a>
+<p>Return to the download and open the current review.</p>
+<a href="{{.Base}}/cases/{{.Body}}">Return to download</a>
 {{template "end" .}}
 {{end}}
