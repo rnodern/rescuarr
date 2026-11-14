@@ -5,6 +5,7 @@ from contextlib import contextmanager
 import os
 from pathlib import Path
 import platform
+import re
 import shutil
 import signal
 import socket
@@ -15,41 +16,58 @@ from artifact import check_version, checksum, command, commit, sbom, source_arch
 from smoke import check_setup_page, check_setup_token, installation_state, wait_for_http
 
 
+def smoke_log_tail(log, scratch):
+    limit = 2048
+    log.seek(max(0, log.seek(0, os.SEEK_END) - limit))
+    tail = log.read(limit).decode("utf-8", errors="replace").strip()
+    prefix = re.escape(str(scratch))
+    tail = re.sub(prefix, "<smoke-dir>", tail, flags=re.IGNORECASE if os.name == "nt" else 0)
+    tail = re.sub(r"(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{43}(?![A-Za-z0-9_-])", "<token>", tail)
+    return tail or "<empty>"
+
+
 @contextmanager
-def server(binary, data):
+def server(binary, data, phase):
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
         port = listener.getsockname()[1]
     args = [str(binary), "serve", "--data-dir", str(data), "--listen", f"127.0.0.1:{port}"]
     environment = {key: value for key, value in os.environ.items() if not key.startswith("RESCUARR_")}
-    # Fresh synthetic data and logs are confined to the temporary directory.
-    with (data.parent / "smoke.log").open("wb") as log:
+    # Only output from this process can be included in smoke failure diagnostics.
+    with (data.parent / "smoke.log").open("w+b") as log:
         process = subprocess.Popen(args, stdout=log, stderr=subprocess.STDOUT, env=environment)
+        status = None
         try:
-            base = f"http://127.0.0.1:{port}"
-            wait_for_http(base, lambda: process.poll() is None)
-            check_setup_page(base)
-            yield
-        finally:
-            if process.poll() is None:
-                process.send_signal(signal.SIGTERM)
-                try:
-                    process.wait(timeout=15)
-                except subprocess.TimeoutExpired:
-                    process.kill()
-                    process.wait(timeout=5)
-    if os.name != "nt" and process.returncode != 0:
-        raise RuntimeError(f"Packaged process exited with status {process.returncode}")
+            try:
+                base = f"http://127.0.0.1:{port}"
+                wait_for_http(base, lambda: process.poll() is None)
+                check_setup_page(base)
+                yield
+            finally:
+                status = process.poll()
+                if status is None:
+                    process.send_signal(signal.SIGTERM)
+                    try:
+                        process.wait(timeout=15)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.wait(timeout=5)
+            if status is not None or (os.name != "nt" and process.returncode != 0):
+                raise RuntimeError("Packaged process stopped unexpectedly")
+        except Exception as error:
+            exit_status = f"exit status {status}" if status is not None else f"shutdown status {process.returncode}"
+            tail = smoke_log_tail(log, data.parent)
+            raise RuntimeError(f"Packaged process failed during {phase} ({exit_status}). Log tail {tail!r}") from error
 
 
 def smoke(binary, scratch, version, revision):
     check_version(command(str(binary), "version"), version, revision)
     data = scratch / "original"
     database = data / "rescuarr.sqlite3"
-    with server(binary, data):
+    with server(binary, data, "first startup"):
         check_setup_token(data)
         install_id, _, _ = installation_state(database)
-    with server(binary, data):
+    with server(binary, data, "restart"):
         if installation_state(database)[0] != install_id:
             raise RuntimeError("Installation ID changed after restart")
 
@@ -59,7 +77,7 @@ def smoke(binary, scratch, version, revision):
     command(str(binary), "restore", "--data-dir", str(restored), "--input", str(backup))
     if installation_state(restored / database.name) != (install_id, "observe", 1):
         raise RuntimeError("Restore failed to preserve the installation ID and gate recovery")
-    with server(binary, restored):
+    with server(binary, restored, "startup after restore"):
         if installation_state(restored / database.name)[0] != install_id:
             raise RuntimeError("Restored installation failed to start with its original identity")
 

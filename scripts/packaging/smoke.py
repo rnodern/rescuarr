@@ -22,7 +22,9 @@ def wait_for_http(base_url, running):
         except (OSError, urllib.error.URLError, RuntimeError) as error:
             last_error = error
             time.sleep(0.2)
-    raise RuntimeError(f"Packaged process did not become ready: {last_error}")
+    if last_error is not None:
+        raise RuntimeError(f"Packaged process did not become ready: {last_error}")
+    raise RuntimeError("Packaged process stopped before the first health probe")
 
 
 def check_setup_page(base_url):
