@@ -4,6 +4,7 @@ package prowl
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"encoding/xml"
 	"errors"
 	"fmt"
@@ -68,7 +69,7 @@ func NewClient(httpClient *http.Client) *Client {
 }
 
 func (c *Client) Send(ctx context.Context, key string, m Message) (Result, error) {
-	if key == "" || !utf8Valid(key) {
+	if !ValidAPIKey(key) {
 		return Result{}, errors.New("invalid Prowl key")
 	}
 	if m.Priority < -2 || m.Priority > 2 {
@@ -98,27 +99,22 @@ func (c *Client) Send(ctx context.Context, key string, m Message) (Result, error
 	if readErr != nil || len(body) > maxResponse {
 		return Result{Status: Uncertain, HTTPStatus: resp.StatusCode}, nil
 	}
-	result := Result{HTTPStatus: resp.StatusCode, RetryAfter: parseRetryAfter(resp.Header.Get("Retry-After"), time.Now())}
-	if resp.StatusCode == http.StatusUnauthorized {
-		result.Status = InvalidKey
-		return result, nil
-	}
-	if resp.StatusCode == http.StatusTooManyRequests {
-		result.Status = Quota
-		return result, nil
-	}
+	result := Result{Status: Uncertain, HTTPStatus: resp.StatusCode, RetryAfter: parseRetryAfter(resp.Header.Get("Retry-After"), time.Now())}
 	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
-		result.Status = Uncertain
 		return result, nil
 	}
 	envelope, valid := parseEnvelope(bytes.TrimSpace(body))
 	if !valid {
-		result.Status = Uncertain
+		switch resp.StatusCode {
+		case http.StatusUnauthorized:
+			result.Status = InvalidKey
+		case http.StatusTooManyRequests:
+			result.Status = Quota
+		}
 		return result, nil
 	}
 	if envelope.kind == "success" {
-		if envelope.code != 200 || resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			result.Status = Uncertain
+		if envelope.code != http.StatusOK || resp.StatusCode < 200 || resp.StatusCode >= 300 {
 			return result, nil
 		}
 		result.Status, result.Remaining = Accepted, envelope.remaining
@@ -128,19 +124,34 @@ func (c *Client) Send(ctx context.Context, key string, m Message) (Result, error
 		return result, nil
 	}
 	result.ProviderCode = envelope.code
+	// HTTP 200 can carry a Prowl error. HTTP 429 and Prowl 406 both signal
+	// quota. Otherwise disagreements leave the outcome uncertain.
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != envelope.code &&
+		!(resp.StatusCode == http.StatusTooManyRequests && envelope.code == http.StatusNotAcceptable) {
+		return result, nil
+	}
 	switch {
-	case envelope.code == 401:
+	case envelope.code == http.StatusUnauthorized:
 		result.Status = InvalidKey
-	case envelope.code == 406:
+	case envelope.code == http.StatusNotAcceptable || envelope.code == http.StatusTooManyRequests:
 		result.Status = Quota
-	case envelope.code == 500 || resp.StatusCode >= 500:
+	case envelope.code == http.StatusInternalServerError:
 		result.Status = Transient
-	case resp.StatusCode >= 200 && resp.StatusCode < 300:
+	case envelope.code >= 400 && envelope.code < 500:
 		result.Status = Rejected
-	default:
-		result.Status = Uncertain
 	}
 	return result, nil
+}
+
+// ValidAPIKey accepts exactly one Prowl user key. The provider also accepts
+// comma-separated keys, but a route is deliberately isolated to one account.
+func ValidAPIKey(key string) bool {
+	if len(key) != 40 {
+		return false
+	}
+	var decoded [20]byte
+	_, err := hex.Decode(decoded[:], []byte(key))
+	return err == nil
 }
 
 func truncate(s string, max int) string {
@@ -277,9 +288,6 @@ func parseEnvelope(body []byte) (providerEnvelope, bool) {
 		}
 	}
 }
-
-// Kept local so truncation is measured in UTF-8 bytes and never splits a rune.
-func utf8Valid(s string) bool { return strings.ToValidUTF8(s, "") == s }
 
 func parseRetryAfter(value string, now time.Time) time.Duration {
 	if value == "" {
