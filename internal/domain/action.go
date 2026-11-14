@@ -100,6 +100,7 @@ type Attempt struct {
 	IntentID        IntentID
 	Operation       Operation
 	Preflight       []EvidenceID
+	Prepared        *PreparedAction `json:"-"`
 	SentAt          time.Time
 	Acknowledgement Acknowledgement
 }
