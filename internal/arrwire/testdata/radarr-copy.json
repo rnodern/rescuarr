@@ -1,0 +1,19 @@
+{
+  "name": "ManualImport",
+  "importMode": "copy",
+  "files": [
+    {
+      "path": "Q:\\synthetic\\arr-copy\\movie.mkv",
+      "folderName": "synthetic-folder",
+      "downloadId": "synthetic-download",
+      "quality": {
+        "quality": {"id": 31, "name": "Remux-2160p", "source": "bluray", "resolution": 2160, "modifier": "remux"},
+        "revision": {"version": 3, "real": 0, "isRepack": true}
+      },
+      "languages": [{"id": 2, "name": "French"}],
+      "releaseGroup": "",
+      "indexerFlags": 2080,
+      "movieId": 301
+    }
+  ]
+}

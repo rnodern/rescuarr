@@ -18,6 +18,8 @@ import (
 	"github.com/rnodern/rescuarr/internal/app"
 	"github.com/rnodern/rescuarr/internal/config"
 	"github.com/rnodern/rescuarr/internal/observeservice"
+	"github.com/rnodern/rescuarr/internal/prowl"
+	"github.com/rnodern/rescuarr/internal/prowloutbox"
 	"github.com/rnodern/rescuarr/internal/store"
 )
 
@@ -44,6 +46,7 @@ func run(ctx context.Context, args []string) error {
 		fmt.Println("usage: rescuarr [serve|doctor|version|backup|restore|owner-recovery] [options]")
 		fmt.Println("  --listen host:port  --data-dir path  --base-path /prefix")
 		fmt.Println("  --public-url URL    --trusted-proxies CIDR[,CIDR]")
+		fmt.Println("  --prowl-delivery true|false")
 		fmt.Println("  backup --output file   restore --input file")
 		return nil
 	}
@@ -133,8 +136,9 @@ func serve(ctx context.Context, cfg config.Config, local *store.Store, auth *acc
 	if err != nil {
 		return fmt.Errorf("open listener: %w", err)
 	}
+	notifications := prowloutbox.New(local, nil, prowl.NewClient(nil), cfg.ProwlDelivery)
 	server := &http.Server{
-		Handler:           browserHandler(cfg, auth, local, observeservice.New(local, nil, nil)),
+		Handler:           browserHandler(cfg, auth, local, observeservice.New(local, nil, nil), notifications),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      55 * time.Second, // Allows the bounded upstream queue scan to finish.
@@ -143,6 +147,17 @@ func serve(ctx context.Context, cfg config.Config, local *store.Store, auth *acc
 	}
 	workers, stopWorkers := context.WithCancel(ctx)
 	workerStopped := make(chan struct{})
+	if cfg.ProwlDelivery {
+		notificationStopped := make(chan struct{})
+		go func() {
+			defer close(notificationStopped)
+			runNotifications(workers, notifications, logger)
+		}()
+		defer func() {
+			stopWorkers()
+			<-notificationStopped
+		}()
+	}
 	go func() {
 		defer close(workerStopped)
 		maintain(workers, local, auth, logger)
@@ -197,6 +212,26 @@ func maintain(ctx context.Context, local *store.Store, auth *access.Auth, logger
 				_ = auth.PruneSessions(work)
 				cancel()
 			}
+		}
+	}
+}
+
+func runNotifications(ctx context.Context, service *prowloutbox.Service, logger *slog.Logger) {
+	ticks := time.NewTicker(5 * time.Second)
+	defer ticks.Stop()
+	var degraded bool
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticks.C:
+			work, cancel := context.WithTimeout(ctx, 20*time.Second)
+			_, err := service.RunOne(work)
+			cancel()
+			if err != nil && ctx.Err() == nil && !degraded {
+				logger.Warn("notification_worker_delayed", "component", "prowl")
+			}
+			degraded = err != nil
 		}
 	}
 }
