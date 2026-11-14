@@ -29,6 +29,7 @@ type Options struct {
 	Commands      app.ConsoleCommands
 	Connections   ConnectionService
 	Notifications NotificationService
+	RecoveryPause RecoveryPause
 	ProwlDelivery bool
 	Authorize     Authorize
 	Clock         app.Clock
@@ -75,6 +76,10 @@ func New(options Options) http.Handler {
 		mux.HandleFunc("POST "+base+"/notifications", c.configureNotification)
 		mux.HandleFunc("POST "+base+"/notifications/{id}/test", c.testNotification)
 		mux.HandleFunc("POST "+base+"/notifications/{id}/disable", c.disableNotification)
+	}
+	if c.RecoveryPause != nil {
+		mux.HandleFunc("POST "+base+"/controls/pause", c.changeRecoveryPause(true))
+		mux.HandleFunc("POST "+base+"/controls/resume", c.changeRecoveryPause(false))
 	}
 	assets, err := fs.Sub(files, "assets")
 	if err != nil {
@@ -151,7 +156,17 @@ func (c console) overview(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	c.render(w, r, http.StatusOK, "overview", page{Title: "Overview", Active: "overview", Status: status})
+	var control *recoveryPauseView
+	if c.RecoveryPause != nil {
+		paused, revision, err := c.RecoveryPause.PauseState(r.Context())
+		if err != nil {
+			c.readError(w, r, err)
+			return
+		}
+		status.Paused = paused
+		control = &recoveryPauseView{Revision: revision}
+	}
+	c.render(w, r, http.StatusOK, "overview", page{Title: "Overview", Active: "overview", Status: status, Body: control})
 }
 
 func (c console) statusFragment(w http.ResponseWriter, r *http.Request) {

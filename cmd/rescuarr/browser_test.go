@@ -15,6 +15,7 @@ import (
 
 	"github.com/rnodern/rescuarr/internal/access"
 	"github.com/rnodern/rescuarr/internal/config"
+	"github.com/rnodern/rescuarr/internal/ledger"
 	"github.com/rnodern/rescuarr/internal/observeservice"
 	"github.com/rnodern/rescuarr/internal/store"
 )
@@ -55,7 +56,11 @@ func TestBrowserUsesOwnerSessionAndLocalState(t *testing.T) {
 		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/json"}},
 			Body: io.NopCloser(strings.NewReader(body)), ContentLength: int64(len(body))}, nil
 	}))
-	handler := browserHandler(cfg, auth, local, observations, nil)
+	recoveryPause, err := ledger.NewJournal(local, holdUnqualifiedRecovery)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := browserHandler(cfg, auth, local, observations, nil, recoveryPause)
 	request := func(method, path, token, origin string, form url.Values) *httptest.ResponseRecorder {
 		t.Helper()
 		request := httptest.NewRequest(method, "http://127.0.0.1:8787"+path, strings.NewReader(form.Encode()))
@@ -106,6 +111,40 @@ func TestBrowserUsesOwnerSessionAndLocalState(t *testing.T) {
 		if !strings.Contains(home.Body.String(), expected) {
 			t.Fatal("overview did not render the current owner shell")
 		}
+	}
+	if !strings.Contains(home.Body.String(), `action="/rescuarr/controls/pause"`) {
+		t.Fatal("owner overview did not show the global pause")
+	}
+	const controlOrigin = "http://127.0.0.1:8787"
+	control := url.Values{"csrf": {session.CSRF}, "revision": {"0"}}
+	controlPath := base + "/controls/"
+	if response := request(http.MethodPost, controlPath+"pause", session.Token, "http://other.invalid", control); response.Code != http.StatusForbidden {
+		t.Fatalf("cross-origin pause returned %d", response.Code)
+	}
+	if response := request(http.MethodPost, controlPath+"pause", session.Token, controlOrigin, control); response.Code != http.StatusSeeOther {
+		t.Fatalf("pause returned %d", response.Code)
+	}
+	if response := request(http.MethodPost, controlPath+"resume", session.Token, controlOrigin, control); response.Code != http.StatusConflict {
+		t.Fatalf("stale resume returned %d", response.Code)
+	}
+	if response := perform(base+"/", session.Token); !strings.Contains(response.Body.String(), "New recovery actions are paused.") ||
+		!strings.Contains(response.Body.String(), `action="/rescuarr/controls/resume"`) {
+		t.Fatal("overview did not show the committed pause")
+	}
+	paused, revision, err := recoveryPause.PauseState(t.Context())
+	if err != nil || !paused || revision == 0 {
+		t.Fatalf("pause not committed with an audit revision: %v", err)
+	}
+	control.Set("revision", fmt.Sprint(revision))
+	if response := request(http.MethodPost, controlPath+"resume", session.Token, controlOrigin, control); response.Code != http.StatusSeeOther {
+		t.Fatalf("resume returned %d", response.Code)
+	}
+	if paused, _, err := recoveryPause.PauseState(t.Context()); err != nil || paused {
+		t.Fatalf("resume not committed: %v", err)
+	}
+	control.Set("revision", "0")
+	if response := request(http.MethodPost, controlPath+"pause", session.Token, controlOrigin, control); response.Code != http.StatusConflict {
+		t.Fatalf("stale pause after resume returned %d", response.Code)
 	}
 	for route, media := range map[string]string{
 		"/cases": "text/html", "/connections": "text/html", "/assets/console.css": "text/css",
