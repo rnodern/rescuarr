@@ -12,7 +12,7 @@ var ErrLocked = errors.New("data directory is already in use")
 type dataLock struct{ file *os.File }
 
 func acquire(dir string) (*dataLock, error) {
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := makeDataDirectory(dir); err != nil {
 		return nil, fmt.Errorf("create data directory: %w", err)
 	}
 	if err := secureDirectory(dir); err != nil {

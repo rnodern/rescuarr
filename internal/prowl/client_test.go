@@ -8,9 +8,12 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/rnodern/rescuarr/internal/domain"
 )
+
+const fixtureAPIKey = "0123456789abcdef0123456789ABCDEF01234567"
 
 type roundTrip func(*http.Request) (*http.Response, error)
 
@@ -27,10 +30,10 @@ func TestClientAcceptedAndUTF8FieldLimit(t *testing.T) {
 		if err := r.ParseForm(); err != nil {
 			t.Fatal(err)
 		}
-		if r.Form.Get("apikey") != "secret-test-key" {
+		if r.Form.Get("apikey") != fixtureAPIKey {
 			t.Fatal("key missing from form")
 		}
-		if got := r.Form.Get("event"); len(got) > maxEvent || !utf8Valid(got) {
+		if got := r.Form.Get("event"); len(got) > maxEvent || !utf8.ValidString(got) {
 			t.Fatalf("event is not bounded UTF-8: %d", len(got))
 		}
 		if strings.Contains(r.Form.Get("description"), "/private/path") {
@@ -38,7 +41,7 @@ func TestClientAcceptedAndUTF8FieldLimit(t *testing.T) {
 		}
 		return response(200, `<prowl><success code="200" remaining="4" resetdate="1800000000"/></prowl>`), nil
 	})})
-	result, err := client.Send(context.Background(), "secret-test-key", Message{Application: "Rescuarr", Event: strings.Repeat("a", 1023) + "🙂", Description: "2 incidents", Priority: 0})
+	result, err := client.Send(context.Background(), fixtureAPIKey, Message{Application: "Rescuarr", Event: strings.Repeat("a", 1023) + "🙂", Description: "2 incidents", Priority: 0})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +60,15 @@ func TestProviderResponseCategories(t *testing.T) {
 		{"invalid key", 401, `<prowl><error code="401">invalid</error></prowl>`, InvalidKey},
 		{"provider quota", 200, `<prowl><error code="406">limit</error></prowl>`, Quota},
 		{"http quota", 429, `temporarily rate limited`, Quota},
+		{"matching quota signals", 429, `<prowl><error code="406">limit</error></prowl>`, Quota},
+		{"matching rejection", 400, `<prowl><error code="400">invalid request</error></prowl>`, Rejected},
 		{"explicit transient", 200, `<prowl><error code="500">temporary</error></prowl>`, Transient},
+		{"matching transient", 500, `<prowl><error code="500">temporary</error></prowl>`, Transient},
+		{"mismatched server errors", 503, `<prowl><error code="500">temporary</error></prowl>`, Uncertain},
+		{"http server error with provider rejection", 500, `<prowl><error code="400">invalid request</error></prowl>`, Uncertain},
+		{"http client error with provider server error", 400, `<prowl><error code="500">temporary</error></prowl>`, Uncertain},
+		{"http quota with provider success", 429, `<prowl><success code="200"/></prowl>`, Uncertain},
+		{"http key error with provider quota", 401, `<prowl><error code="406">limit</error></prowl>`, Uncertain},
 		{"misclassified html", 200, `<html>success</html>`, Uncertain},
 		{"misclassified http success", 503, `<prowl><success code="200" remaining="1"/></prowl>`, Uncertain},
 		{"malformed", 200, `<prowl><success`, Uncertain},
@@ -74,7 +85,7 @@ func TestProviderResponseCategories(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			c := NewClient(&http.Client{Transport: roundTrip(func(*http.Request) (*http.Response, error) { return response(tt.status, tt.body), nil })})
-			got, err := c.Send(context.Background(), "key", Message{Application: "Rescuarr", Event: "Notice"})
+			got, err := c.Send(context.Background(), fixtureAPIKey, Message{Application: "Rescuarr", Event: "Notice"})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -99,7 +110,7 @@ func TestRedirectDoesNotReplayCredentialedRequest(t *testing.T) {
 		res.Header.Set("Location", "https://attacker.invalid/collect")
 		return res, nil
 	})}
-	got, err := NewClient(hc).Send(context.Background(), "secret-test-key", Message{Application: "Rescuarr", Event: "Test"})
+	got, err := NewClient(hc).Send(context.Background(), fixtureAPIKey, Message{Application: "Rescuarr", Event: "Test"})
 	if err != nil || got.Status != Uncertain || requests != 1 {
 		t.Fatalf("got %+v, requests=%d, err=%v", got, requests, err)
 	}
@@ -149,7 +160,7 @@ func (o *testOutbox) Complete(ctx context.Context, _ domain.OutboxID, state doma
 
 type testKeys struct{}
 
-func (testKeys) Resolve(context.Context, string) (string, error) { return "key", nil }
+func (testKeys) Resolve(context.Context, string) (string, error) { return fixtureAPIKey, nil }
 
 func TestWorkerCompletesInvalidLocalMessageAfterCancellation(t *testing.T) {
 	o := &testOutbox{delivery: Delivery{Item: domain.OutboxItem{ID: "outbox-1"}, KeyRef: "ref", Message: Message{}}}
@@ -167,7 +178,7 @@ func TestWorkerCompletesInvalidLocalMessageAfterCancellation(t *testing.T) {
 
 func TestDroppedResponseIsUncertainAndRateLimitBounded(t *testing.T) {
 	c := NewClient(&http.Client{Transport: roundTrip(func(*http.Request) (*http.Response, error) { return nil, io.ErrUnexpectedEOF })})
-	got, err := c.Send(context.Background(), "key", Message{Application: "Rescuarr", Event: "Notice"})
+	got, err := c.Send(context.Background(), fixtureAPIKey, Message{Application: "Rescuarr", Event: "Notice"})
 	if err != nil || got.Status != Uncertain {
 		t.Fatalf("got %+v, %v", got, err)
 	}
@@ -179,8 +190,19 @@ func TestDroppedResponseIsUncertainAndRateLimitBounded(t *testing.T) {
 func TestRequestValidation(t *testing.T) {
 	c := NewClient(&http.Client{Transport: roundTrip(func(*http.Request) (*http.Response, error) { t.Fatal("request should not be sent"); return nil, nil })})
 	for _, m := range []Message{{Priority: 3, Event: "x"}, {Priority: 0}} {
-		if _, err := c.Send(context.Background(), "key", m); err == nil {
+		if _, err := c.Send(context.Background(), fixtureAPIKey, m); err == nil {
 			t.Fatalf("expected validation error for %+v", m)
 		}
+	}
+	for name, key := range map[string]string{
+		"empty": "", "short": fixtureAPIKey[:39], "long": fixtureAPIKey + "a",
+		"non-hex": fixtureAPIKey[:39] + "x", "whitespace": " " + fixtureAPIKey,
+		"multiple": fixtureAPIKey + "," + fixtureAPIKey, "embedded comma": fixtureAPIKey[:39] + ",",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := c.Send(t.Context(), key, Message{Event: "Notice"}); err == nil {
+				t.Fatal("accepted invalid Prowl key")
+			}
+		})
 	}
 }
