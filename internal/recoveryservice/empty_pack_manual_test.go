@@ -66,7 +66,16 @@ func TestManualEmptyPackExecutesOnlyApprovedSearchAfterRestart(t *testing.T) {
 	if err := observations.Collect(ctx, instance.Ref.ID); err != nil {
 		t.Fatal(err)
 	}
-	factory := func(_ context.Context, current domain.Instance) (*arradapter.EmptyPackAdapter, error) {
+	var changeLanguageBeforeReservation bool
+	factory := func(ctx context.Context, current domain.Instance) (*arradapter.EmptyPackAdapter, error) {
+		if changeLanguageBeforeReservation {
+			changeLanguageBeforeReservation = false
+			prefs := app.DefaultLanguagePreferences()
+			prefs.UnknownAudio = domain.UnknownAudioReject
+			if _, err := app.NewLanguageSettings(local, clock).SaveLanguageSettings(ctx, prefs, "owner"); err != nil {
+				return nil, err
+			}
+		}
 		key, err := local.ReadSecret(current.SecretRef)
 		if err != nil {
 			return nil, err
@@ -79,7 +88,7 @@ func TestManualEmptyPackExecutesOnlyApprovedSearchAfterRestart(t *testing.T) {
 				ObservedAt: clock.At.Add(-time.Second), ExpiresAt: clock.At.Add(time.Minute)}, nil
 		}, clock.Now)
 	}
-	reviews := NewManualReviews(local, observations, NewPreviewService(observations, local, transport, clock),
+	reviews := NewManualReviews(local, observations, NewPreviewService(observations, local, transport, clock, nil),
 		transport, clock, factory)
 	if err := reviews.SetManualMode(ctx, true, "owner"); err != nil {
 		t.Fatal(err)
@@ -92,6 +101,17 @@ func TestManualEmptyPackExecutesOnlyApprovedSearchAfterRestart(t *testing.T) {
 	worker := newEmptyPackWorker(ctx, observations, local, clock, transport, factory)
 	if err := worker.manualStep(ctx, transport); err != nil || fixture.removals != 0 {
 		t.Fatalf("unapproved review reached removal: count %d, error %v", fixture.removals, err)
+	}
+	if err := reviews.DecideManualReview(ctx, app.ManualDecision{Token: view.ApprovalToken, Approve: true, Actor: "owner"}); err != nil {
+		t.Fatal(err)
+	}
+	changeLanguageBeforeReservation = true
+	if err := worker.manualStep(ctx, transport); err != nil || fixture.removals != 0 {
+		t.Fatalf("approval survived a language policy change before reservation: %d removals, error %v", fixture.removals, err)
+	}
+	view, err = reviews.ManualReview(ctx)
+	if err != nil || !view.CanApprove {
+		t.Fatalf("the revised policy did not return the empty-pack plan for review: %+v, %v", view, err)
 	}
 	if err := reviews.DecideManualReview(ctx, app.ManualDecision{Token: view.ApprovalToken, Approve: true, Actor: "owner"}); err != nil {
 		t.Fatal(err)

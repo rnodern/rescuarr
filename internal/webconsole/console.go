@@ -34,6 +34,7 @@ type Options struct {
 	Notifications    NotificationService
 	RecoveryPause    RecoveryPause
 	ManualReview     app.ManualReviewService
+	LanguageSettings app.LanguageSettingsService
 	ProwlDelivery    bool
 	Authorize        Authorize
 	Clock            app.Clock
@@ -103,6 +104,10 @@ func New(options Options) http.Handler {
 		mux.HandleFunc("POST "+base+"/manual-review", c.decideManualReview)
 		mux.HandleFunc("POST "+base+"/manual-review/mode", c.setManualMode)
 	}
+	if c.LanguageSettings != nil {
+		mux.HandleFunc("GET "+base+"/settings/language", c.languageSettings)
+		mux.HandleFunc("POST "+base+"/settings/language", c.saveLanguageSettings)
+	}
 	assets, err := fs.Sub(files, "assets")
 	if err != nil {
 		panic(err)
@@ -143,6 +148,8 @@ type page struct {
 	HasNotifications          bool
 	HasLearning               bool
 	HasManualReview           bool
+	HasLanguageSettings       bool
+	OfferLanguageSetup        bool
 	Body                      any
 }
 
@@ -154,6 +161,7 @@ func (c console) render(w http.ResponseWriter, r *http.Request, code int, name s
 	p.HasNotifications = c.Notifications != nil
 	p.HasLearning = c.Learning != nil
 	p.HasManualReview = c.ManualReview != nil
+	p.HasLanguageSettings = c.LanguageSettings != nil
 	session, _ := r.Context().Value(sessionKey{}).(Session)
 	p.CSRF = session.CSRF
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -196,7 +204,13 @@ func (c console) overview(w http.ResponseWriter, r *http.Request) {
 		status.Paused = paused
 		control = &recoveryPauseView{Revision: revision}
 	}
-	c.render(w, r, http.StatusOK, "overview", page{Title: "Overview", Active: "overview", Status: status, Body: control})
+	var offerLanguageSetup bool
+	if c.LanguageSettings != nil {
+		preferences, err := c.LanguageSettings.LanguageSettings(r.Context())
+		offerLanguageSetup = err == nil && preferences.Revision == 0
+	}
+	c.render(w, r, http.StatusOK, "overview", page{Title: "Overview", Active: "overview", Status: status,
+		Body: control, OfferLanguageSetup: offerLanguageSetup})
 }
 
 func (c console) statusFragment(w http.ResponseWriter, r *http.Request) {

@@ -157,7 +157,7 @@ func serve(ctx context.Context, cfg config.Config, local *store.Store, auth *acc
 	transport := manualPackTransport()
 	defer transport.CloseIdleConnections()
 	qualified := manualPackQualification(cfg, local, transport, clock)
-	preview := recoveryservice.NewPreviewService(observations, local, nil, clock)
+	preview := recoveryservice.NewPreviewService(observations, local, nil, clock, app.NewLanguageSettings(local, clock))
 	manual := recoveryservice.NewManualReviews(local, observations, preview, transport, clock, qualified)
 	server := &http.Server{
 		Handler:           browserHandler(cfg, auth, local, observations, notifications, recoveryPause, manual),

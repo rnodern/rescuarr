@@ -140,7 +140,7 @@ func TestImportPreviewUsesExactSavedCaseAndReadOnlyRequests(t *testing.T) {
 				t.Fatal("ordinary preview was run automatically")
 			}
 			scanCalls, scanPreviews := calls, previews
-			svc := NewPreviewService(cases, local, transport, clock)
+			svc := NewPreviewService(cases, local, transport, clock, nil)
 			if _, err := svc.ImportPreview(ctx, item.ID, item.Revision+1); err != app.ErrConflict || calls != scanCalls {
 				t.Fatalf("stale request reached Arr: %d calls, %v", calls, err)
 			}

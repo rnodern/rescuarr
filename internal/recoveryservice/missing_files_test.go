@@ -87,6 +87,11 @@ func TestCompletedSonarrPackReplacementPreview(t *testing.T) {
 					body = map[string]any{"page": 1, "pageSize": 100, "totalRecords": len(rows), "records": rows}
 				case "/api/v3/series/41":
 					body = map[string]any{"id": 41, "monitored": true, "runtime": 11}
+				case "/api/v3/history":
+					if r.URL.Query().Get("downloadId") != "original" {
+						t.Fatalf("read history for the wrong release: %s", r.URL.RawQuery)
+					}
+					body = map[string]any{"page": 1, "pageSize": 50, "totalRecords": 0, "records": []any{}}
 				case "/api/v3/episode":
 					ids := r.URL.Query()["episodeIds"]
 					if !reflect.DeepEqual(ids, []string{"1", "2", "3", "4", "5", "6", "7", "8", "9"}) {
@@ -134,7 +139,7 @@ func TestCompletedSonarrPackReplacementPreview(t *testing.T) {
 				t.Fatalf("missing exact season pack: cases=%d error=%v", len(page.Cases), err)
 			}
 			item := page.Cases[0]
-			svc := NewPreviewService(observations, local, transport, clock)
+			svc := NewPreviewService(observations, local, transport, clock, nil)
 			got, err := svc.ImportPreview(ctx, item.ID, item.Revision)
 			if test.changed {
 				if !errors.Is(err, app.ErrConflict) {

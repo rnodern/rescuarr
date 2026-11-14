@@ -148,20 +148,27 @@ func TestManualReviewEpisodeEvidenceEscapesAndHidesPaths(t *testing.T) {
 	opts := fixture()
 	dashboard := opts.Read.(*apptest.Console)
 	item := dashboard.Page.Cases[0]
-	opts.ManualReview = &manualReviewFixture{
+	service := &manualReviewFixture{
 		dashboard: dashboard,
 		view: app.ManualReviewView{
 			Case: &item, Token: "selected-item", Hold: "Import approval is unavailable.",
 			Preview: app.ImportPreview{Episode: &domain.EpisodeNameReview{
 				Matched: true, ArrRejection: true, EpisodeTitle: "Fixture Episode",
 				Folder: "/home/secret/Candidates", Filename: `\\host\share\<b>fixture.mkv`,
-			}},
+			}, Audio: []app.AudioLanguageReview{{AudioAssessment: domain.AudioAssessment{Decision: domain.AudioAccept}}}},
 		},
 	}
+	opts.ManualReview = service
 	page := request(New(opts), "GET", "/manual-review", "owner", "", nil)
 	expect(t, page, 200, "The names omit the episode title", "Sonarr still reports an import rejection",
 		"Candidates", "&lt;b&gt;fixture.mkv", "Import the matching file into the library", "Import approval is unavailable", ">Decline<")
 	if strings.Contains(page.Body.String(), "/home/secret") || strings.Contains(page.Body.String(), "<b>fixture") || strings.Contains(page.Body.String(), ">Approve<") {
 		t.Fatal("Review exposed private data, executable markup or an unavailable decision")
+	}
+	service.view.Preview.Audio = nil
+	page = request(New(opts), "GET", "/manual-review", "owner", "", nil)
+	expect(t, page, 200, "Audio tracks could not be verified.")
+	if strings.Contains(page.Body.String(), "Import the matching file into the library") {
+		t.Fatal("A cached filename match bypassed the audio decision")
 	}
 }

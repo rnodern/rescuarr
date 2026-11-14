@@ -115,6 +115,13 @@ def check_owner_workflow(base_url, data):
     post("/setup", "/login", {"csrf": setup.csrf(), "token": token, "password": password})
     login = OwnerForm(get("/login", b"Sign in"), "/login")
     post("/login", "/", {"csrf": login.csrf(), "password": password})
+    get("/", b"/settings/language?wizard=1")
+    settings = "/settings/language"
+    wizard = OwnerForm(get(settings + "?wizard=1", b"Which language do you prefer to watch in?"), settings)
+    post(settings, settings + "?saved=1", {"csrf": wizard.csrf(), "revision": "0", "preferred_language": "en",
+         "foreign_audio": "original", "unknown_audio": "review", "prefer_single_audio": "true"})
+    get(settings, b"Send for review")
+    get(settings + "?wizard=1", b'name="revision" value="1"')
     get("/cases", b"<h1>Recovery Queue</h1>")
     connection = OwnerForm(get("/connections", b"<h1>Connections</h1>"), "/connections")
     post("/connections", "/connections", {"csrf": connection.csrf(), "product": "sonarr",

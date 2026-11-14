@@ -1,6 +1,13 @@
 {{define "overview"}}
 {{template "start" .}}
 <h1>Overview</h1>
+{{if .OfferLanguageSetup}}
+<section class="panel section" aria-labelledby="language-setup-heading">
+  <h2 id="language-setup-heading">Set your language preferences</h2>
+  <p>Choose how Rescuarr assesses original audio, dubbed releases and unverified tracks.</p>
+  <a class="button" href="{{.Base}}/settings/language?wizard=1">Start language setup</a>
+</section>
+{{end}}
 {{if .HasConnections}}<p><a href="{{.Base}}/connections">Manage connections and check queues</a></p>{{end}}
 {{if .Status.Paused}}<p class="notice">New recovery actions are paused.</p>
 {{else if .Status.ReconcileRequired}}<p class="notice">Recovery is held pending reconciliation.</p>{{end}}

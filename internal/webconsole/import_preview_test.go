@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/rnodern/rescuarr/internal/app"
@@ -65,7 +66,7 @@ func TestOwnerEpisodeFilenameReviewOnSonarrV5(t *testing.T) {
 		return app.ImportPreview{Episode: &domain.EpisodeNameReview{
 			Series: "Captain Wattle: The Animated Series", Episode: "S02E11", EpisodeTitle: "Signal Lost",
 			Filename: "Captain.Wattle.Animated.S02E11.mkv", Matched: true, ArrRejection: true,
-		}}, nil
+		}, Audio: []app.AudioLanguageReview{{AudioAssessment: domain.AudioAssessment{Decision: domain.AudioAccept}}}}, nil
 	})
 	h := New(opts)
 	expect(t, request(h, http.MethodGet, "/cases/case-1", "owner", "", nil), 200, "Check episode filename")
@@ -73,8 +74,11 @@ func TestOwnerEpisodeFilenameReviewOnSonarrV5(t *testing.T) {
 	expect(t, request(h, http.MethodPost, "/cases/case-1/import-preview", "owner", origin, form), 200,
 		"Likely episode match", "S02E11 · Signal Lost", "Captain.Wattle.Animated.S02E11.mkv", "Sonarr still reports an import rejection", "Activity → Queue → Manual Import")
 	held = true
-	expect(t, request(h, http.MethodPost, "/cases/case-1/import-preview", "owner", origin, form), 409,
-		"Episode filename check", "Match needs review", "Sonarr returned too many files.", "Activity → Queue → Manual Import")
+	page := request(h, http.MethodPost, "/cases/case-1/import-preview", "owner", origin, form)
+	expect(t, page, 409, "Episode filename check", "Match needs review", "Sonarr returned too many files.")
+	if strings.Contains(page.Body.String(), "Activity → Queue → Manual Import") {
+		t.Fatal("The held preview recommended an import without file identity and an audio decision")
+	}
 }
 
 func TestSonarrPackReplacementReview(t *testing.T) {

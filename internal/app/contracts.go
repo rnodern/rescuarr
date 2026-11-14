@@ -60,6 +60,7 @@ type ImportPreview struct {
 	Hold        string
 	Episode     *domain.EpisodeNameReview
 	Replacement *ReplacementPreview
+	Audio       []AudioLanguageReview
 }
 
 // ReplacementPreview describes a read-only plan for the exact Sonarr download.
@@ -74,7 +75,9 @@ type ReplacementPreview struct {
 type PackLanguageReview struct {
 	FilenameLanguages []string
 	SonarrLanguages   []string
+	OriginalLanguage  string
 	Agreement         bool
+	NeedsReview       bool
 	Files             []PackLanguageFile
 }
 
@@ -84,6 +87,17 @@ type PackLanguageFile struct {
 	Origin                 string
 	AudioLanguages         []string
 	AudioLanguagesComplete bool
+	Audio                  *AudioLanguageReview
+}
+
+type AudioLanguageReview struct {
+	Label             string
+	OriginalLanguage  string
+	PreferredLanguage string
+	FilenameLanguages []string
+	ReleaseLanguages  []string
+	TrackLanguages    []string
+	domain.AudioAssessment
 }
 
 type ReplacementEpisode struct {

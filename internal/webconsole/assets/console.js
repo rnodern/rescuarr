@@ -126,3 +126,35 @@ if (document.querySelector("[data-manual-processing]")) {
   window.setInterval(checkReview, 2500);
   document.addEventListener("visibilitychange", checkReview);
 }
+
+const languageWizard = document.querySelector("form[data-language-wizard]");
+if (languageWizard) {
+  const steps = Array.from(languageWizard.querySelectorAll("[data-language-step]"));
+  const progress = languageWizard.querySelector("[data-language-progress]");
+  const back = languageWizard.querySelector("[data-language-back]");
+  const next = languageWizard.querySelector("[data-language-next]");
+  const save = languageWizard.querySelector("[data-language-save]");
+  let current = 0;
+  const showStep = (index, moveFocus) => {
+    current = index;
+    for (const [step, fieldset] of steps.entries()) fieldset.hidden = step !== current;
+    progress.textContent = `Step ${current + 1} of ${steps.length}`;
+    progress.hidden = false;
+    back.hidden = current === 0;
+    next.hidden = current === steps.length - 1;
+    save.hidden = !next.hidden;
+    if (moveFocus) steps[current].querySelector("legend").focus();
+  };
+  next.addEventListener("click", () => {
+    const invalid = steps[current].querySelector("input:invalid, select:invalid");
+    if (invalid) invalid.reportValidity();
+    else showStep(current + 1, true);
+  });
+  back.addEventListener("click", () => showStep(current - 1, true));
+  languageWizard.addEventListener("submit", (event) => {
+    if (current === steps.length - 1) return;
+    event.preventDefault();
+    next.click();
+  });
+  showStep(0, false);
+}

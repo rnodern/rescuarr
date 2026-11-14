@@ -32,6 +32,12 @@ type LibraryFile struct {
 	audioComplete       bool
 }
 
+// AudioTracks returns Arr's observed language tags and whether it reported
+// a tag for each stream. The caller determines whether each tag is usable.
+func (f *LibraryFile) AudioTracks() ([]string, bool) {
+	return slices.Clone(f.audioLanguages), f.audioComplete
+}
+
 type fileLanguageWire struct {
 	resourceIDWire
 	Name json.RawMessage `json:"name"`

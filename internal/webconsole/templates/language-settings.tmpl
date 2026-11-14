@@ -1,0 +1,85 @@
+{{define "language-settings"}}
+{{template "start" .}}
+<h1>Language settings</h1>
+<div class="language-settings">
+  <p>These preferences guide recovery reviews. Rescuarr currently shows audio decisions for inspection. Sonarr and Radarr still manage release selection and subtitles.</p>
+  {{if .Body.Saved}}<p class="panel" role="status">Language preferences saved.</p>{{end}}
+  {{if .Body.Notice}}<p class="notice" role="alert">{{.Body.Notice}}</p>{{end}}
+  {{if .Body.Wizard}}
+  {{with .Body.Preferences}}
+  <form class="panel" action="{{$.Base}}/settings/language" method="post" data-language-wizard>
+    <input type="hidden" name="csrf" value="{{$.CSRF}}">
+    <input type="hidden" name="revision" value="{{.Revision}}">
+    <p class="language-progress" data-language-progress aria-live="polite" hidden></p>
+    <fieldset class="language-step" data-language-step>
+      <legend tabindex="-1">Preferred language</legend>
+      <label for="preferred-language">Which language do you prefer to watch in?</label>
+      <select id="preferred-language" name="preferred_language" required>
+        {{range $.Body.Options}}<option value="{{.Code}}"{{if eq .Code $.Body.Preferences.PreferredLanguage}} selected{{end}}>{{.Name}}</option>{{end}}
+      </select>
+    </fieldset>
+    <fieldset class="language-step" data-language-step>
+      <legend tabindex="-1">Original and dubbed audio</legend>
+      <p>How do you watch a title originally made in another language?</p>
+      <label class="language-choice">
+        <input type="radio" name="foreign_audio" value="original"{{if eq .ForeignAudio "original"}} checked{{end}} required>
+        <span>Keep the original audio<span class="row-note">Use subtitles in your preferred language when needed.</span></span>
+      </label>
+      <label class="language-choice">
+        <input type="radio" name="foreign_audio" value="prefer_dub"{{if eq .ForeignAudio "prefer_dub"}} checked{{end}}>
+        <span>Prefer a dub in my preferred language<span class="row-note">Allow the original audio if a dub is unavailable.</span></span>
+      </label>
+      <fieldset class="language-track-choice">
+        <legend>For titles originally made in your preferred language</legend>
+        <label class="language-choice">
+          <input type="radio" name="prefer_single_audio" value="true"{{if .PreferSingleAudio}} checked{{end}} required>
+          <span>Prefer releases with only that audio language<span class="row-note">Allow releases with additional languages when needed.</span></span>
+        </label>
+        <label class="language-choice">
+          <input type="radio" name="prefer_single_audio" value="false"{{if not .PreferSingleAudio}} checked{{end}}>
+          <span>Treat releases with additional audio languages equally</span>
+        </label>
+      </fieldset>
+    </fieldset>
+    <fieldset class="language-step" data-language-step>
+      <legend tabindex="-1">Uncertain audio</legend>
+      <p>What should Rescuarr do when it cannot verify the audio language?</p>
+      <label class="language-choice">
+        <input type="radio" name="unknown_audio" value="mode_default"{{if eq .UnknownAudio "mode_default"}} checked{{end}} required>
+        <span>Follow the recovery mode<span class="row-note">Review in Observe or Manual mode. Reject in Automatic mode.</span></span>
+      </label>
+      <label class="language-choice">
+        <input type="radio" name="unknown_audio" value="review"{{if eq .UnknownAudio "review"}} checked{{end}}>
+        <span>Send for review</span>
+      </label>
+      <label class="language-choice">
+        <input type="radio" name="unknown_audio" value="accept"{{if eq .UnknownAudio "accept"}} checked{{end}}>
+        <span>Allow the release</span>
+      </label>
+      <label class="language-choice">
+        <input type="radio" name="unknown_audio" value="reject"{{if eq .UnknownAudio "reject"}} checked{{end}}>
+        <span>Reject the release</span>
+      </label>
+    </fieldset>
+    <div class="connection-actions section">
+      <button type="button" class="button-quiet" data-language-back hidden>Back</button>
+      <button type="button" data-language-next hidden>Continue</button>
+      <button type="submit" data-language-save>Save preferences</button>
+      <a href="{{if .Revision}}{{$.Base}}/settings/language{{else}}{{$.Base}}/{{end}}">{{if .Revision}}Cancel{{else}}Set up later{{end}}</a>
+    </div>
+  </form>
+  {{end}}
+  {{else}}
+  <section class="panel" aria-label="Current language preferences">
+    <dl class="language-summary">
+      <dt>Preferred language</dt><dd>{{.Body.PreferredName}}</dd>
+      <dt>Foreign-original titles</dt><dd>{{if eq .Body.Preferences.ForeignAudio "prefer_dub"}}Prefer a dub in {{.Body.PreferredName}}, with original audio as a fallback{{else}}Original audio with subtitles in {{.Body.PreferredName}} when needed{{end}}</dd>
+      <dt>Titles originally in {{.Body.PreferredName}}</dt><dd>{{if .Body.Preferences.PreferSingleAudio}}Prefer {{.Body.PreferredName}}-only audio{{else}}Treat releases with additional audio languages equally{{end}}</dd>
+      <dt>Uncertain audio</dt><dd>{{if eq .Body.Preferences.UnknownAudio "accept"}}Allow the release{{else if eq .Body.Preferences.UnknownAudio "reject"}}Reject the release{{else if eq .Body.Preferences.UnknownAudio "review"}}Send for review{{else}}Review in Observe or Manual mode. Reject in Automatic mode.{{end}}</dd>
+    </dl>
+    <a class="button" href="{{.Base}}/settings/language?wizard=1">Run language wizard</a>
+  </section>
+  {{end}}
+</div>
+{{template "end" .}}
+{{end}}

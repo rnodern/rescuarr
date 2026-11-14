@@ -59,7 +59,11 @@ func (s *PreviewService) previewMissingFiles(ctx context.Context, id domain.Case
 		return app.ImportPreview{}, app.ErrConflict
 	}
 	plan := replacementPlan(current, needs)
-	plan.Language = reviewPackLanguage(ctx, arr, current, plan, s.clock.Now())
+	prefs, mode, err := s.languageContext(ctx)
+	if err != nil {
+		return app.ImportPreview{}, err
+	}
+	plan.Language = reviewPackLanguage(ctx, arr, current, plan, s.clock.Now(), prefs, mode)
 	return app.ImportPreview{Replacement: plan}, nil
 }
 

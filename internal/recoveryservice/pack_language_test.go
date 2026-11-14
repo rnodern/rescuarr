@@ -48,13 +48,19 @@ func TestPackLanguageReviewUsesExactGrabAndCurrentLibraryFile(t *testing.T) {
 	}}
 	for _, scenario := range []struct {
 		name, grabTitle, grabLanguage, importDownload string
+		original, tracks                              string
+		streams                                       int
 		wantAgreement                                 bool
 		wantOrigin                                    string
+		wantDecision                                  domain.AudioDecision
 	}{
-		{"both agree", title, "Hebrew", pack, true, "same_release"},
-		{"another file", title, "Hebrew", "other-download", true, "other_release"},
-		{"English release metadata", title, "English", pack, false, ""},
-		{"different release", "Different.Show.S01.HebDub.720p", "Hebrew", pack, false, ""},
+		{"original on multilingual file", title, "Hebrew", pack, "English", "heb/eng", 2, true, "same_release", domain.AudioAccept},
+		{"dub only", title, "Hebrew", pack, "English", "heb", 1, true, "same_release", domain.AudioReject},
+		{"Korean original", title, "Hebrew", pack, "Korean", "kor", 1, true, "same_release", domain.AudioAccept},
+		{"unknown additional track", title, "Hebrew", pack, "English", "heb", 2, true, "same_release", domain.AudioReview},
+		{"another file", title, "Hebrew", "other-download", "English", "", 0, true, "other_release", ""},
+		{"conflicting release metadata", title, "English", pack, "English", "eng", 1, false, "same_release", domain.AudioAccept},
+		{"different release", "Different.Show.S01.HebDub.720p", "Hebrew", pack, "English", "", 0, false, "", ""},
 	} {
 		t.Run(scenario.name, func(t *testing.T) {
 			packReads, fileReads := 0, 0
@@ -64,6 +70,10 @@ func TestPackLanguageReviewUsesExactGrabAndCurrentLibraryFile(t *testing.T) {
 				}
 				var body string
 				switch r.URL.Path {
+				case "/api/v3/system/status":
+					body = `{"appName":"Sonarr","version":"5.0.0.2941","isWindows":true}`
+				case "/api/v3/series/4":
+					body = fmt.Sprintf(`{"id":4,"originalLanguage":{"id":1,"name":%q}}`, scenario.original)
 				case "/api/v3/history":
 					if r.URL.Query().Get("downloadId") == pack {
 						packReads++
@@ -75,7 +85,8 @@ func TestPackLanguageReviewUsesExactGrabAndCurrentLibraryFile(t *testing.T) {
 					body = `{"id":1,"seriesId":4,"episodeFileId":5,"hasFile":true}`
 				case "/api/v3/episodefile/5":
 					fileReads++
-					body = fmt.Sprintf(`{"id":5,"seriesId":4,"relativePath":%q,"mediaInfo":{"audioLanguages":"heb/eng","audioStreamCount":2}}`, basename)
+					body = fmt.Sprintf(`{"id":5,"seriesId":4,"relativePath":%q,"mediaInfo":{"audioLanguages":%q,"audioStreamCount":%d}}`,
+						basename, scenario.tracks, scenario.streams)
 				}
 				if body == "" {
 					t.Fatalf("preview made unexpected request %s", r.URL.Path)
@@ -85,7 +96,7 @@ func TestPackLanguageReviewUsesExactGrabAndCurrentLibraryFile(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			got := reviewPackLanguage(t.Context(), arr, proof, plan, time.Now())
+			got := reviewPackLanguage(t.Context(), arr, proof, plan, time.Now(), app.DefaultLanguagePreferences(), domain.ModeAssist)
 			if got == nil || got.Agreement != scenario.wantAgreement || packReads != 1 {
 				t.Fatalf("unexpected release evidence: %+v, %d grabs", got, packReads)
 			}
@@ -96,8 +107,9 @@ func TestPackLanguageReviewUsesExactGrabAndCurrentLibraryFile(t *testing.T) {
 				t.Fatalf("unexpected file origin: %+v", got.Files)
 			}
 			if scenario.wantOrigin == "same_release" && (fileReads != 1 || got.Files[0].Filename != basename ||
-				!got.Files[0].AudioLanguagesComplete || !slices.Equal(got.Files[0].AudioLanguages, []string{"heb", "eng"})) {
-				t.Fatalf("lost file details including the English audio track: %+v", got.Files[0])
+				!slices.Equal(got.Files[0].AudioLanguages, strings.Split(scenario.tracks, "/")) || got.Files[0].Audio == nil ||
+				got.Files[0].Audio.Decision != scenario.wantDecision || got.NeedsReview != (scenario.wantDecision != domain.AudioAccept)) {
+				t.Fatalf("unexpected file audio assessment: %+v (%+v)", got.Files[0], got.Files[0].Audio)
 			}
 		})
 	}
