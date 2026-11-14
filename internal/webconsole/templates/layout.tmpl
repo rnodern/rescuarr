@@ -1,0 +1,48 @@
+{{define "start"}}<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{.Title}} · Rescuarr</title>
+  <link rel="stylesheet" href="{{.Base}}/assets/console.css">
+  <script src="{{.Base}}/assets/console.js" defer></script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<div class="shell">
+  <aside class="sidebar">
+    <a class="brand" href="{{.Base}}/">Rescuarr</a>
+    <nav aria-label="Main navigation">
+      <a href="{{.Base}}/"{{if eq .Active "overview"}} aria-current="page"{{end}}>Overview</a>
+      <a href="{{.Base}}/cases"{{if eq .Active "cases"}} aria-current="page"{{end}}>Cases</a>
+    </nav>
+  </aside>
+  <div class="workspace">
+    {{if .Status.Mode}}<header class="topbar">
+      <div data-status-url="{{.Base}}/fragments/status" aria-live="polite">{{template "status" .}}</div>
+    </header>{{end}}
+    <main id="main" tabindex="-1">
+{{end}}
+
+{{define "end"}}</main></div></div></body></html>{{end}}
+
+{{define "status"}}
+  {{if .Status.Paused}}<span class="chip hold">Actions paused</span>
+  {{else if .Status.ReconcileRequired}}<span class="chip hold">Reconciliation required</span>
+  {{else}}<span class="chip">{{mode .Status.Mode}}</span>{{end}}
+{{end}}
+
+{{define "error"}}
+{{template "start" .}}
+<h1>{{.Title}}</h1>
+<p>{{.Body}}</p>
+{{template "end" .}}
+{{end}}
+
+{{define "approval-error"}}
+{{template "start" .}}
+<h1>{{.Title}}</h1>
+<p>Return to the case and open the current review.</p>
+<a href="{{.Base}}/cases/{{.Body}}">Return to case</a>
+{{template "end" .}}
+{{end}}

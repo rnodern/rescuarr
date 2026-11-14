@@ -1,0 +1,71 @@
+{{define "cases"}}
+{{template "start" .}}
+<h1>Cases</h1>
+{{$base := .Base}}
+<form class="panel filters" method="get" action="{{$base}}/cases">
+  <label>Search <input type="search" name="q" maxlength="200" value="{{.Body.Query.Search}}"></label>
+  <label>State <select name="state">
+    <option value="">All states</option>
+    {{range .Body.States}}<option value="{{.}}"{{if eq . $.Body.Query.State}} selected{{end}}>{{state .}}</option>{{end}}
+  </select></label>
+  <label>Instance ID <input name="instance" maxlength="128" value="{{.Body.Query.Instance}}"></label>
+  <label>Cause <input name="cause" maxlength="128" value="{{.Body.Query.Reason}}"></label>
+  {{if ne .Body.Query.Limit 50}}<input type="hidden" name="limit" value="{{.Body.Query.Limit}}">{{end}}
+  <div class="filter-actions"><button type="submit">Apply filters</button><a href="{{$base}}/cases">Clear</a></div>
+</form>
+{{if .Body.Cases}}
+<table class="panel">
+  <caption class="sr-only">Recovery cases</caption>
+  <thead><tr><th scope="col">Case</th><th scope="col">Instance</th><th scope="col">Targets</th><th scope="col">State</th><th scope="col">Cause</th></tr></thead>
+  <tbody>
+    {{range .Body.Cases}}<tr>
+      <th scope="row"><a href="{{$base}}/cases/{{.ID}}">{{.ID}}</a></th>
+      <td data-label="Instance">{{if .Job.Ref.Instance.ID}}{{.Job.Ref.Instance.ID}}{{else}}Unknown{{end}}</td>
+      <td data-label="Targets">{{len .Targets}}</td>
+      <td data-label="State"><span class="chip{{if eq .State "held"}} hold{{end}}">{{state .State}}</span></td>
+      <td data-label="Cause">{{reason .Reason}}</td>
+    </tr>{{end}}
+  </tbody>
+</table>
+{{else}}<p class="panel empty">No cases are available for these filters.</p>{{end}}
+{{if .Body.Next}}<p><a class="next" rel="next" href="{{.Body.Next}}">Next page</a></p>{{end}}
+{{template "end" .}}
+{{end}}
+
+{{define "case"}}
+{{template "start" .}}
+{{$base := .Base}}
+<p><a href="{{$base}}/cases">Back to cases</a></p>
+<h1>Case {{.Body.Case.ID}}</h1>
+<p><span class="chip{{if eq .Body.Case.State "held"}} hold{{end}}">{{state .Body.Case.State}}</span></p>
+<div class="case-grid">
+  <section class="panel">
+    <h2>Diagnosis</h2>
+    <p>{{reason .Body.Case.Reason}}</p>
+    <dl><dt>Instance</dt><dd>{{if .Body.Case.Job.Ref.Instance.ID}}{{.Body.Case.Job.Ref.Instance.ID}}{{else}}Unknown{{end}}</dd>
+    <dt>Next check</dt><dd>{{when .Body.Case.NextCheckAt}}</dd>
+    <dt>Affected incidents</dt><dd>{{len .Body.Case.Incidents}}</dd></dl>
+    {{if .Body.Case.Evidence}}<details><summary>Evidence references</summary><ul>{{range .Body.Case.Evidence}}<li>{{.}}</li>{{end}}</ul></details>{{end}}
+  </section>
+  <section class="panel">
+    <h2>Proposals</h2>
+    {{if .Body.Proposals}}<ul class="links">{{range .Body.Proposals}}<li><a href="{{$base}}/cases/{{.CaseID}}/review/{{.ID}}">Review {{action .Operation.Action}}</a><span>Expires {{when .ExpiresAt}}</span></li>{{end}}</ul>
+    {{else}}<p>No proposal is available.</p>{{end}}
+  </section>
+</div>
+<section class="panel section">
+  <h2>Targets</h2>
+  {{if .Body.Case.Targets}}<ul class="links">{{range .Body.Case.Targets}}<li>{{target .Ref}}</li>{{end}}</ul>{{else}}<p>Target mapping is unavailable.</p>{{end}}
+</section>
+{{if .Body.Outcomes}}
+<section class="panel section">
+  <h2>Recorded outcomes</h2>
+  {{range .Body.Outcomes}}
+    <details><summary>{{verification .Verification}} · {{when .ObservedAt}}</summary>
+    {{if .Effects}}<ul>{{range .Effects}}<li>{{effect .Effect.Kind}} · {{target .Effect.Target}} · {{verification .Verification}}</li>{{end}}</ul>{{else}}<p>Individual effect records are unavailable.</p>{{end}}
+    </details>
+  {{end}}
+</section>
+{{end}}
+{{template "end" .}}
+{{end}}
