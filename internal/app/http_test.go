@@ -22,12 +22,16 @@ func TestHandler(t *testing.T) {
 		{"/healthz", unavailable, http.StatusOK, `{"status":"ok"}`},
 		{"/readyz", unavailable, http.StatusServiceUnavailable, `{"status":"unready"}`},
 		{"/readyz", available, http.StatusOK, `{"status":"ready"}`},
-		{"/rescuer/", available, http.StatusOK, "<h1>Rescuarr</h1>"},
+		{"/rescuer/", available, http.StatusNoContent, ""},
 		{"/", available, http.StatusNotFound, "404 page not found"},
 	}
 	for _, test := range tests {
 		response := httptest.NewRecorder()
-		Handler("/rescuer", test.check).ServeHTTP(response, httptest.NewRequest(http.MethodGet, test.path, nil))
+		browser := http.NewServeMux()
+		browser.HandleFunc("GET /rescuer/{$}", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusNoContent)
+		})
+		withStatus(test.check, browser).ServeHTTP(response, httptest.NewRequest(http.MethodGet, test.path, nil))
 		if response.Code != test.status || !strings.Contains(response.Body.String(), test.body) {
 			t.Errorf("%s returned %d %q", test.path, response.Code, response.Body.String())
 		}

@@ -1,0 +1,23 @@
+{{define "access"}}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{.Title}} · Rescuarr</title>
+</head>
+<body>
+  <main>
+    <h1>{{.Title}}</h1>
+    {{if .Error}}<p role="alert">{{.Error}}</p>{{end}}
+    {{if .Setup}}<p>Retrieve the current setup or recovery token from the private <code>setup-token</code> file in the Rescuarr data directory.</p>{{end}}
+    <form method="post" action="{{.Action}}">
+      <input type="hidden" name="csrf" value="{{.CSRF}}">
+      {{if .Setup}}<p><label>Setup or recovery token <input name="token" autocomplete="off" required></label></p>{{end}}
+      <p><label>Password <input name="password" type="password" autocomplete="{{if .Setup}}new-password{{else}}current-password{{end}}" maxlength="256" required></label></p>
+      <button type="submit">{{.Title}}</button>
+    </form>
+  </main>
+</body>
+</html>
+{{end}}
