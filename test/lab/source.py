@@ -2,6 +2,7 @@
 
 import binascii
 import email.utils
+import hashlib
 import itertools
 import json
 import re
@@ -25,8 +26,17 @@ NEWS_DOMAIN = "rescuarr.invalid"
 ENCLOSURE_TYPE = "application/x-nzb"
 NEWZNAB_NS = "http://www.newznab.com/DTD/2010/feeds/attributes/"
 SEGMENT_BYTES = 262_144
+RELEASE_GROUPS = {
+    "original": "LABORIGINAL",
+    "terminal-original": "LABORIGINAL",
+    "replacement": "LABREPLACEMENT",
+}
+ARTICLE_ID = re.compile(
+    rb"<" + re.escape(SEED.encode("ascii")) + rb"\.(episode[12]|movie[12])\."
+    rb"(original|terminal-original|replacement)\.(\d{1,5})@" + re.escape(NEWS_DOMAIN.encode("ascii")) + rb">"
+)
 
-# Each case can independently select original or replacement through the lab control route.
+# Each target can select its release fixture through the lab control route.
 TARGETS = {
     "episode1": ("sonarr", f"{SONARR_TITLE.replace(' ', '.')}.S01E01", 5040),
     "episode2": ("sonarr", f"{SONARR_TITLE.replace(' ', '.')}.S01E02", 5040),
@@ -87,7 +97,7 @@ def movie_metadata(index):
 
 def releases(target, phase):
     prefix = TARGETS[target][1]
-    group = {"original": "LABORIGINAL", "replacement": "LABREPLACEMENT"}[phase]
+    group = RELEASE_GROUPS[phase]
     return f"{prefix}.720p.WEB-DL.x264-{group}"
 
 
@@ -229,13 +239,18 @@ class News(socketserver.StreamRequestHandler):
         self.line(b".")
 
     def reply_article(self, command, message_id):
-        match = re.fullmatch(rb"<rescuarr-lab-v1\.(episode[12]|movie[12])\.(original|replacement)\.(\d{1,5})@rescuarr\.invalid>", message_id)
+        match = ARTICLE_ID.fullmatch(message_id)
         if match is None:
             self.line(b"430 No such synthetic article")
             return
         target, phase, number = (value.decode("ascii") for value in match.groups())
-        article = news_article(target, phase, int(number), self.server.media)
+        number = int(number)
+        article = news_article(target, phase, number, self.server.media)
         if article is None:
+            self.line(b"430 No such synthetic article")
+        elif phase == "terminal-original":
+            with self.server.lock:
+                self.server.missing_articles[target].add((number, command.decode("ascii")))
             self.line(b"430 No such synthetic article")
         elif command == b"STAT":
             self.line(b"223 0 " + message_id)
@@ -275,7 +290,7 @@ class Source(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urlsplit(self.path).path
-        match = re.fullmatch(r"/lab/feed/(episode[12]|movie[12])/(original|replacement)", path)
+        match = re.fullmatch(r"/lab/feed/(episode[12]|movie[12])/(original|terminal-original|replacement)", path)
         if not match:
             self.send_error(404)
             return
@@ -306,7 +321,17 @@ class Source(BaseHTTPRequestHandler):
         elif path == "/lab/searches":
             with self.server.lock:
                 self.write(list(self.server.searches))
-        elif (match := re.fullmatch(r"/nzb/(episode[12]|movie[12])/(original|replacement)", path)):
+        elif (match := re.fullmatch(r"/lab/missing-articles/(episode[12]|movie[12])", path)):
+            target = match[1]
+            with self.server.lock:
+                replies = sorted(self.server.missing_articles[target])
+            self.write([
+                {"messageId": article_id(target, "terminal-original", number), "command": command, "responseCode": 430}
+                for number, command in replies
+            ])
+        elif path == "/lab/media":
+            self.write(self.server.media_fingerprint)
+        elif (match := re.fullmatch(r"/nzb/(episode[12]|movie[12])/(original|terminal-original|replacement)", path)):
             self.write(nzb(*match.groups(), self.server.media), ENCLOSURE_TYPE)
         else:
             self.send_error(404)
@@ -325,7 +350,7 @@ class Source(BaseHTTPRequestHandler):
                                              "episode": query.get("ep", [""])[0]})
                 for target in scope:
                     phase = self.server.phases.get(target, "original")
-                    stamp = self.server.started - (3600 if phase == "original" else 60)
+                    stamp = self.server.started - (60 if phase == "replacement" else 3600)
                     items.append((target, phase, stamp))
             # Validation needs a parseable recent item. It remains outside the
             # recorded target scope and cannot satisfy a recovery search.
@@ -348,6 +373,8 @@ def main():
     # The fixture state is shared between both HTTP listeners.
     lock = threading.Lock()
     phases, searches = {}, []
+    missing_articles = {target: set() for target in TARGETS}
+    media_fingerprint = {"bytes": len(media), "sha256": hashlib.sha256(media).hexdigest()}
     metadata = {"sonarrSeries": 0, "radarrMovie": 0, "unmatchedMetadata": 0}
     started = datetime.now(timezone.utc).timestamp()
     for server in (plain, secure):
@@ -356,7 +383,11 @@ def main():
         server.searches = searches
         server.metadata = metadata
         server.media = media
+        server.media_fingerprint = media_fingerprint
+        server.missing_articles = missing_articles
         server.started = started
+    news.lock = lock
+    news.missing_articles = missing_articles
     news.media = media
     tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     tls.load_cert_chain("/tls/source.pem", "/tls/source.key")

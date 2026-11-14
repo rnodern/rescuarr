@@ -21,6 +21,8 @@ on:
           - radarr/reject-remove
           - sonarr/reject-lost-response
           - radarr/reject-lost-response
+          - sonarr/replace-terminal
+          - radarr/replace-terminal
 
 permissions:
   contents: read

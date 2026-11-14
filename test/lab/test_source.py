@@ -1,12 +1,15 @@
 import binascii
 import io
+import threading
 import unittest
 import xml.etree.ElementTree as ET
+from types import SimpleNamespace
 
 from source import (
     CAPABILITIES,
     NEWS_DOMAIN,
     NEWS_GROUP,
+    News,
     SEGMENT_BYTES,
     SEED,
     SOURCE,
@@ -17,6 +20,7 @@ from source import (
     metadata_path_kind,
     news_article,
     nzb,
+    releases,
     rss,
     recent_index_targets,
     search_targets,
@@ -77,6 +81,33 @@ class SyntheticSourceTest(unittest.TestCase):
         self.assertEqual(len(items), 1)
         self.assertIn("S01E01", items[0].findtext("title"))
         self.assertEqual(items[0].find("enclosure").attrib["url"], f"{SOURCE}/nzb/episode1/replacement")
+
+    def test_terminal_release_returns_missing_articles_without_affecting_replacement(self):
+        media = b"synthetic media"
+        namespace = {"nzb": "http://www.newzbin.com/DTD/2003/nzb"}
+        targets = {"episode1": "sonarr", "movie1": "radarr"}
+        for target, product in targets.items():
+            with self.subTest(product=product):
+                feed = ET.fromstring(rss([(target, "terminal-original", 42)], product, len(media)))
+                item = feed.find("./channel/item")
+                self.assertEqual(item.findtext("title"), releases(target, "terminal-original"))
+                self.assertEqual(item.find("enclosure").get("url"), f"{SOURCE}/nzb/{target}/terminal-original")
+                handler = News.__new__(News)
+                handler.server = SimpleNamespace(media=media, lock=threading.Lock(), missing_articles={target: set()})
+                for phase, code in (("terminal-original", b"430"), ("original", b"222"), ("replacement", b"222")):
+                    entry = ET.fromstring(nzb(target, phase, media))
+                    article = entry.findtext(".//nzb:segment", namespaces=namespace)
+                    self.assertEqual(article, article_id(target, phase, 1))
+                    handler.wfile = io.BytesIO()
+                    handler.reply_article(b"BODY", f"<{article}>".encode("ascii"))
+                    response = handler.wfile.getvalue()
+                    self.assertTrue(response.startswith(code + b" "))
+                    if phase == "terminal-original":
+                        self.assertEqual(response.splitlines(), [b"430 No such synthetic article"])
+                    else:
+                        self.assertIn(b"=ybegin", response)
+                        self.assertTrue(response.endswith(b".\r\n"))
+                self.assertEqual(handler.server.missing_articles[target], {(1, "BODY")})
 
     def test_nzb_segments_match_exact_yenc_articles(self):
         data = bytes(range(256)) * (SEGMENT_BYTES // 256 + 1)
