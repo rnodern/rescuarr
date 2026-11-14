@@ -108,3 +108,30 @@ func TestEpisodeFilenameReviewWithoutSonarrEpisodeTitle(t *testing.T) {
 		t.Fatalf("expected a match without episode title metadata: %+v", got)
 	}
 }
+
+func TestEpisodeFilenameReviewWithRegionalSeriesAndPartNumber(t *testing.T) {
+	const release = "Ghosts.S06E02.Halloween.6.The.Mirror.Part.2.720p.CBS.WEB-DL.DDP5.1.H.264-BTN"
+	for _, tt := range []struct {
+		name, release string
+		match         bool
+	}{
+		{"omitted region with title corroboration", release, true},
+		{"explicit different region", "Ghosts.UK.S06E02.Halloween.6.The.Mirror.Part.2.720p", false},
+		{"wrong part", "Ghosts.S06E02.Halloween.6.The.Mirror.Part.1.720p", false},
+		{"wrong episode", "Ghosts.S06E03.Halloween.6.The.Mirror.Part.2.720p", false},
+		{"missing title and region", "Ghosts.S06E02.720p", false},
+		{"explicit matching region", "Ghosts.US.S06E02.720p", true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			row := observe.QueueRecord{DownloadID: "fixture", MediaTitle: "Ghosts (US)", Episode: "S06E02",
+				EpisodeTitle: "Halloween 6: The Mirror (2)", OutputPath: "/downloads/" + tt.release}
+			review := domain.EpisodeNameReview{Series: row.MediaTitle, Episode: row.Episode, EpisodeTitle: row.EpisodeTitle}
+			got := checkEpisodeNames(review, row, UnixPath, nil, []wireCandidate{
+				{Path: row.OutputPath + "/" + tt.release + ".mkv", Size: 4096},
+			})
+			if got.Matched != tt.match || (tt.release == release && !got.TitleInNames) {
+				t.Fatalf("unexpected assessment: %+v", got)
+			}
+		})
+	}
+}

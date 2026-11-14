@@ -120,24 +120,23 @@ func checkEpisodeNames(review domain.EpisodeNameReview, row observe.QueueRecord,
 		}
 	}
 	for _, name := range names {
-		if !matchingSeries(name.value[:name.start], row.MediaTitle) {
+		series := name.value[:name.start]
+		title, extra := episodeSuffix(name.value[name.end:], row.MediaTitle)
+		titleMatches := len(title) > 0 && slices.Equal(title, episodeTitleWords(row.EpisodeTitle))
+		if !matchingSeries(series, row.MediaTitle) &&
+			!(titleMatches && matchesWithoutRegion(series, row.MediaTitle)) {
 			review.Reason = "The series in the " + name.label + " does not match " + row.MediaTitle + "."
 			return review
 		}
-	}
-	for _, name := range names {
-		namedTitle, extra := episodeSuffix(name.value[name.end:], row.MediaTitle)
 		if extra {
 			review.Reason = "The " + name.label + " looks like a sample or extra."
 			return review
 		}
-		if len(namedTitle) > 0 && row.EpisodeTitle != "" {
-			if !slices.Equal(namedTitle, nameWords(row.EpisodeTitle)) {
-				review.Reason = "The episode title in the " + name.label + " could not be confirmed against Sonarr."
-				return review
-			}
-			review.TitleInNames = true
+		if len(title) > 0 && row.EpisodeTitle != "" && !titleMatches {
+			review.Reason = "The episode title in the " + name.label + " could not be confirmed against Sonarr."
+			return review
 		}
+		review.TitleInNames = review.TitleInNames || titleMatches
 	}
 	review.Matched = true
 	return review
@@ -263,6 +262,22 @@ func singleTitleTypo(actual, expected string) bool {
 	return true
 }
 
+var (
+	seriesRegion = regexp.MustCompile(`(?i)\s+\((?:US|UK|AU|CA|NZ)\)\s*$`)
+	titlePart    = regexp.MustCompile(`(?i)(?:\s*\(\s*([0-9]+)\s*\)|[ ._-]+Part[ ._-]+([0-9]+))\s*$`)
+)
+
+func matchesWithoutRegion(actual, expected string) bool {
+	base := seriesRegion.ReplaceAllString(expected, "")
+	return base != expected && slices.Equal(seriesWords(actual), seriesWords(base))
+}
+
+func episodeTitleWords(title string) []string {
+	title = strings.Trim(title, " ._-[]")
+	title = titlePart.ReplaceAllString(title, " part ${1}${2}")
+	return nameWords(title)
+}
+
 func episodeSuffix(suffix, series string) ([]string, bool) {
 	for _, word := range nameWords(suffix) {
 		if word == "sample" || word == "trailer" || word == "featurette" {
@@ -275,5 +290,5 @@ func episodeSuffix(suffix, series string) ([]string, bool) {
 	if matchingSeries(suffix, series) {
 		return nil, false
 	}
-	return nameWords(suffix), false
+	return episodeTitleWords(suffix), false
 }
