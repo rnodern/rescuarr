@@ -2,10 +2,14 @@ package recoveryservice
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/rnodern/rescuarr/internal/app"
@@ -46,10 +50,32 @@ func RunEmptyPackRecovery(ctx context.Context, cases *observeservice.Service, lo
 	if cases == nil || local == nil || clock == nil || !instance.Valid() || transport == nil || qualified == nil {
 		return arradapter.ErrQualification
 	}
-	worker := &emptyPackWorker{
-		cases: cases, journal: NewEmptyPackJournal(local), clock: clock, instance: instance,
+	worker := newEmptyPackWorker(ctx, cases, local, clock, transport, func(_ context.Context, instance domain.Instance) (*arradapter.EmptyPackAdapter, error) {
+		return qualified(instance)
+	})
+	worker.instance = instance
+	return runEmptyPackPasses(ctx, worker.step, onError)
+}
+
+// RunManualEmptyPackRecovery resumes only the pack explicitly approved by the
+// owner. Automatic selection remains exclusive to the autonomous worker.
+func RunManualEmptyPackRecovery(ctx context.Context, cases *observeservice.Service, local *store.Store, clock app.Clock,
+	transport http.RoundTripper, qualified func(context.Context, domain.Instance) (*arradapter.EmptyPackAdapter, error), onError func(error)) error {
+	if cases == nil || local == nil || clock == nil || transport == nil || qualified == nil {
+		return arradapter.ErrQualification
+	}
+	return runEmptyPackPasses(ctx, func(pass context.Context) error {
+		worker := newEmptyPackWorker(pass, cases, local, clock, transport, qualified)
+		return worker.manualStep(pass, transport)
+	}, onError)
+}
+
+func newEmptyPackWorker(ctx context.Context, cases *observeservice.Service, local *store.Store, clock app.Clock,
+	transport http.RoundTripper, qualified func(context.Context, domain.Instance) (*arradapter.EmptyPackAdapter, error)) *emptyPackWorker {
+	return &emptyPackWorker{
+		cases: cases, journal: NewEmptyPackJournal(local), clock: clock,
 		connection: func(instance domain.Instance) (emptyPackEffects, emptyPackReader, error) {
-			effects, err := qualified(instance)
+			effects, err := qualified(ctx, instance)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -64,6 +90,9 @@ func RunEmptyPackRecovery(ctx context.Context, cases *observeservice.Service, lo
 			return effects, reader, err
 		},
 	}
+}
+
+func runEmptyPackPasses(ctx context.Context, step func(context.Context) error, onError func(error)) error {
 	timer := time.NewTimer(0)
 	defer timer.Stop()
 	for {
@@ -72,7 +101,7 @@ func RunEmptyPackRecovery(ctx context.Context, cases *observeservice.Service, lo
 			return nil
 		case <-timer.C:
 			pass, cancel := context.WithTimeout(ctx, 50*time.Second)
-			err := worker.step(pass)
+			err := step(pass)
 			cancel()
 			if err != nil && ctx.Err() == nil && onError != nil {
 				onError(err)
@@ -101,7 +130,7 @@ func (w *emptyPackWorker) step(ctx context.Context) error {
 	}
 	var pendingErrors error
 	for _, checkpoint := range pending {
-		if w.instance.Valid() && w.instance != checkpoint.Key.Job.Instance {
+		if checkpoint.manualToken != "" || w.instance.Valid() && w.instance != checkpoint.Key.Job.Instance {
 			continue
 		}
 		if ctx.Err() != nil {
@@ -120,6 +149,182 @@ func (w *emptyPackWorker) step(ctx context.Context) error {
 	item := cases[0]
 	w.after = item.ID
 	return errors.Join(pendingErrors, w.start(ctx, item))
+}
+
+type manualPackPlan struct {
+	checkpoint EmptyPackCheckpoint
+	preview    *app.ReplacementPreview
+	searchIDs  []int64
+	scopeHash  string
+	folder     string
+}
+
+func prepareManualEmptyPack(ctx context.Context, cases *observeservice.Service, local *store.Store, clock app.Clock,
+	transport http.RoundTripper, id domain.CaseID, revision domain.Revision) (manualPackPlan, error) {
+	proof, err := cases.FreshRecoveryQueue(ctx, id, revision)
+	if err != nil {
+		return manualPackPlan{}, err
+	}
+	seriesID, ids, exact := missingFileTargets(proof)
+	key := EmptyPackKey{CaseID: id, Job: proof.Case.Job.Ref}
+	if !exact || !key.valid() || len(ids) < 2 || proof.Case.Job.Protocol != domain.ProtocolUsenet ||
+		proof.Case.Job.Shared || proof.Case.LastSeenAt.IsZero() {
+		return manualPackPlan{}, app.ErrHeld
+	}
+	release, err := cases.HoldRecoveryConnection(ctx, proof.Instance)
+	if err != nil {
+		return manualPackPlan{}, err
+	}
+	defer release()
+	apiKey, err := local.ReadSecret(proof.Instance.SecretRef)
+	if err != nil {
+		return manualPackPlan{}, observe.ErrAccess
+	}
+	arr, err := observe.NewArr(observe.Config{Instance: proof.Instance, APIKey: apiKey}, transport)
+	if err != nil {
+		return manualPackPlan{}, err
+	}
+	needs, err := arr.SonarrEpisodeNeeds(ctx, seriesID, ids, clock.Now())
+	if err != nil {
+		return manualPackPlan{}, err
+	}
+	// Read the full queue again after the episode lookup. A second active job
+	// may have appeared while the library/monitoring evidence was fetched.
+	current, err := cases.FreshRecoveryQueue(ctx, id, revision)
+	if err != nil {
+		return manualPackPlan{}, err
+	}
+	currentSeries, currentIDs, ok := missingFileTargets(current)
+	if !ok || current.Instance != proof.Instance || current.Case.Job.Ref != key.Job ||
+		currentSeries != seriesID || !slices.Equal(currentIDs, ids) {
+		return manualPackPlan{}, app.ErrConflict
+	}
+	first := current.Members[0]
+	if first.OutputPath == "" || first.DownloadID == "" || first.ClientLabel == "" {
+		return manualPackPlan{}, app.ErrHeld
+	}
+	original := proof.Members[0]
+	if first.OutputPath != original.OutputPath || first.DownloadID != original.DownloadID ||
+		first.ClientLabel != original.ClientLabel || first.Release != original.Release {
+		return manualPackPlan{}, app.ErrConflict
+	}
+	checkpoint := EmptyPackCheckpoint{
+		Key: key, ConnectionRevision: current.Instance.ConnectionRevision, SeriesID: seriesID,
+		Release: first.Release, DownloadID: first.DownloadID, EpisodeIDs: ids,
+		outputPath: first.OutputPath, clientLabel: first.ClientLabel,
+	}
+	for _, row := range current.Members {
+		if row.OutputPath != first.OutputPath || row.DownloadID != first.DownloadID || row.ClientLabel != first.ClientLabel {
+			return manualPackPlan{}, app.ErrHeld
+		}
+		checkpoint.QueueIDs = append(checkpoint.QueueIDs, row.ID)
+	}
+	slices.Sort(checkpoint.QueueIDs)
+	slices.Sort(checkpoint.EpisodeIDs)
+	if !validEmptyPackIdentity(checkpoint) {
+		return manualPackPlan{}, app.ErrHeld
+	}
+	folder := strings.TrimRight(first.OutputPath, "/\\")
+	folder = folder[strings.LastIndexAny(folder, "/\\")+1:]
+	if !emptyPackToken(folder, 512) {
+		folder = ""
+	}
+	plan := manualPackPlan{checkpoint: checkpoint, preview: replacementPlan(current, needs), folder: folder}
+	plan.preview.Language = reviewPackLanguage(ctx, arr, current, plan.preview, clock.Now())
+	plan.searchIDs = wantedEmptyPackEpisodes(plan.preview)
+	// The token binds to what the owner sees and to the original private job
+	// and path identity. Only the digest is persisted with the approval.
+	content, err := json.Marshal(struct {
+		Checkpoint EmptyPackCheckpoint
+		Preview    *app.ReplacementPreview
+		Path       string
+		Client     string
+	}{checkpoint, plan.preview, first.OutputPath, first.ClientLabel})
+	if err != nil {
+		return manualPackPlan{}, err
+	}
+	digest := sha256.Sum256(content)
+	plan.scopeHash = hex.EncodeToString(digest[:])
+	return plan, nil
+}
+
+func (w *emptyPackWorker) manualStep(ctx context.Context, transport http.RoundTripper) error {
+	local := w.journal.local
+	var id domain.CaseID
+	var revision domain.Revision
+	var token, scopeHash string
+	var searchJSON []byte
+	err := local.Read(ctx, func(tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx, `SELECT m.case_id, m.case_revision, m.token, m.scope_hash, m.search_ids
+			FROM manual_reviews AS m
+			JOIN app_state AS s ON s.singleton = 1 JOIN action_pause AS p ON p.singleton = 1
+			WHERE m.state = 'approved' AND s.mode = 'assist' AND s.reconcile_required = 0 AND p.paused = 0`).
+			Scan(&id, &revision, &token, &scopeHash, &searchJSON)
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	checkpoint, exists, err := w.journal.loadManual(ctx, id, token)
+	if err != nil {
+		return err
+	}
+	if exists {
+		if checkpoint.Stage == EmptyPackRejectSending || checkpoint.Stage == EmptyPackRejectVerified {
+			return w.resume(ctx, checkpoint)
+		}
+		// A lost search acknowledgement is held for operator reconciliation.
+		return nil
+	}
+	detail, err := w.cases.Case(ctx, id)
+	if errors.Is(err, app.ErrNotFound) || detail.Case.State == domain.CaseClosed ||
+		err == nil && (detail.Case.Revision != revision || len(detail.Case.Incidents) != 0) {
+		return resetManualReview(ctx, local, id, token, w.clock.Now())
+	}
+	if err != nil {
+		return err
+	}
+	plan, err := prepareManualEmptyPack(ctx, w.cases, local, w.clock, transport, id, revision)
+	switch {
+	case errors.Is(err, app.ErrConflict):
+		return resetManualReview(ctx, local, id, token, w.clock.Now())
+	case err != nil:
+		return err
+	}
+	var approved []int64
+	if err := json.Unmarshal(searchJSON, &approved); err != nil {
+		return err
+	}
+	if plan.scopeHash != scopeHash || !slices.Equal(plan.searchIDs, approved) {
+		return resetManualReview(ctx, local, id, token, w.clock.Now())
+	}
+	if plan.preview.UnclearCount != 0 {
+		return app.ErrHeld
+	}
+	instance, err := w.cases.RecoveryInstance(ctx, plan.checkpoint.Key.Job.Instance, plan.checkpoint.ConnectionRevision)
+	if err != nil {
+		return err
+	}
+	release, err := w.cases.HoldRecoveryConnection(ctx, instance)
+	if err != nil {
+		return err
+	}
+	defer release()
+	effects, _, err := w.connection(instance)
+	if errors.Is(err, arradapter.ErrQualification) {
+		return resetManualReview(ctx, local, id, token, w.clock.Now())
+	}
+	if err != nil {
+		return err
+	}
+	plan.checkpoint.manualToken, plan.checkpoint.manualScopeHash = token, scopeHash
+	err = w.reject(ctx, effects, plan.checkpoint)
+	if errors.Is(err, app.ErrConflict) || errors.Is(err, arradapter.ErrReadback) || errors.Is(err, arradapter.ErrQualification) {
+		return resetManualReview(ctx, local, id, token, w.clock.Now())
+	}
+	return err
 }
 
 func (w *emptyPackWorker) start(ctx context.Context, item domain.Case) error {
@@ -165,10 +370,15 @@ func (w *emptyPackWorker) start(ctx context.Context, item domain.Case) error {
 	if replacementPlan(proof, needs).UnclearCount != 0 {
 		return nil
 	}
+	return w.reject(ctx, effects, checkpoint)
+}
+
+func (w *emptyPackWorker) reject(ctx context.Context, effects emptyPackEffects, checkpoint EmptyPackCheckpoint) error {
 	scope := emptyPackScope(checkpoint)
 	if err := effects.Preflight(ctx, scope); err != nil {
 		return err
 	}
+	key := checkpoint.Key
 	ok, err := w.journal.BeginReject(ctx, key, checkpoint, w.clock.Now())
 	if !ok || err != nil {
 		return err
@@ -235,15 +445,17 @@ func (w *emptyPackWorker) search(ctx context.Context, effects emptyPackEffects, 
 	if plan.UnclearCount != 0 {
 		return nil
 	}
-	if plan.SearchCount == 0 {
+	wanted := wantedEmptyPackEpisodes(plan)
+	if cp.manualToken != "" {
+		approved, err := w.journal.manualSearchScope(ctx, cp)
+		if err != nil {
+			return err
+		}
+		wanted = slices.DeleteFunc(wanted, func(id int64) bool { return !slices.Contains(approved, id) })
+	}
+	if len(wanted) == 0 {
 		_, err := w.journal.Advance(ctx, cp.Key, cp.Stage, EmptyPackCheckpoint{Stage: EmptyPackDone}, w.clock.Now())
 		return err
-	}
-	var wanted []int64
-	for _, episode := range plan.Episodes {
-		if episode.Status == app.ReplacementSearch {
-			wanted = append(wanted, episode.Target.ID)
-		}
 	}
 	ok, err := w.journal.Advance(ctx, cp.Key, cp.Stage, EmptyPackCheckpoint{Stage: EmptyPackSearchSending, SearchIDs: wanted}, w.clock.Now())
 	if err != nil || !ok {
@@ -255,6 +467,17 @@ func (w *emptyPackWorker) search(ctx context.Context, effects emptyPackEffects, 
 	}
 	_, err = w.journal.Advance(ctx, cp.Key, EmptyPackSearchSending, EmptyPackCheckpoint{Stage: EmptyPackDone, CommandID: commandID}, w.clock.Now())
 	return err
+}
+
+func wantedEmptyPackEpisodes(plan *app.ReplacementPreview) []int64 {
+	wanted := make([]int64, 0, plan.SearchCount)
+	for _, episode := range plan.Episodes {
+		if episode.Status == app.ReplacementSearch {
+			wanted = append(wanted, episode.Target.ID)
+		}
+	}
+	slices.Sort(wanted)
+	return wanted
 }
 
 // The adapter reserves ErrUncertain for anything that reached transport.
@@ -272,5 +495,5 @@ func (w *emptyPackWorker) cancelIfUnsent(ctx context.Context, key EmptyPackKey, 
 
 func emptyPackScope(cp EmptyPackCheckpoint) arradapter.EmptyPackScope {
 	return arradapter.EmptyPackScope{QueueIDs: cp.QueueIDs, DownloadID: cp.DownloadID, Release: cp.Release,
-		SeriesID: cp.SeriesID, EpisodeIDs: cp.EpisodeIDs}
+		SeriesID: cp.SeriesID, EpisodeIDs: cp.EpisodeIDs, OutputPath: cp.outputPath, ClientLabel: cp.clientLabel}
 }

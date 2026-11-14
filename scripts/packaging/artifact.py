@@ -5,6 +5,7 @@ import json
 import re
 import subprocess
 import tarfile
+import tempfile
 
 
 def command(*args):
@@ -20,11 +21,13 @@ def commit():
 
 def source_archive(source, *paths):
     source.mkdir()
-    with subprocess.Popen(["git", "archive", "--format=tar", "HEAD", *paths], stdout=subprocess.PIPE) as archive:
-        with tarfile.open(fileobj=archive.stdout, mode="r|") as contents:
+    # A tar reader can stop at the end marker while git is still writing tar
+    # padding, which can fill the Windows pipe and stall the child.
+    with tempfile.TemporaryFile() as archive:
+        subprocess.run(["git", "archive", "--format=tar", "HEAD", *paths], stdout=archive, check=True)
+        archive.seek(0)
+        with tarfile.open(fileobj=archive, mode="r:") as contents:
             contents.extractall(source, filter="data")
-        if archive.wait():
-            raise RuntimeError("Unable to extract the tracked source at HEAD")
 
 
 def checksum(path):

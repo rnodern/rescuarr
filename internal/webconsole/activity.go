@@ -93,6 +93,16 @@ func activityLabel(kind domain.EventKind, reason domain.ReasonCode) (status, eve
 		return "Paused", "Automatic recovery paused", true
 	case "action_resume":
 		return "Recorded", "Automatic recovery resumed", false
+	case "recovery_manual_approved":
+		return "Approved", "Manual recovery approved", false
+	case "recovery_manual_declined":
+		return "Declined", "Manual recovery declined", false
+	case "recovery_manual_review_changed":
+		return "Needs review", "The evidence changed before recovery", true
+	case "recovery_manual_mode_enabled":
+		return "Recorded", "Switched to Manual mode", false
+	case "recovery_manual_mode_disabled":
+		return "Recorded", "Switched to Observe mode", false
 	case "recovery_external_import_verified":
 		return "Verified", "Sonarr import verified. Case closed.", false
 	case "recovery_queue_missing":
@@ -110,6 +120,9 @@ func activityLabel(kind domain.EventKind, reason domain.ReasonCode) (status, eve
 	case "recovery_empty_pack_done":
 		if reason == "empty_pack_no_search_needed" {
 			return "Done", "No episodes needed a replacement search", false
+		}
+		if reason == "empty_pack_no_approved_search_needed" {
+			return "Done", "No approved episodes needed a replacement search", false
 		}
 		return "Requested", "Sonarr accepted the episode search", false
 	case "recovery_verified":

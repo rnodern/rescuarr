@@ -147,7 +147,7 @@ func TestProtectedRoutesAndSessionScopedFragment(t *testing.T) {
 		}
 	}
 	w := request(h, "GET", "/fragments/status", "owner", "", nil)
-	expect(t, w, 200, "Assist")
+	expect(t, w, 200, "Manual")
 	tag := w.Header().Get("ETag")
 	if tag == "" {
 		t.Fatal("missing ETag")

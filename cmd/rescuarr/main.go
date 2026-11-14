@@ -23,6 +23,7 @@ import (
 	"github.com/rnodern/rescuarr/internal/observeservice"
 	"github.com/rnodern/rescuarr/internal/prowl"
 	"github.com/rnodern/rescuarr/internal/prowloutbox"
+	"github.com/rnodern/rescuarr/internal/recoveryservice"
 	"github.com/rnodern/rescuarr/internal/store"
 )
 
@@ -152,8 +153,14 @@ func serve(ctx context.Context, cfg config.Config, local *store.Store, auth *acc
 		return fmt.Errorf("open listener: %w", err)
 	}
 	observations := observeservice.New(local, nil, nil)
+	clock := app.SystemClock{}
+	transport := manualPackTransport()
+	defer transport.CloseIdleConnections()
+	qualified := manualPackQualification(cfg, local, transport, clock)
+	preview := recoveryservice.NewPreviewService(observations, local, nil, clock)
+	manual := recoveryservice.NewManualReviews(local, observations, preview, transport, clock, qualified)
 	server := &http.Server{
-		Handler:           browserHandler(cfg, auth, local, observations, notifications, recoveryPause),
+		Handler:           browserHandler(cfg, auth, local, observations, notifications, recoveryPause, manual),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      55 * time.Second, // Allows the bounded upstream queue scan to finish.
@@ -161,6 +168,7 @@ func serve(ctx context.Context, cfg config.Config, local *store.Store, auth *acc
 		MaxHeaderBytes:    16 << 10,
 	}
 	workers, stopWorkers := context.WithCancel(ctx)
+	manualStopped := startManualPackWorker(workers, local, observations, clock, transport, qualified, logger)
 	workerStopped := make(chan struct{})
 	if cfg.ProwlDelivery {
 		notificationStopped := make(chan struct{})
@@ -186,6 +194,7 @@ func serve(ctx context.Context, cfg config.Config, local *store.Store, auth *acc
 		stopWorkers()
 		<-workerStopped
 		<-observationsStopped
+		<-manualStopped
 	}()
 	finished := make(chan error, 1)
 	logger.Info("service_started", "component", "http", "version", version)

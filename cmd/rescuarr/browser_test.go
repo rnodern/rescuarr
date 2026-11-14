@@ -116,7 +116,7 @@ func TestBrowserUsesOwnerSessionAndLocalState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler := browserHandler(cfg, auth, local, observations, notifications, recoveryPause)
+	handler := browserHandler(cfg, auth, local, observations, notifications, recoveryPause, nil)
 	request := func(method, path, token, origin string, form url.Values) *httptest.ResponseRecorder {
 		t.Helper()
 		request := httptest.NewRequest(method, "http://127.0.0.1:8787"+path, strings.NewReader(form.Encode()))

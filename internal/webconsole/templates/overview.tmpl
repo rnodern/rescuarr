@@ -4,6 +4,25 @@
 {{if .HasConnections}}<p><a href="{{.Base}}/connections">Manage connections and check queues</a></p>{{end}}
 {{if .Status.Paused}}<p class="notice">New recovery actions are paused.</p>
 {{else if .Status.ReconcileRequired}}<p class="notice">Recovery is held pending reconciliation.</p>{{end}}
+{{if and .HasManualReview (or (eq .Status.Mode "observe") (eq .Status.Mode "assist"))}}
+<section class="panel section">
+  <h2>Recovery mode</h2>
+  {{if eq .Status.Mode "assist"}}<p>Review and decide on one download at a time.</p>{{else}}<p>Rescuarr monitors downloads and checks for recovery options.</p>{{end}}
+  <div class="connection-actions">
+    {{if eq .Status.Mode "assist"}}<a class="button" href="{{.Base}}/manual-review">Open Manual Review</a>{{end}}
+    <form method="post" action="{{.Base}}/manual-review/mode">
+      <input type="hidden" name="csrf" value="{{.CSRF}}">
+      {{if eq .Status.Mode "assist"}}
+      <input type="hidden" name="mode" value="observe">
+      <button class="button-quiet" type="submit">Switch to Observe</button>
+      {{else}}
+      <input type="hidden" name="mode" value="manual">
+      <button type="submit">Switch to Manual</button>
+      {{end}}
+    </form>
+  </div>
+</section>
+{{end}}
 {{if .Body}}<form method="post" action="{{.Base}}/controls/{{if .Status.Paused}}resume{{else}}pause{{end}}">
   <input type="hidden" name="csrf" value="{{.CSRF}}">
   <input type="hidden" name="revision" value="{{.Body.Revision}}">

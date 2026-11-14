@@ -116,7 +116,12 @@ def check_owner_workflow(base_url, data):
     login = OwnerForm(get("/login", b"Sign in"), "/login")
     post("/login", "/", {"csrf": login.csrf(), "password": password})
     get("/cases", b"<h1>Recovery Queue</h1>")
-    get("/connections", b"<h1>Connections</h1>")
+    connection = OwnerForm(get("/connections", b"<h1>Connections</h1>"), "/connections")
+    post("/connections", "/connections", {"csrf": connection.csrf(), "product": "sonarr",
+         "name": "Synthetic Sonarr", "url": "http://127.0.0.1:1", "api_key": "synthetic-key"})
+    content = get("/connections", b"Synthetic Sonarr")
+    if b"synthetic-key" in content:
+        raise RuntimeError("The connection page exposed the pasted credential")
     for suffix, media in (("css", "text/css"), ("js", "javascript")):
         path = "/assets/console." + suffix
         with opener.open(base_url + path, timeout=5) as response:
