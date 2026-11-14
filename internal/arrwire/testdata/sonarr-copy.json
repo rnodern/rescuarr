@@ -1,0 +1,35 @@
+{
+  "name": "ManualImport",
+  "importMode": "copy",
+  "files": [
+    {
+      "path": "/synthetic/arr-copy/a.mkv",
+      "folderName": "synthetic-folder",
+      "downloadId": "synthetic-download",
+      "quality": {
+        "quality": {"id": 3, "name": "WEBDL-1080p", "source": "web", "resolution": 1080},
+        "revision": {"version": 2, "real": 1, "isRepack": true}
+      },
+      "languages": [{"id": 1, "name": "English"}, {"id": 2, "name": "French"}],
+      "releaseGroup": "SYNTHETIC",
+      "indexerFlags": 9,
+      "seriesId": 17,
+      "episodeIds": [102, 101],
+      "releaseType": "multiEpisode"
+    },
+    {
+      "path": "/synthetic/arr-copy/b.mkv",
+      "folderName": "synthetic-folder",
+      "downloadId": "synthetic-download",
+      "quality": {
+        "quality": {"id": 4, "name": "HDTV-720p", "source": "television", "resolution": 720},
+        "revision": {"version": 1, "real": 0, "isRepack": false}
+      },
+      "languages": [{"id": 1, "name": "English"}],
+      "indexerFlags": 0,
+      "seriesId": 17,
+      "episodeIds": [103],
+      "releaseType": "singleEpisode"
+    }
+  ]
+}
