@@ -28,21 +28,31 @@ type PreparedImport struct {
 }
 
 type PreparedImportFile struct {
-	Path         string
-	FolderName   string
-	Targets      []TargetRef
-	QualityID    int64
-	Quality      ImportQualityRevision
-	Languages    []int64
-	ReleaseGroup string
-	IndexerFlags uint64
-	ReleaseType  string
+	Path              string
+	FolderName        string
+	Targets           []TargetRef
+	QualityID         int64
+	QualityName       string
+	QualitySource     string
+	QualityResolution *int64
+	QualityModifier   string
+	Quality           ImportQualityRevision
+	Languages         []ImportLanguage
+	ReleaseGroup      *string
+	IndexerFlags      *uint64
+	ReleaseType       string
 }
 
 type ImportQualityRevision struct {
 	Version  int64
 	Real     int64
 	IsRepack bool
+	Observed bool
+}
+
+type ImportLanguage struct {
+	ID   int64
+	Name string
 }
 
 // PreparedReject selects one tracked queue row and verifies the original grab.
@@ -132,18 +142,21 @@ func (p *PreparedImport) binds(op Operation) bool {
 }
 
 func (file PreparedImportFile) validMetadata() bool {
-	if file.QualityID <= 0 || file.Quality.Version < 0 || file.Quality.Real < 0 ||
+	if file.QualityID <= 0 || !selectorText(file.QualityName, 128) || !selectorText(file.QualitySource, 64) ||
+		file.QualityResolution == nil || *file.QualityResolution < 0 || !file.Quality.Observed ||
+		file.Quality.Version < 0 || file.Quality.Real < 0 || file.IndexerFlags == nil ||
 		len(file.Languages) == 0 || len(file.Languages) > 32 ||
-		(file.ReleaseGroup != "" && !selectorText(file.ReleaseGroup, 256)) ||
+		(file.QualityModifier != "" && !selectorText(file.QualityModifier, 64)) ||
+		(file.ReleaseGroup != nil && *file.ReleaseGroup != "" && !selectorText(*file.ReleaseGroup, 256)) ||
 		(file.ReleaseType != "" && !selectorText(file.ReleaseType, 64)) {
 		return false
 	}
 	seen := make(map[int64]bool, len(file.Languages))
 	for _, language := range file.Languages {
-		if language <= 0 || seen[language] {
+		if language.ID <= 0 || seen[language.ID] || !selectorText(language.Name, 128) {
 			return false
 		}
-		seen[language] = true
+		seen[language.ID] = true
 	}
 	return true
 }

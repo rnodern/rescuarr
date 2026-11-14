@@ -14,8 +14,10 @@ func TestPreparedImportBindsAllAndOnlyApprovedTargets(t *testing.T) {
 		Targets: []TargetRef{episode, second}, Action: ActionImport,
 		Effects: []Effect{{Kind: EffectSourceRetained}, {Kind: EffectLibraryImport, Target: episode}, {Kind: EffectLibraryImport, Target: second}},
 	}
+	resolution, flags := int64(720), uint64(0)
 	file := PreparedImportFile{Path: "/synthetic/private/file.mkv", FolderName: "fixture", Targets: []TargetRef{episode, second},
-		QualityID: 2, Quality: ImportQualityRevision{Version: 1}, Languages: []int64{1}}
+		QualityID: 2, QualityName: "fixture", QualitySource: "television", QualityResolution: &resolution,
+		Quality: ImportQualityRevision{Version: 1, Observed: true}, Languages: []ImportLanguage{{ID: 1, Name: "English"}}, IndexerFlags: &flags}
 	prepared := PreparedAction{Product: ProductSonarr, Version: "fixture-version", AdapterRevision: "fixture-adapter",
 		ConnectionRevision: 3, OperationKey: op.Key, Import: &PreparedImport{DownloadID: "synthetic-private-job", Files: []PreparedImportFile{file}}}
 	if !prepared.Binds(op) {
@@ -35,7 +37,7 @@ func TestPreparedImportBindsAllAndOnlyApprovedTargets(t *testing.T) {
 			other.Instance.Epoch++
 			p.Import.Files[0].Targets = []TargetRef{episode, other}
 		},
-		"unknown language": func(p *PreparedAction) { p.Import.Files[0].Languages = []int64{0} },
+		"unknown language": func(p *PreparedAction) { p.Import.Files[0].Languages = []ImportLanguage{{Name: "English"}} },
 	} {
 		t.Run(name, func(t *testing.T) {
 			next := prepared
