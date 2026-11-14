@@ -213,7 +213,7 @@ func (s *ManualReviews) sendManualImport(ctx context.Context, approval manualImp
 	record.Attempt.Acknowledgement = ack
 	switch {
 	case errors.Is(err, arradapter.ErrQualification) || errors.Is(err, arradapter.ErrConfiguration):
-		return s.recordManualImport(ctx, approval.manualSlot, record, "failed", "recovery_manual_import_failed")
+		return s.cancelUnsentManualImport(ctx, approval.manualSlot, record.Attempt.ID)
 	case err != nil || ack.State != domain.DispatchAcknowledged:
 		return s.recordManualImport(ctx, approval.manualSlot, record, "uncertain", "recovery_manual_import_uncertain")
 	default:
@@ -370,6 +370,25 @@ func requireManualImportRow(result sql.Result, err error) error {
 func manualImportEvent(ctx context.Context, tx *sql.Tx, id domain.CaseID, kind domain.EventKind, now time.Time, evidence ...domain.EvidenceID) error {
 	return store.AppendEvent(ctx, tx, domain.Event{ID: domain.EventID(store.NewID()), Kind: kind,
 		CaseID: id, Actor: "manual-import-worker", OccurredAt: now, Evidence: evidence})
+}
+
+func (s *ManualReviews) cancelUnsentManualImport(ctx context.Context, slot manualSlot, attempt domain.AttemptID) error {
+	now := s.clock.Now()
+	return s.local.Write(ctx, func(tx *sql.Tx) error {
+		result, err := tx.ExecContext(ctx, `DELETE FROM manual_import_attempts
+			WHERE case_id = ? AND token = ? AND stage = 'sending' AND json_extract(payload, '$.Attempt.ID') = ?`,
+			slot.id, slot.token, attempt)
+		if err := requireManualImportRow(result, err); err != nil {
+			return err
+		}
+		result, err = tx.ExecContext(ctx, `UPDATE manual_reviews SET state = 'pending', token = ?, scope_hash = '', updated_at = ?
+			WHERE case_id = ? AND token = ? AND state = 'approved' AND action = 'import'`,
+			store.NewID(), emptyPackStamp(now), slot.id, slot.token)
+		if err := requireManualImportRow(result, err); err != nil {
+			return err
+		}
+		return manualImportEvent(ctx, tx, slot.id, "recovery_manual_import_cancelled", now)
+	})
 }
 
 func (s *ManualReviews) closeUncertainManualImport(ctx context.Context, choice app.ManualDecision) error {

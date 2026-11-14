@@ -95,6 +95,8 @@ func TestProbeEmptyPackProfilePinsObservedSettings(t *testing.T) {
 		changed   bool
 	}{
 		{"stable on restart", map[string]string{packStatusRoute: strings.Replace(packStatusResponse, "T00:00:00Z", "T01:00:00Z", 1)}, false},
+		{"LinuxServer linked package author", map[string]string{packStatusRoute: strings.Replace(packStatusResponse,
+			`"packageAuthor":"linuxserver.io"`, `"packageAuthor":"[linuxserver.io](https://linuxserver.io)"`, 1)}, false},
 		{"ignores unrelated disabled client", map[string]string{packClientsRoute: "[" + packClientResponse + `,{"id":2,"enable":false}]`}, false},
 		{"retention drift", map[string]string{packClientsRoute: "[" + strings.Replace(packClientResponse, `"removeFailedDownloads":false`, `"removeFailedDownloads":true`, 1) + "]"}, true},
 		{"completed handling drift", map[string]string{packSettingsRoute: strings.Replace(packSettingsResponse, `"enableCompletedDownloadHandling":true`, `"enableCompletedDownloadHandling":false`, 1)}, true},

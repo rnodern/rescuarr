@@ -111,6 +111,8 @@ func activityLabel(kind domain.EventKind, reason domain.ReasonCode) (status, eve
 		return "Needs review", "Waiting to confirm the Copy import in Sonarr", true
 	case "recovery_manual_import_failed":
 		return "Failed", "Copy import failed", true
+	case "recovery_manual_import_cancelled":
+		return "Cancelled", "Copy import cancelled before sending", true
 	case "recovery_manual_import_unconfirmed":
 		return "Unconfirmed", "Owner closed the review without import confirmation. Rescuarr did not retry.", true
 	case "recovery_external_import_verified":

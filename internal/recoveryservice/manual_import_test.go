@@ -68,6 +68,23 @@ func TestManualImportReservationIsDurableAndUsesCurrentLanguage(t *testing.T) {
 	if err := reviews.allowManualImportSend(ctx, approval, plan, record.Attempt.ID); !errors.Is(err, app.ErrHeld) {
 		t.Fatalf("paused approval reached dispatch: %v", err)
 	}
+	if err := reviews.cancelUnsentManualImport(ctx, approval.manualSlot, record.Attempt.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := reviews.reserveManualImport(ctx, approval, plan, record); !errors.Is(err, app.ErrConflict) {
+		t.Fatalf("cancelled approval could be used again: %v", err)
+	}
+	if err := local.Read(ctx, func(tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx, `SELECT token FROM manual_reviews WHERE case_id = ? AND state = 'pending'`, key.CaseID).Scan(&approval.token)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	writeEmptyPackFixture(t, local, "UPDATE action_pause SET paused = 0")
+	writeEmptyPackFixture(t, local, "UPDATE manual_reviews SET state = 'approved', scope_hash = 'fixture-scope' WHERE token = ?", approval.token)
+	record = newManualImportCheckpoint(plan, prepared, "fixture-adapter", now)
+	if err := reviews.reserveManualImport(ctx, approval, plan, record); err != nil {
+		t.Fatal(err)
+	}
 	if err := local.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -89,5 +106,6 @@ func TestManualImportReservationIsDurableAndUsesCurrentLanguage(t *testing.T) {
 	}); err != nil || state != "completed" {
 		t.Fatalf("verified Copy did not release the review slot: %q %v", state, err)
 	}
-	assertEmptyPackAudit(t, local, "language_preferences_saved", "recovery_manual_import_sending", "recovery_manual_import_verified")
+	assertEmptyPackAudit(t, local, "language_preferences_saved", "recovery_manual_import_sending",
+		"recovery_manual_import_cancelled", "recovery_manual_import_sending", "recovery_manual_import_verified")
 }

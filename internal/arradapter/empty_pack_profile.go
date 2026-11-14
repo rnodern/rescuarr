@@ -97,6 +97,10 @@ func (a *EmptyPackAdapter) packSystemProfile(ctx context.Context) (EmptyPackProf
 	if !strings.EqualFold(status.AppName, string(domain.ProductSonarr)) || status.Version != arrwire.SonarrIDOnlyImportVersion {
 		return EmptyPackProfile{}, ErrQualification
 	}
+	// LinuxServer publishes this exact linked author in its Sonarr package metadata.
+	if status.PackageAuthor == "[linuxserver.io](https://linuxserver.io)" {
+		status.PackageAuthor = "linuxserver.io"
+	}
 	if status.Linux == nil || status.MacOS == nil || status.Windows == nil || status.Docker == nil ||
 		!validPackProfileLabel(status.Branch, 64) || !validOptionalPackProfileLabel(status.Package, 128) ||
 		!validOptionalPackProfileLabel(status.PackageAuthor, 128) {
