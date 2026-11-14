@@ -66,7 +66,7 @@ func checkEmptyPackProfile(ctx context.Context, local *store.Store, selected str
 		if errors.Is(err, arradapter.ErrQualification) {
 			return errors.New("Sonarr's current version differs from the tested build")
 		}
-		return errors.New("could not confirm the selected Sonarr build and one enabled SABnzbd client")
+		return fmt.Errorf("could not confirm the selected Sonarr build and one enabled SABnzbd client: %w", err)
 	}
 	reason := "Sonarr matches the lab's platform and download-handling settings. The installed package, SABnzbd version and storage setup still need verification."
 	switch {

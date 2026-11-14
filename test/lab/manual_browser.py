@@ -164,6 +164,9 @@ class PackagedManualLab:
                      "observed Sonarr version differs": "savedVersion",
                      "current version differs": "currentVersion",
                      "selected Sonarr connection's API key": "localCredential",
+                     "Sonarr system status:": "systemStatus",
+                     "Sonarr download client:": "downloadClient",
+                     "Sonarr remote path mappings:": "remotePathMappings",
                      "one enabled SABnzbd client": "upstreamProfile",
                      "data directory is already in use": "localLock"}
             detail = next((code for message, code in known.items() if message in result.stderr), "unknown")

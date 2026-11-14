@@ -1,9 +1,11 @@
 package arradapter
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"strings"
 
 	"github.com/rnodern/rescuarr/internal/arrwire"
@@ -49,20 +51,20 @@ func ProbeEmptyPackProfile(ctx context.Context, instance domain.Instance, apiKey
 
 	profile, err := probe.packSystemProfile(ctx)
 	if err != nil {
-		return EmptyPackProfile{}, err
+		return EmptyPackProfile{}, fmt.Errorf("Sonarr system status: %w", err)
 	}
 	if err := probe.packDownloadProfile(ctx, &profile); err != nil {
-		return EmptyPackProfile{}, err
+		return EmptyPackProfile{}, fmt.Errorf("Sonarr download client: %w", err)
 	}
 	var mappings []struct {
 		ID int64 `json:"id"`
 	}
 	if err := probe.readPackJSON(ctx, "/api/v3/remotepathmapping", nil, &mappings); err != nil {
-		return EmptyPackProfile{}, err
+		return EmptyPackProfile{}, fmt.Errorf("Sonarr remote path mappings: %w", err)
 	}
 	for _, mapping := range mappings {
 		if mapping.ID <= 0 {
-			return EmptyPackProfile{}, ErrReadback
+			return EmptyPackProfile{}, fmt.Errorf("Sonarr remote path mappings: %w", ErrReadback)
 		}
 	}
 	profile.RemoteMappingCount = len(mappings)
@@ -171,6 +173,10 @@ func (a *EmptyPackAdapter) packDownloadProfile(ctx context.Context, profile *Emp
 		for _, field := range client.Fields {
 			switch field.Name {
 			case "host", "port", "useSsl", "urlBase", "tvCategory":
+				// An unset optional URL base can be absent from field JSON.
+				if field.Name == "urlBase" && (len(field.Value) == 0 || bytes.Equal(field.Value, []byte("null"))) {
+					field.Value = json.RawMessage(`""`)
+				}
 				if _, exists := address[field.Name]; exists || len(field.Value) == 0 {
 					return ErrReadback
 				}
