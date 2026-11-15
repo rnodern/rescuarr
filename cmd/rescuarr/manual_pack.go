@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -67,11 +68,50 @@ func manualPackPlatform(profile arradapter.EmptyPackProfile) bool {
 }
 
 func matchesManualPackLab(profile arradapter.EmptyPackProfile) bool {
-	packageMatches := profile.OSFamily == "windows" ||
-		profile.Package == "5.0.0.2941-ls208" && profile.PackageAuthor == "linuxserver.io"
-	return manualPackPlatform(profile) && packageMatches && profile.Branch == "develop" && profile.CompletedHandling &&
-		!profile.RemoveCompleted && !profile.RemoveFailed && profile.AutoRedownloadFailed &&
-		profile.AutoRedownloadInteractive && profile.RemoteMappingCount == 0
+	return len(manualPackProfileDifferences(profile)) == 0
+}
+
+type manualProfileSwitch struct {
+	name    string
+	current bool
+	want    bool
+}
+
+func profileSwitchDifferences(differences []string, switches ...manualProfileSwitch) []string {
+	for _, setting := range switches {
+		if setting.current == setting.want {
+			continue
+		}
+		current, want := "off", "on"
+		if setting.current {
+			current, want = want, current
+		}
+		differences = append(differences, fmt.Sprintf("%s is %s. Tested setting is %s.", setting.name, current, want))
+	}
+	return differences
+}
+
+func manualPackProfileDifferences(profile arradapter.EmptyPackProfile) []string {
+	var differences []string
+	if !manualPackPlatform(profile) {
+		differences = append(differences, "Installation differs from native Windows or Docker on Linux.")
+	}
+	if profile.OSFamily == "linux" && (profile.Package != "5.0.0.2941-ls208" || profile.PackageAuthor != "linuxserver.io") {
+		differences = append(differences, "Linux Sonarr package differs from the tested LinuxServer build 5.0.0.2941-ls208.")
+	}
+	if profile.Branch != "develop" {
+		differences = append(differences, fmt.Sprintf("Sonarr branch is %q. Tested branch is develop.", profile.Branch))
+	}
+	if profile.RemoteMappingCount != 0 {
+		differences = append(differences, fmt.Sprintf("Sonarr has %d remote path mappings. The tested setup used storage visible directly to Sonarr.", profile.RemoteMappingCount))
+	}
+	return profileSwitchDifferences(differences,
+		manualProfileSwitch{"Completed Download Handling", profile.CompletedHandling, true},
+		manualProfileSwitch{"SABnzbd Remove Completed", profile.RemoveCompleted, false},
+		manualProfileSwitch{"SABnzbd Remove Failed", profile.RemoveFailed, false},
+		manualProfileSwitch{"Redownload Failed", profile.AutoRedownloadFailed, true},
+		manualProfileSwitch{"Redownload Failed from Interactive Search", profile.AutoRedownloadInteractive, true},
+	)
 }
 
 func startManualPackWorker(ctx context.Context, local *store.Store, observations *observeservice.Service, clock app.Clock,
