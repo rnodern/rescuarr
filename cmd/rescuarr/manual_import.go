@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/rnodern/rescuarr/internal/app"
@@ -28,18 +29,30 @@ func checkManualImportProfile(ctx context.Context, local *store.Store, selected 
 	if err != nil {
 		return fmt.Errorf("could not read the selected Sonarr Manual Import settings: %w", err)
 	}
+	return writeManualImportProfile(out, instance, profile)
+}
+
+func writeManualImportProfile(out io.Writer, instance domain.Instance, profile arradapter.ManualImportProfile) error {
 	assessment := "Sonarr settings match the Copy profile. Verify the installed package, SABnzbd version and shared storage before using the profile."
-	if !matchesManualImportProfile(profile) {
-		assessment = "Sonarr settings differ from the tested Copy profile."
+	if differences := manualImportProfileDifferences(profile); len(differences) != 0 {
+		assessment = "Sonarr settings differ from the tested Copy profile.\n- " + strings.Join(differences, "\n- ")
 	}
-	_, err = fmt.Fprintf(out, "Sonarr %s (%s, %s) · %q\n%s\nProfile SHA-256: %x\nThis check sends only GET requests and preserves the current mode.\n",
-		profile.Version, profile.Branch, profile.OSFamily, instance.DisplayName, assessment, profile.Fingerprint)
+	_, err := fmt.Fprintf(out, "Sonarr %s (%s, %s) · %q\n%s\nConnection ID: %s\nProfile SHA-256: %x\nThis check sends only GET requests and preserves the current mode.\n",
+		profile.Version, profile.Branch, profile.OSFamily, instance.DisplayName, assessment, instance.Ref.ID, profile.Fingerprint)
 	return err
 }
 
 func matchesManualImportProfile(profile arradapter.ManualImportProfile) bool {
-	return matchesManualPackLab(profile.EmptyPackProfile) && profile.EnableMediaInfo &&
-		!profile.CopyUsingHardlinks && !profile.ImportExtraFiles && !profile.UseScriptImport
+	return len(manualImportProfileDifferences(profile)) == 0
+}
+
+func manualImportProfileDifferences(profile arradapter.ManualImportProfile) []string {
+	return profileSwitchDifferences(manualPackProfileDifferences(profile.EmptyPackProfile),
+		manualProfileSwitch{"Use Hardlinks instead of Copy", profile.CopyUsingHardlinks, false},
+		manualProfileSwitch{"Import Extra Files", profile.ImportExtraFiles, false},
+		manualProfileSwitch{"Use Script Import", profile.UseScriptImport, false},
+		manualProfileSwitch{"Analyse Video Files", profile.EnableMediaInfo, true},
+	)
 }
 
 func manualImportEvidence(profile arradapter.ManualImportProfile, source importflow.SonarrV5Source) domain.EvidenceID {
