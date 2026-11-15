@@ -50,8 +50,8 @@ func manualImportProfileDifferences(profile arradapter.ManualImportProfile) []st
 	return profileSwitchDifferences(manualPackProfileDifferences(profile.EmptyPackProfile),
 		manualProfileSwitch{"Use Hardlinks instead of Copy", profile.CopyUsingHardlinks, false},
 		manualProfileSwitch{"Import Extra Files", profile.ImportExtraFiles, false},
-		manualProfileSwitch{"Use Script Import", profile.UseScriptImport, false},
-		manualProfileSwitch{"Analyse Video Files", profile.EnableMediaInfo, true},
+		manualProfileSwitch{"Import Using Script", profile.UseScriptImport, false},
+		manualProfileSwitch{"Analyse video files", profile.EnableMediaInfo, true},
 	)
 }
 

@@ -40,8 +40,8 @@ func TestManualImportProfileReportsSettingsDifferences(t *testing.T) {
 		"Redownload Failed from Interactive Search is off. Tested setting is on.",
 		"Use Hardlinks instead of Copy is on. Tested setting is off.",
 		"Import Extra Files is on. Tested setting is off.",
-		"Use Script Import is on. Tested setting is off.",
-		"Analyse Video Files is off. Tested setting is on.",
+		"Import Using Script is on. Tested setting is off.",
+		"Analyse video files is off. Tested setting is on.",
 	}
 	if got := manualImportProfileDifferences(profile); !slices.Equal(got, want) || matchesManualImportProfile(profile) {
 		t.Fatalf("unexpected qualification or differences: %v", got)
