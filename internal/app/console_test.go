@@ -85,6 +85,25 @@ func TestConsoleSetupAuthenticationAndCSRF(t *testing.T) {
 
 	setup := request(http.MethodGet, "/tools/setup", "", nil)
 	status(setup, http.StatusOK)
+	if strings.Contains(setup.Body.String(), `name="remember"`) {
+		t.Fatal("owner setup included the sign-in checkbox")
+	}
+	for name, mediaType := range map[string]string{
+		"theme.css": "text/css", "access.css": "text/css", "lifebuoy.png": "image/png",
+	} {
+		path := "/tools/assets/" + name
+		if !strings.Contains(setup.Body.String(), `"`+path+`"`) {
+			t.Errorf("setup did not reference %s", path)
+		}
+		asset := request(http.MethodGet, path, "", nil)
+		status(asset, http.StatusOK)
+		if !strings.HasPrefix(asset.Header().Get("Content-Type"), mediaType) || asset.Body.Len() == 0 {
+			t.Errorf("unexpected asset response for %s", path)
+		}
+	}
+	status(request(http.MethodGet, "/tools/assets/console.css", "", nil), http.StatusUnauthorized)
+	status(request(http.MethodGet, "/tools/assets/console.js", "", nil), http.StatusUnauthorized)
+
 	preAuth := namedCookie(t, setup, "rescuarr_form")
 	const password = "synthetic browser passphrase"
 	form := url.Values{"password": {password}, "token": {strings.TrimSpace(string(token))}, "csrf": {preAuth.Value}}
@@ -96,13 +115,33 @@ func TestConsoleSetupAuthenticationAndCSRF(t *testing.T) {
 
 	login := request(http.MethodGet, "/tools/login", "", nil)
 	status(login, http.StatusOK)
+	if !strings.Contains(login.Body.String(), `href="/tools/assets/access.css"`) ||
+		!strings.Contains(login.Body.String(), `src="/tools/assets/lifebuoy.png"`) {
+		t.Fatal("login did not reference its branding assets")
+	}
+	if !strings.Contains(login.Body.String(), `name="remember" value="on">`) {
+		t.Fatal("login did not offer an unchecked remember option")
+	}
+	policy := login.Header().Get("Content-Security-Policy")
+	for _, directive := range []string{"default-src 'none'", "style-src 'self'", "img-src 'self'", "form-action 'self'"} {
+		if !strings.Contains(policy, directive) {
+			t.Errorf("login CSP missing %s", directive)
+		}
+	}
+
 	preAuth = namedCookie(t, login, "rescuarr_form")
-	loggedIn := request(http.MethodPost, "/tools/login", browserURL, url.Values{"password": {password}, "csrf": {preAuth.Value}}, preAuth)
+	loggedIn := request(http.MethodPost, "/tools/login", browserURL, url.Values{
+		"password": {password}, "csrf": {preAuth.Value}, "remember": {"on"},
+	}, preAuth)
 	status(loggedIn, http.StatusSeeOther)
 	owner := namedCookie(t, loggedIn, "rescuarr_owner")
 	if !owner.Secure || !owner.HttpOnly || owner.SameSite != http.SameSiteStrictMode || owner.Path != "/tools/" {
 		t.Fatalf("incorrect session attributes: %+v", owner)
 	}
+	if !owner.Expires.Equal(now.Add(7 * 24 * time.Hour).Truncate(time.Second)) {
+		t.Fatalf("incorrect remembered cookie expiry: %v", owner.Expires)
+	}
+	now = now.Add(2 * 24 * time.Hour)
 	status(request(http.MethodGet, "/tools/", "", nil, owner), http.StatusOK)
 	status(request(http.MethodGet, "/tools/cases", "", nil, owner), http.StatusOK)
 	status(request(http.MethodGet, "/tools/fragments/status", "", nil), http.StatusUnauthorized)
@@ -114,7 +153,11 @@ func TestConsoleSetupAuthenticationAndCSRF(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	status(request(http.MethodPost, "/tools/logout", browserURL, url.Values{"csrf": {session.CSRF}}, owner), http.StatusSeeOther)
+	loggedOut := request(http.MethodPost, "/tools/logout", browserURL, url.Values{"csrf": {session.CSRF}}, owner)
+	status(loggedOut, http.StatusSeeOther)
+	if namedCookie(t, loggedOut, "rescuarr_owner").MaxAge >= 0 {
+		t.Fatal("logout did not delete the remembered cookie")
+	}
 	status(request(http.MethodGet, "/tools/", "", nil, owner), http.StatusSeeOther)
 
 	// A visible console can poll even while the owner is idle.
@@ -123,6 +166,9 @@ func TestConsoleSetupAuthenticationAndCSRF(t *testing.T) {
 	loggedIn = request(http.MethodPost, "/tools/login", browserURL, url.Values{"password": {password}, "csrf": {preAuth.Value}}, preAuth)
 	status(loggedIn, http.StatusSeeOther)
 	owner = namedCookie(t, loggedIn, "rescuarr_owner")
+	if !owner.Expires.Equal(now.Add(24 * time.Hour).Truncate(time.Second)) {
+		t.Fatalf("incorrect standard cookie expiry: %v", owner.Expires)
+	}
 	now = now.Add(25 * time.Minute)
 	status(request(http.MethodGet, "/tools/fragments/status", "", nil, owner), http.StatusOK)
 	now = now.Add(6 * time.Minute)

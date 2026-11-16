@@ -14,7 +14,7 @@ type Session struct {
 	ExpiresAt time.Time
 }
 
-func (a *Auth) Login(ctx context.Context, password, existing string) (Session, error) {
+func (a *Auth) Login(ctx context.Context, password, existing string, remember bool) (Session, error) {
 	var saved, salt []byte
 	var scheme string
 	var revision int
@@ -42,7 +42,12 @@ func (a *Auth) Login(ctx context.Context, password, existing string) (Session, e
 		return Session{}, ErrDenied
 	}
 	now := a.now()
-	session := Session{Token: token(), CSRF: token(), ExpiresAt: now.Add(sessionLimit)}
+	lifetime, idleTimeout := sessionLimit, idleLimit
+	if remember {
+		// A remembered session stays valid until its fixed expiry.
+		lifetime, idleTimeout = rememberLimit, rememberLimit
+	}
+	session := Session{Token: token(), CSRF: token(), ExpiresAt: now.Add(lifetime)}
 	err = a.store.Write(ctx, func(tx *sql.Tx) error {
 		if len(existing) == 43 {
 			if _, err := tx.ExecContext(ctx, "DELETE FROM owner_sessions WHERE token_hash = ?", digest(existing)); err != nil {
@@ -53,7 +58,7 @@ func (a *Auth) Login(ctx context.Context, password, existing string) (Session, e
 			INSERT INTO owner_sessions (token_hash, revision, csrf_secret, expires_at, idle_until)
 			SELECT ?, auth_revision, ?, ?, ? FROM owner WHERE auth_revision = ?
 				AND NOT EXISTS (SELECT 1 FROM setup_token WHERE purpose = 'recovery' AND expires_at > ?)`,
-			digest(session.Token), []byte(session.CSRF), stamp(session.ExpiresAt), stamp(now.Add(idleLimit)), revision, stamp(now))
+			digest(session.Token), []byte(session.CSRF), stamp(session.ExpiresAt), stamp(now.Add(idleTimeout)), revision, stamp(now))
 		if err != nil {
 			return err
 		}
@@ -93,10 +98,11 @@ func (a *Auth) Authenticate(ctx context.Context, presented string, extend bool) 
 	if err != nil {
 		return Session{}, err
 	}
-	if extend && idle < stamp(now.Add(idleLimit-time.Minute)) {
+	nextIdle := min(expiry, stamp(now.Add(idleLimit)))
+	if extend && idle < nextIdle && idle < stamp(now.Add(idleLimit-time.Minute)) {
 		err := a.store.Write(ctx, func(tx *sql.Tx) error {
 			_, err := tx.ExecContext(ctx, "UPDATE owner_sessions SET idle_until = ? WHERE token_hash = ? AND idle_until = ?",
-				stamp(now.Add(idleLimit)), hash, idle)
+				nextIdle, hash, idle)
 			return err
 		})
 		if err != nil {

@@ -155,7 +155,7 @@ func TestBrowserUsesOwnerSessionAndLocalState(t *testing.T) {
 	if err := auth.SetOwner(t.Context(), strings.TrimSpace(string(data)), password); err != nil {
 		t.Fatal(err)
 	}
-	session, err := auth.Login(t.Context(), password, "")
+	session, err := auth.Login(t.Context(), password, "", false)
 	if err != nil {
 		t.Fatal(err)
 	}

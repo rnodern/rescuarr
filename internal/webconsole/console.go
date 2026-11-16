@@ -47,7 +47,7 @@ type console struct {
 	key [32]byte
 }
 
-//go:embed templates/*.tmpl assets/*
+//go:embed templates/*.tmpl assets/console.css assets/console.js assets/lifebuoy.png assets/theme.css
 var files embed.FS
 
 var views = template.Must(template.New("").Funcs(template.FuncMap{
@@ -120,7 +120,7 @@ func New(options Options) http.Handler {
 	if err != nil {
 		panic(err)
 	}
-	for _, name := range []string{"console.css", "console.js", "lifebuoy.png"} {
+	for _, name := range []string{"console.css", "console.js", "theme.css", "lifebuoy.png"} {
 		mux.HandleFunc("GET "+base+"/assets/"+name, func(w http.ResponseWriter, r *http.Request) {
 			http.ServeFileFS(w, r, assets, name)
 		})
