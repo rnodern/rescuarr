@@ -68,7 +68,7 @@ func manualPackPlatform(profile arradapter.EmptyPackProfile) bool {
 }
 
 func matchesManualPackLab(profile arradapter.EmptyPackProfile) bool {
-	return len(manualPackProfileDifferences(profile)) == 0
+	return len(manualPackProfileDifferences(profile, false)) == 0
 }
 
 type manualProfileSwitch struct {
@@ -91,7 +91,7 @@ func profileSwitchDifferences(differences []string, switches ...manualProfileSwi
 	return differences
 }
 
-func manualPackProfileDifferences(profile arradapter.EmptyPackProfile) []string {
+func manualPackProfileDifferences(profile arradapter.EmptyPackProfile, removeCompletedAndFailed bool) []string {
 	var differences []string
 	if !manualPackPlatform(profile) {
 		differences = append(differences, "Installation differs from native Windows or Docker on Linux.")
@@ -107,8 +107,8 @@ func manualPackProfileDifferences(profile arradapter.EmptyPackProfile) []string 
 	}
 	return profileSwitchDifferences(differences,
 		manualProfileSwitch{"Completed Download Handling", profile.CompletedHandling, true},
-		manualProfileSwitch{"SABnzbd Remove Completed", profile.RemoveCompleted, false},
-		manualProfileSwitch{"SABnzbd Remove Failed", profile.RemoveFailed, false},
+		manualProfileSwitch{"SABnzbd Remove Completed", profile.RemoveCompleted, removeCompletedAndFailed},
+		manualProfileSwitch{"SABnzbd Remove Failed", profile.RemoveFailed, removeCompletedAndFailed},
 		manualProfileSwitch{"Redownload Failed", profile.AutoRedownloadFailed, true},
 		manualProfileSwitch{"Redownload Failed from Interactive Search", profile.AutoRedownloadInteractive, true},
 	)

@@ -54,7 +54,11 @@
     {{if and $.Body.Episode $.Body.Episode.Filename}}
     <p>Copy <strong>{{$.Body.Episode.Filename}}</strong> to the library for <strong>{{caseTitle $.Body.Case}}{{if $.Body.Episode.EpisodeTitle}} · {{$.Body.Episode.EpisodeTitle}}{{end}}</strong>.</p>
     {{else}}<p>Copy the approved video file to the library for this episode.</p>{{end}}
-    <p>Keep the source file and the download client job.</p>
+    {{if not $.Body.Processing}}
+    {{if $.Body.SonarrCleanup}}
+    <p>Sonarr uses a hardlink when the storage supports it and copies otherwise. Its completed download handling can remove the entire download folder and the job from SABnzbd’s active history.</p>
+    {{else}}<p>Keep the source file and the download client job.</p>{{end}}
+    {{end}}
     {{if and $.Body.CanApprove $.Body.ConfirmCopyAudio (not $.Body.Processing)}}
     <p class="notice" id="confirm-copy-audio">Rescuarr could not confirm the audio tracks. Visually check the episode and listen to the audio in the selected file before approving.</p>
     {{end}}

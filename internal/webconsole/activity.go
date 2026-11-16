@@ -107,6 +107,8 @@ func activityLabel(kind domain.EventKind, reason domain.ReasonCode) (status, eve
 		return "Pending", "Sending the approved Copy import to Sonarr", false
 	case "recovery_manual_import_verified":
 		return "Verified", "Copy import verified. Sonarr linked the approved episode and kept the source file.", false
+	case "recovery_manual_import_cleanup_profile_verified":
+		return "Verified", "Import verified. Sonarr linked the approved episode. Sonarr manages download cleanup.", false
 	case "recovery_manual_import_uncertain":
 		return "Needs review", "Waiting to confirm the Copy import in Sonarr", true
 	case "recovery_manual_import_failed":

@@ -1,6 +1,7 @@
 import hashlib
 import io
 import json
+import os
 import tempfile
 import unittest
 import xml.etree.ElementTree as ET
@@ -67,8 +68,10 @@ class SonarrV5LabTest(unittest.TestCase):
                 self.assertEqual(original.called, not expected)
 
     def test_import_requires_real_block_then_exact_copy_and_independent_readback(self):
-        for defect in (None, "file_storage", "wrong_reason", "wrong_file_id", "changed_source"):
+        for defect in (None, "file_storage", "wrong_reason", "wrong_file_id", "changed_source",
+                       "normal_hardlink_archived", "normal_separate_retained", "normal_failed_command"):
             with self.subTest(defect=defect), tempfile.TemporaryDirectory() as temporary:
+                observe_cleanup = bool(defect and defect.startswith("normal_"))
                 downloads = Path(temporary).resolve()
                 title = releases(ID_ONLY_TARGET, ID_ONLY_PHASE)
                 folder = downloads / "complete" / title
@@ -108,13 +111,30 @@ class SonarrV5LabTest(unittest.TestCase):
                 arr.library_file.return_value = {"id": 60, "path": upstream_installed}
 
                 def copy(name, **kwargs):
+                    if name == "RefreshMonitoredDownloads":
+                        self.assertTrue(observe_cleanup)
+                        if defect == "normal_hardlink_archived" and source.exists():
+                            source.unlink()
+                            guard_file.unlink()
+                            folder.rmdir()
+                        return {"status": "completed", "result": "successful"}
                     self.assertEqual(name, "ManualImport")
                     self.assertEqual(kwargs["importMode"], "copy")
                     self.assertEqual(kwargs["files"], [{**candidate, "seriesId": 20, "episodeIds": [30], "folderName": title}])
-                    installed.write_bytes(source.read_bytes())
+                    if defect == "normal_hardlink_archived":
+                        os.link(source, installed)
+                    else:
+                        installed.write_bytes(source.read_bytes())
                     if defect == "changed_source":
                         guard_file.unlink()
-                    return {"status": "completed"}
+                    return {"status": "completed", "result": "unsuccessful" if defect == "normal_failed_command" else "successful"}
+
+                def sab_job(job_id):
+                    self.assertEqual(job_id, download_id)
+                    job = {"nzo_id": download_id}
+                    if not source.exists():
+                        return {"queue": [], "history": [], "archive": [{**job, "archive": True}]}
+                    return {"queue": [], "history": [{**job, "archive": False}], "archive": []}
 
                 arr.command_status.side_effect = copy
                 fixture_bytes = source.read_bytes()
@@ -124,23 +144,36 @@ class SonarrV5LabTest(unittest.TestCase):
                 with patch("scenarios.DOWNLOADS", downloads), patch("scenarios.call_json"), patch(
                     "scenarios.search_events", return_value=[]
                 ), patch("scenarios.completed_job", return_value={"name": title, "storage": str(storage), "category": CATEGORY["sonarr"]}), patch(
-                    "scenarios.sab_job", return_value={"queue": [], "history": [{"nzo_id": download_id}], "archive": []}
-                ), patch("scenarios.get_json", return_value=fingerprint):
-                    if defect and defect != "file_storage":
-                        expected = {"wrong_reason": "blockedForAnotherReason", "wrong_file_id": "importHistoryScopeMismatch",
-                                    "changed_source": "IDOnlyImportChangedSource"}[defect]
-                        with self.assertRaisesRegex(LabFailure, expected):
-                            id_only_import(arr, media, guard, report)
+                    "scenarios.sab_job", side_effect=sab_job
+                ), patch("scenarios.get_json", return_value=fingerprint), patch("scenarios.time.sleep"):
+                    expected_failure = {"wrong_reason": "blockedForAnotherReason", "wrong_file_id": "importHistoryScopeMismatch",
+                                        "changed_source": "IDOnlyImportChangedSource",
+                                        "normal_failed_command": "manualCopyCommandDidNotSucceed"}.get(defect)
+                    if expected_failure:
+                        with self.assertRaisesRegex(LabFailure, expected_failure):
+                            id_only_import(arr, media, guard, report, observe_cleanup=observe_cleanup)
                     else:
-                        id_only_import(arr, media, guard, report)
-                        self.assertTrue(report["sourcePreserved"])
+                        id_only_import(arr, media, guard, report, observe_cleanup=observe_cleanup)
+                        archived = defect == "normal_hardlink_archived"
+                        self.assertEqual(report["sourcePreserved"], not archived)
                         self.assertTrue(report["reprocessUnchanged"])
                         self.assertEqual(report["after"]["history"]["fileId"], 60)
                         self.assertEqual(report["after"]["guardFileId"], 0)
+                        if observe_cleanup:
+                            cleanup = report["cleanup"]
+                            self.assertEqual(cleanup["transfer"], "hardlink" if archived else "separateFile")
+                            self.assertTrue(cleanup["libraryIdentityUnchanged"])
+                            self.assertEqual(cleanup["sourcePath"], str(source))
+                            first, _, final = cleanup["observations"]
+                            self.assertTrue(first["sourceFileExists"])
+                            self.assertTrue(first["originalSourceIdentity"])
+                            self.assertEqual(final["sourceFileExists"], not archived)
+                            self.assertEqual(final["sabDisposition"], "archived" if archived else "inHistory")
+                            self.assertEqual(final["command"]["result"], "successful")
                 if defect == "wrong_reason":
                     arr.api.assert_not_called()
                     arr.command_status.assert_not_called()
                 else:
                     arr.api.assert_called_once_with("manualimport", method="POST", body=[
                         {**candidate, "seriesId": 20, "seasonNumber": 1, "episodeIds": [30]}])
-                    arr.command_status.assert_called_once()
+                    self.assertEqual(arr.command_status.call_count, 3 if observe_cleanup and not expected_failure else 1)

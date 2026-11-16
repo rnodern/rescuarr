@@ -34,7 +34,8 @@ type manualImportProbe struct {
 
 func NewManualSonarrV5Copy(cfg Config, source importflow.SonarrV5Source, transport http.RoundTripper, qualify Qualify, now func() time.Time) (*ManualSonarrV5Copy, error) {
 	if cfg.Instance.Product != domain.ProductSonarr || cfg.Instance.UpstreamVersion != arrwire.SonarrIDOnlyImportVersion ||
-		cfg.AdapterRevision != ManualSonarrV5CopyRevision || source.Job.Instance != cfg.Instance.Ref || source.Job.ID == "" ||
+		(cfg.AdapterRevision != ManualSonarrV5CopyRevision && cfg.AdapterRevision != arrwire.SonarrV5CleanupCopyRevision) ||
+		source.Job.Instance != cfg.Instance.Ref || source.Job.ID == "" ||
 		source.Job.Generation != 1 || source.Target.Instance != cfg.Instance.Ref || source.Target.Kind != domain.TargetEpisode ||
 		!source.Target.Valid() || source.Size <= 0 || !validPackText(source.Path, 4096) ||
 		!validPackText(source.DownloadID, 256) || !validPackText(source.Client, 128) || transport == nil || qualify == nil {
@@ -58,7 +59,7 @@ func NewManualSonarrV5Copy(cfg Config, source importflow.SonarrV5Source, transpo
 		if err != nil || !retained {
 			return Qualification{}, ErrQualification
 		}
-		if !probe.queueStillMatches(ctx) {
+		if !probe.queueStillMatches(ctx, cfg.AdapterRevision == arrwire.SonarrV5CleanupCopyRevision) {
 			return Qualification{}, ErrQualification
 		}
 		fileID, err := arr.EpisodeFileLink(ctx, source.Target)
@@ -74,7 +75,7 @@ func NewManualSonarrV5Copy(cfg Config, source importflow.SonarrV5Source, transpo
 	return &ManualSonarrV5Copy{adapter: adapter, source: source}, nil
 }
 
-func (*ManualSonarrV5Copy) AdapterRevision() string { return ManualSonarrV5CopyRevision }
+func (a *ManualSonarrV5Copy) AdapterRevision() string { return a.adapter.binding.AdapterRevision }
 
 func (a *ManualSonarrV5Copy) DispatchManualImport(ctx context.Context, op domain.Operation, prepared domain.PreparedAction,
 	beforeSend func(context.Context) error) (domain.Acknowledgement, error) {
@@ -87,13 +88,17 @@ func (a *ManualSonarrV5Copy) DispatchManualImport(ctx context.Context, op domain
 	return a.adapter.dispatchPrepared(ctx, op, prepared, beforeSend)
 }
 
-func (p *manualImportProbe) queueStillMatches(ctx context.Context) bool {
+func (p *manualImportProbe) queueStillMatches(ctx context.Context, sonarrCleanup bool) bool {
 	queue, err := p.arr.Queue(ctx, p.source.Job.Generation, p.now())
 	if err != nil {
 		return false
 	}
 	found := false
 	for _, row := range queue.Records {
+		if sonarrCleanup && row.DownloadID != p.source.DownloadID &&
+			importflow.DownloadPathsOverlap(importflow.WindowsPath, p.source.OutputPath, row.OutputPath) {
+			return false
+		}
 		if row.ID != p.source.QueueID && row.DownloadID != p.source.DownloadID && row.Target != p.source.Target &&
 			row.OutputPath != p.source.OutputPath && row.OutputPath != p.source.Path {
 			continue
@@ -119,7 +124,8 @@ func (a *ManualSonarrV5Copy) Reconcile(ctx context.Context, attempt domain.Attem
 func (a *ManualSonarrV5Copy) matches(op domain.Operation, prepared domain.PreparedAction) bool {
 	return op.Action == domain.ActionImport && op.Job == a.source.Job && len(op.Targets) == 1 && op.Targets[0] == a.source.Target &&
 		prepared.Import != nil && prepared.Import.DownloadID == a.source.DownloadID && len(prepared.Import.Files) == 1 &&
-		prepared.Import.Files[0].Path == a.source.Path
+		prepared.Import.Files[0].Path == a.source.Path &&
+		prepared.Import.SonarrCleanup == (a.AdapterRevision() == arrwire.SonarrV5CleanupCopyRevision)
 }
 
 // A direct Sonarr disk read uses the already-selected file and does not depend
@@ -197,11 +203,6 @@ func (p *manualImportProbe) readback(ctx context.Context, route Route, attempt d
 		out.ObservedAt = p.now()
 		return out, err
 	}
-	retained, err := p.sourceRetained(ctx)
-	out.ObservedAt = p.now()
-	if err != nil {
-		return out, err
-	}
 	libraryVerification := domain.VerificationExternal
 	if acknowledged {
 		libraryVerification = domain.VerificationEffect
@@ -209,6 +210,25 @@ func (p *manualImportProbe) readback(ctx context.Context, route Route, attempt d
 	out.Verification = domain.VerificationPartial
 	out.Effects = []domain.EffectResult{{Effect: domain.Effect{Kind: domain.EffectLibraryImport, Target: p.source.Target},
 		Verification: libraryVerification, Evidence: manualImportEvidence(attempt.ID, "library_import", history.ID, history.FileID)}}
+	if attempt.Prepared.Import.SonarrCleanup {
+		// Confirm Sonarr can still see the actual library file after its own
+		// cleanup. Library metadata alone does not establish that it survived.
+		var file struct {
+			Type string `json:"type"`
+		}
+		query := url.Values{"path": {history.ImportedPath}}
+		err := p.reader.readPackJSON(ctx, "/api/v3/filesystem/type", query, &file)
+		out.ObservedAt = p.now()
+		if err == nil && file.Type == "file" && acknowledged {
+			out.Verification = domain.VerificationEffect
+		}
+		return out, err
+	}
+	retained, err := p.sourceRetained(ctx)
+	out.ObservedAt = p.now()
+	if err != nil {
+		return out, err
+	}
 	if retained {
 		out.Effects = append(out.Effects, domain.EffectResult{Effect: domain.Effect{Kind: domain.EffectSourceRetained},
 			Verification: domain.VerificationEffect, Evidence: manualImportEvidence(attempt.ID, "source_retained", history.ID, p.source.Size)})

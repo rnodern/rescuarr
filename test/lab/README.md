@@ -39,6 +39,14 @@ On Linux amd64, run `test/lab/run.sh /tmp/rescuarr-sonarr-v5-manual-copy.json so
 
 The runner starts the packaged executable and uses authenticated owner forms in two disposable app installations on the same synthetic queue. A loopback request recorder checks that decline and waiting for approval send no upstream writes. After approval the runner checks the exact metadata reprocess and single native Copy request, then independently verifies the linked episode file, matching history, distinct filesystem identity, identical file bytes, retained download, unchanged neighbouring episode, and the app's Activity result. The fixture uses local source and library paths and the wizard explicitly accepts unavailable download audio evidence.
 
+### Native Windows Sonarr 5 Copy with completed-download cleanup
+
+The Windows workflow's `normal-settings-copy` job uses a disposable Sonarr and SABnzbd installation with Remove Completed, Remove Failed and Use Hardlinks instead of Copy all enabled. It runs the series-ID fixture using Sonarr's native reprocessing and one ManualImport Copy command. It verifies command success, exact import history, the linked episode file and its contents, and an unchanged neighbouring episode.
+
+The `sonarr-windows-v5-copy-normal-settings-evidence` artefact records the destination's file identity relative to the original, the exact source file and folder, and the SABnzbd job's disposition after import and two Sonarr refreshes. Both filesystem paths must be observed to identify a hardlink directly. The report covers the local-volume setup on the disposable runner.
+
+The `normal-settings-manual-copy` job runs the same fixture with the packaged Rescuarr executable. It checks the cleanup notice on the owner's review, verifies no upstream writes before approval, and checks for one exact Copy command and a verified Activity entry after restarting Rescuarr. It uploads `sonarr-windows-v5-manual-copy-normal-settings-evidence`.
+
 ### Sonarr 5 completed season pack with no eligible files
 
 Run `test/lab/run.sh /tmp/rescuarr-sonarr-v5-empty-pack.json sonarr/v5-empty-pack`, or dispatch the workflow with `-f scenario=sonarr/v5-empty-pack` on a ref containing this scenario. The PR job also runs on the exact PR head and uploads `sonarr-v5-empty-pack-evidence`.

@@ -15,13 +15,14 @@ import (
 )
 
 func TestManualSonarrCopyReconcilesOnlyExactImportAndRetainedSource(t *testing.T) {
-	const path = "/downloads/fixture/fixture.mkv"
-	const libraryPath = "/library/Fixture/fixture.mkv"
+	const output = `C:\Downloads\Fixture`
+	const path = output + `\fixture.mkv`
+	const libraryPath = `D:\Library\Fixture\fixture.mkv`
 	fixture := probeFixtureInstance()
 	cfg := Config{Instance: fixture, AdapterRevision: ManualSonarrV5CopyRevision, SettingsFingerprint: [32]byte{1}, APIKey: "fixture-key"}
 	target := domain.TargetRef{Instance: fixture.Ref, Kind: domain.TargetEpisode, ID: 31, SeriesID: 17}
 	source := importflow.SonarrV5Source{Instance: fixture, Job: domain.JobRef{Instance: fixture.Ref, ID: "job", Generation: 1},
-		Target: target, DownloadID: "download-a", Client: "LAB SAB", OutputPath: "/downloads/fixture", Path: path, Size: 4096,
+		Target: target, DownloadID: "download-a", Client: "LAB SAB", OutputPath: output, Path: path, Size: 4096,
 		QueueID: 19, SelectionDigest: [32]byte{1}}
 	op := domain.Operation{Key: "copy-fixture", Job: source.Job, Targets: []domain.TargetRef{target}, Action: domain.ActionImport,
 		Effects: []domain.Effect{{Kind: domain.EffectLibraryImport, Target: target}, {Kind: domain.EffectSourceRetained}}}
@@ -42,16 +43,31 @@ func TestManualSonarrCopyReconcilesOnlyExactImportAndRetainedSource(t *testing.T
 		retained       bool
 		correctHistory bool
 		verification   domain.Verification
+		cleanup        bool
+		libraryOnDisk  bool
+		overlap        bool
 		readError      bool
 	}{
-		{"verified", `"status":"completed","result":"successful"`, true, true, true, domain.VerificationEffect, false},
-		{"source missing", `"status":"completed","result":"successful"`, true, false, true, domain.VerificationPartial, false},
-		{"failed before effect", `"status":"aborted","result":"unsuccessful"`, false, true, false, domain.VerificationNoEffect, false},
-		{"failed but linked", `"status":"failed","result":"unsuccessful"`, true, true, true, domain.VerificationUnresolved, false},
-		{"foreign source", `"status":"completed","result":"successful"`, true, true, false, "", true},
+		{"verified", `"status":"completed","result":"successful"`, true, true, true, domain.VerificationEffect, false, true, false, false},
+		{"source missing", `"status":"completed","result":"successful"`, true, false, true, domain.VerificationPartial, false, true, false, false},
+		{"failed before effect", `"status":"aborted","result":"unsuccessful"`, false, true, false, domain.VerificationNoEffect, false, false, false, false},
+		{"failed but linked", `"status":"failed","result":"unsuccessful"`, true, true, true, domain.VerificationUnresolved, false, true, false, false},
+		{"foreign source", `"status":"completed","result":"successful"`, true, true, false, "", false, true, false, true},
+		{"cleanup removes source", `"status":"completed","result":"successful"`, true, false, true, domain.VerificationEffect, true, true, false, false},
+		{"cleanup library file missing", `"status":"completed","result":"successful"`, true, false, true, domain.VerificationPartial, true, false, false, false},
+		{"cleanup overlaps another job", "", false, true, false, "", true, false, true, false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			var writes int
+			cfg, op, prepared := cfg, op, prepared
+			if test.cleanup {
+				cfg.AdapterRevision = arrwire.SonarrV5CleanupCopyRevision
+				prepared.AdapterRevision = cfg.AdapterRevision
+				selection := *prepared.Import
+				selection.SonarrCleanup = true
+				prepared.Import = &selection
+				op.Effects = op.Effects[:1]
+			}
 			roundTrip := integrationTransport(func(req *http.Request) (*http.Response, error) {
 				route := strings.TrimPrefix(req.URL.Path, "/sonarr")
 				if req.Header.Get("X-Api-Key") != cfg.APIKey {
@@ -67,7 +83,21 @@ func TestManualSonarrCopyReconcilesOnlyExactImportAndRetainedSource(t *testing.T
 					}
 					return packResponse(http.StatusOK, fmt.Sprintf(`[{"path":%q,"size":4096}]`, path)), nil
 				case "GET /api/v3/queue":
-					return packResponse(http.StatusOK, `{"page":1,"pageSize":100,"totalRecords":1,"records":[{"id":19,"seriesId":17,"episodeId":31,"protocol":"usenet","downloadId":"download-a","downloadClient":"LAB SAB","outputPath":"/downloads/fixture","status":"completed","trackedDownloadState":"importBlocked","statusMessages":[{"messages":["Found matching series via grab history, but release was matched to series by ID. Automatic import is not possible."]}]}]}`), nil
+					rows := fmt.Sprintf(`{"id":19,"seriesId":17,"episodeId":31,"protocol":"usenet","downloadId":"download-a","downloadClient":"LAB SAB","outputPath":%q,"status":"completed","trackedDownloadState":"importBlocked","statusMessages":[{"messages":["Found matching series via grab history, but release was matched to series by ID. Automatic import is not possible."]}]}`, output)
+					count := 1
+					if test.overlap {
+						rows += fmt.Sprintf(`,{"id":20,"seriesId":17,"episodeId":32,"protocol":"usenet","downloadId":"other","outputPath":%q,"status":"downloading"}`, `c:\downloads\fixture\Nested`)
+						count++
+					}
+					return packResponse(http.StatusOK, fmt.Sprintf(`{"page":1,"pageSize":100,"totalRecords":%d,"records":[%s]}`, count, rows)), nil
+				case "GET /api/v3/filesystem/type":
+					if !test.cleanup || req.URL.Query().Get("path") != libraryPath {
+						t.Fatal("unexpected or unbound library disk read")
+					}
+					if test.libraryOnDisk {
+						return packResponse(http.StatusOK, `{"type":"file"}`), nil
+					}
+					return packResponse(http.StatusOK, `{"type":"folder"}`), nil
 				case "GET /api/v3/episode/31":
 					if writes != 0 && test.library {
 						return packResponse(http.StatusOK, `{"id":31,"seriesId":17,"episodeFileId":42,"hasFile":true}`), nil
@@ -111,6 +141,12 @@ func TestManualSonarrCopyReconcilesOnlyExactImportAndRetainedSource(t *testing.T
 				t.Fatalf("final approval fence permitted a send: %d writes, %v", writes, err)
 			}
 			ack, err := adapter.DispatchManualImport(t.Context(), op, prepared, func(context.Context) error { return nil })
+			if test.overlap {
+				if !errors.Is(err, ErrQualification) || writes != 0 {
+					t.Fatalf("overlap reached dispatch: %d writes, %v", writes, err)
+				}
+				return
+			}
 			if err != nil || ack.UpstreamReference != "8" {
 				t.Fatalf("dispatch: %+v %v", ack, err)
 			}

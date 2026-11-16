@@ -98,6 +98,7 @@ func TestActivityShowsManualCopyOutcomesWithoutPaths(t *testing.T) {
 	opts.RecoveryActivity = activityReader(func(context.Context, int, int64) ([]app.RecoveryActivityEntry, error) {
 		kinds := []domain.EventKind{
 			"recovery_manual_import_sending", "recovery_manual_import_verified",
+			"recovery_manual_import_cleanup_profile_verified",
 			"recovery_manual_import_uncertain", "recovery_manual_import_failed", "recovery_manual_import_unconfirmed",
 		}
 		rows := make([]app.RecoveryActivityEntry, 0, len(kinds))
@@ -110,6 +111,7 @@ func TestActivityShowsManualCopyOutcomesWithoutPaths(t *testing.T) {
 	page := request(New(opts), "GET", "/activity", "owner", "", nil)
 	expect(t, page, 200, "Sending the approved Copy import to Sonarr",
 		"Copy import verified. Sonarr linked the approved episode and kept the source file.", "Waiting to confirm the Copy import in Sonarr",
+		"Import verified. Sonarr linked the approved episode. Sonarr manages download cleanup.",
 		"Copy import failed", "Owner closed the review without import confirmation.")
 	if strings.Contains(page.Body.String(), "/private/source/") {
 		t.Fatal("Activity exposed a private import file path")

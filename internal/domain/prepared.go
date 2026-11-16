@@ -21,10 +21,11 @@ type PreparedAction struct {
 }
 
 // PreparedImport describes the exact native Copy candidates. The sender must
-// still establish physical path isolation and a qualified preservation profile.
+// still establish physical path isolation and a qualified settings profile.
 type PreparedImport struct {
-	DownloadID string
-	Files      []PreparedImportFile
+	DownloadID    string
+	Files         []PreparedImportFile
+	SonarrCleanup bool `json:",omitempty"`
 }
 
 type PreparedImportFile struct {
@@ -83,7 +84,14 @@ func (p PreparedAction) Binds(op Operation) bool {
 	}
 	switch op.Action {
 	case ActionImport:
-		return p.Reject == nil && p.Search == nil && p.Import.binds(op) && preparedTargetEffects(op, EffectLibraryImport, EffectSourceRetained)
+		if p.Reject != nil || p.Search != nil || !p.Import.binds(op) {
+			return false
+		}
+		if p.Import.SonarrCleanup {
+			return p.Product == ProductSonarr && len(op.Targets) == 1 && len(p.Import.Files) == 1 &&
+				preparedTargetEffects(op, EffectLibraryImport, "")
+		}
+		return preparedTargetEffects(op, EffectLibraryImport, EffectSourceRetained)
 	case ActionReject:
 		return p.Import == nil && p.Search == nil && p.Reject.binds(op)
 	case ActionSearch:
