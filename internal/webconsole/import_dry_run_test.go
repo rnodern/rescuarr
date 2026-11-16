@@ -24,7 +24,7 @@ func TestImportDryRunRequiresAnOwnerAndAnExplicitCheck(t *testing.T) {
 	opts := fixture()
 	item := opts.Read.(*apptest.Console).Page.Cases[0]
 	service := &importDryRunFixture{page: app.ImportDryRunPage{
-		Cases: []app.ImportDryRunCase{{Case: item, Assessment: "Needs review", Reason: "Audio unverified. Listen to the download in Manual Review."}},
+		Cases: []app.ImportDryRunCase{{Case: item, Assessment: "Needs review", Reason: "Audio unverified. Listen to the file before approving it in Manual Review."}},
 		Next:  "next-case",
 	}}
 	opts.ImportDryRun = service

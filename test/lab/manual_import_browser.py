@@ -199,7 +199,7 @@ def run_copy_browser(lab, arr, download_id, title, folder, source, media, guard,
                              sonarr_cleanup=sonarr_cleanup)
     if sonarr_cleanup:
         dry_run = browser.get("/automatic-import?run=1")
-        verify("S01E01" in dry_run and "Audio unverified. Listen to the download in Manual Review." in dry_run
+        verify("S01E01" in dry_run and "Audio unverified. Listen to the file before approving it in Manual Review." in dry_run
                and ">Candidate</span>" not in dry_run and not captured(), "dryRunUnverifiedAudioNotHeld")
     browser.post(REVIEW, REVIEW, decline)
     browser.activity("Manual recovery declined")

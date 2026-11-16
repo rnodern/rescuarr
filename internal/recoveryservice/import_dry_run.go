@@ -58,8 +58,18 @@ func (s *ManualReviews) checkDryRunCase(ctx context.Context, item domain.Case) (
 		result.Assessment, result.Reason = "Outside scope", "This hold needs another recovery path."
 		return result, nil
 	}
-	if item.Job.Shared || len(item.Targets) != 1 || item.Job.Protocol != domain.ProtocolUsenet || len(item.Incidents) > 0 {
-		result.Reason = "A single, unshared Usenet episode with no active incident is required."
+	switch {
+	case len(item.Incidents) > 0:
+		result.Reason = "An active incident is affecting this download."
+		return result, nil
+	case item.Job.Shared:
+		result.Reason = "Sonarr flagged this download as shared."
+		return result, nil
+	case len(item.Targets) != 1:
+		result.Reason = "This download needs one identified episode for automatic import."
+		return result, nil
+	case item.Job.Protocol != domain.ProtocolUsenet:
+		result.Assessment, result.Reason = "Outside scope", "The tested import applies to Usenet downloads."
 		return result, nil
 	}
 
@@ -133,7 +143,7 @@ func dryRunEvidenceHold(plan manualImportPlan, err error) string {
 		case "original_audio_absent":
 			return "The tagged tracks do not include the original audio required by your policy."
 		case "audio_unverified":
-			return "Audio unverified. Listen to the download in Manual Review."
+			return "Audio unverified. Listen to the file before approving it in Manual Review."
 		}
 	}
 	if plan.preview.Hold != "" {
@@ -141,6 +151,9 @@ func dryRunEvidenceHold(plan manualImportPlan, err error) string {
 	}
 	if errors.Is(err, app.ErrConflict) {
 		return "The queue or episode changed during the check. Run the dry run again."
+	}
+	if errors.Is(err, app.ErrHeld) {
+		return "A recent complete queue is required. Check the Sonarr connection, then run the dry run again."
 	}
 	if err != nil || len(plan.preview.Audio) != 1 || plan.preview.Audio[0].Decision != domain.AudioAccept {
 		return "Rescuarr could not confirm the current download and episode in Sonarr."
