@@ -103,6 +103,22 @@ func activityLabel(kind domain.EventKind, reason domain.ReasonCode) (status, eve
 		return "Recorded", "Switched to Manual mode", false
 	case "recovery_manual_mode_disabled":
 		return "Recorded", "Switched to Observe mode", false
+	case "recovery_automatic_import_enabled":
+		return "Recorded", "Enabled automatic Sonarr imports", false
+	case "recovery_automatic_import_disabled":
+		return "Recorded", "Switched to Manual mode", false
+	case "recovery_automatic_import_sending":
+		return "Pending", "Sending an automatic Copy import to Sonarr", false
+	case "recovery_automatic_import_verified":
+		return "Verified", "Automatic import verified. Sonarr linked the episode and kept the source file.", false
+	case "recovery_automatic_import_cleanup_profile_verified":
+		return "Verified", "Automatic import verified. Sonarr linked the episode. Sonarr manages download cleanup.", false
+	case "recovery_automatic_import_uncertain":
+		return "Needs review", "Automatic imports are waiting for Sonarr to confirm the current import.", true
+	case "recovery_automatic_import_failed":
+		return "Failed", "Automatic Copy import failed", true
+	case "recovery_automatic_import_cancelled":
+		return "Cancelled", "Automatic import cancelled before sending", false
 	case "recovery_manual_import_sending":
 		return "Pending", "Sending the approved Copy import to Sonarr", false
 	case "recovery_manual_import_verified":

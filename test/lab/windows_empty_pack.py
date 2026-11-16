@@ -33,6 +33,7 @@ MANUAL_CASE = "sonarr/windows-v5-manual-pack"
 MANUAL_COPY_CASE = "sonarr/windows-v5-manual-copy"
 NORMAL_SETTINGS_COPY_CASE = "sonarr/windows-v5-copy-normal-settings"
 NORMAL_SETTINGS_MANUAL_COPY_CASE = "sonarr/windows-v5-manual-copy-normal-settings"
+AUTOMATIC_COPY_CASE = "sonarr/windows-v5-automatic-copy-normal-settings"
 
 
 def stage(result, name):
@@ -55,7 +56,7 @@ def sonarr_config(data, key):
 def exercise(args, result, source_sha):
     scenarios.verify(os.name == "nt" and os.environ.get("GITHUB_ACTIONS") == "true", "requiresDisposableWindowsRunner")
     result["binaries"] = {}
-    for name in ("sonarr", "sab", "adapter", "manual_copy", "normal_settings_manual_copy", "rescuarr"):
+    for name in ("sonarr", "sab", "adapter", "manual_copy", "normal_settings_manual_copy", "automatic_copy", "rescuarr"):
         executable = getattr(args, name)
         if executable is None:
             continue
@@ -110,7 +111,7 @@ def exercise(args, result, source_sha):
                             "docker": False, "emptyAtStartup": True}
 
         stage(result, "arrSetup")
-        sonarr_cleanup = bool(args.normal_settings_copy or args.normal_settings_manual_copy)
+        sonarr_cleanup = bool(args.normal_settings_copy or args.normal_settings_manual_copy or args.automatic_copy)
         completed_handling = bool(args.language_pack or args.manual_copy or sonarr_cleanup)
         profile = arr.setup(completed_handling=completed_handling, remove_completed=sonarr_cleanup,
                             remove_failed=sonarr_cleanup)
@@ -127,10 +128,11 @@ def exercise(args, result, source_sha):
             language_pack.language_pack_replacement(arr, episodes[0], episodes[1], result)
         elif args.normal_settings_copy:
             scenarios.id_only_import(arr, episodes[0], episodes[1], result, observe_cleanup=True)
-        elif args.manual_copy or args.normal_settings_manual_copy:
+        elif args.manual_copy or args.normal_settings_manual_copy or args.automatic_copy:
             run_packaged_id_only_copy(arr, episodes[0], episodes[1], result,
-                                      args.manual_copy or args.normal_settings_manual_copy, source_sha,
-                                      partial(stage, result), sonarr_cleanup=sonarr_cleanup)
+                                      args.manual_copy or args.normal_settings_manual_copy or args.automatic_copy,
+                                      source_sha, partial(stage, result), sonarr_cleanup=sonarr_cleanup,
+                                      automatic=bool(args.automatic_copy))
         else:
             adapter = partial(run_go_adapter, executable=args.adapter) if args.adapter else None
             manual_review = None
@@ -174,6 +176,7 @@ def main():
     mode.add_argument("--manual-copy", type=Path)
     mode.add_argument("--normal-settings-copy", action="store_true")
     mode.add_argument("--normal-settings-manual-copy", type=Path)
+    mode.add_argument("--automatic-copy", type=Path)
     args = parser.parse_args()
     for attr, value in vars(args).items():
         if isinstance(value, Path):
@@ -181,7 +184,7 @@ def main():
 
     result = {"status": "failed", "evidenceClass": "labObservation", "protocol": "usenet", "stage": "startup"}
     source_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
-    scenario = (NORMAL_SETTINGS_MANUAL_COPY_CASE if args.normal_settings_manual_copy else
+    scenario = (AUTOMATIC_COPY_CASE if args.automatic_copy else NORMAL_SETTINGS_MANUAL_COPY_CASE if args.normal_settings_manual_copy else
                 NORMAL_SETTINGS_COPY_CASE if args.normal_settings_copy else LANGUAGE_CASE if args.language_pack else
                 MANUAL_COPY_CASE if args.manual_copy else MANUAL_CASE if args.rescuarr else CASE)
     report = {"sourceSHA": source_sha,

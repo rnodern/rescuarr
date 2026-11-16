@@ -91,6 +91,9 @@ func (s *Service) AutomaticImportCases(ctx context.Context, after domain.CaseID,
 			AND i.version = '5.0.0.2941' AND i.health = 'available' AND i.coverage = 'known'
 			AND i.generation = c.last_seen_generation AND i.epoch = c.epoch
 			AND i.checked_at > ? AND i.checked_at <= ? AND json_extract(c.payload, '$.Display.EpisodeCheck.Matched') = 1
+			AND NOT EXISTS (SELECT 1 FROM manual_reviews WHERE case_id = c.id)
+			AND NOT EXISTS (SELECT 1 FROM action_intents
+				WHERE json_extract(proposal, '$.CaseID') = c.id AND state <> 'cancelled')
 			AND (json_extract(c.payload, '$.Display.EpisodeCheck.TitleInNames') = 1 OR NOT EXISTS (
 				SELECT 1 FROM series_episode_title_requirements AS r
 				WHERE r.instance_id = c.instance_id AND r.epoch = c.epoch

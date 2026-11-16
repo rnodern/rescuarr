@@ -17,12 +17,14 @@ func browserHandler(cfg config.Config, auth *access.Auth, local *store.Store, ob
 	patterns, _ := learningstore.New(local)
 	languages := app.NewLanguageSettings(local, app.SystemClock{})
 	dryRun, _ := manual.(app.ImportDryRunReader)
+	automatic, _ := manual.(app.AutomaticImportControl)
 	browser := webconsole.New(webconsole.Options{
 		BasePath:         cfg.BasePath,
 		Read:             recoveryViews{ConsoleReader: observations, local: local},
 		Connections:      observations,
 		RecoveryActivity: observations,
 		ImportDryRun:     dryRun,
+		AutomaticImport:  automatic,
 		EpisodeOrder:     observations,
 		ImportPreview:    recoveryservice.NewPreviewService(observations, local, nil, app.SystemClock{}, languages),
 		LanguageSettings: languages,

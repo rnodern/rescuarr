@@ -24,7 +24,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        driver: [adapter, manual, language, manual-copy, normal-settings-copy, normal-settings-manual-copy]
+        driver: [adapter, manual, language, manual-copy, normal-settings-copy, normal-settings-manual-copy, automatic-copy]
     defaults:
       run:
         shell: pwsh
@@ -67,7 +67,7 @@ jobs:
           CGO_ENABLED: '0'
         run: go build -trimpath -o "$env:RUNNER_TEMP/rescuarr-windows-lab/go-pack-probe.exe" ./test/lab/go-pack-probe
       - name: Build and verify the portable Rescuarr package
-        if: matrix.driver == 'manual' || matrix.driver == 'manual-copy' || matrix.driver == 'normal-settings-manual-copy'
+        if: matrix.driver == 'manual' || matrix.driver == 'manual-copy' || matrix.driver == 'normal-settings-manual-copy' || matrix.driver == 'automatic-copy'
         run: |
           $dir = Join-Path $env:RUNNER_TEMP 'rescuarr-windows-lab'
           python -B scripts/packaging/native.py --os windows --arch amd64 --version candidate --output "$dir/package"
@@ -119,6 +119,7 @@ jobs:
                 'manual' { '--rescuarr'; "$dir/installed/rescuarr.exe" }
                 'normal-settings-copy' { '--normal-settings-copy' }
                 'normal-settings-manual-copy' { '--normal-settings-manual-copy'; "$dir/installed/rescuarr.exe" }
+                'automatic-copy' { '--automatic-copy'; "$dir/installed/rescuarr.exe" }
                 'manual-copy' { '--manual-copy'; "$dir/installed/rescuarr.exe" }
                 'adapter' { '--adapter'; "$dir/go-pack-probe.exe" }
               }
@@ -141,6 +142,7 @@ jobs:
             ${{ matrix.driver == 'normal-settings-manual-copy' && 'sonarr-windows-v5-manual-copy-normal-settings-evidence'
                 || matrix.driver == 'normal-settings-copy' && 'sonarr-windows-v5-copy-normal-settings-evidence'
                 || matrix.driver == 'manual-copy' && 'sonarr-windows-v5-manual-copy-evidence'
+                || matrix.driver == 'automatic-copy' && 'sonarr-windows-v5-automatic-copy-normal-settings-evidence'
                 || format('sonarr-windows-v5-{0}-pack-evidence', matrix.driver) }}
           path: ${{ runner.temp }}/rescuarr-windows-empty-pack.json
           if-no-files-found: warn

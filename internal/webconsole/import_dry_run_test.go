@@ -3,16 +3,50 @@ package webconsole
 import (
 	"context"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 
 	"github.com/rnodern/rescuarr/internal/app"
 	"github.com/rnodern/rescuarr/internal/app/apptest"
+	"github.com/rnodern/rescuarr/internal/domain"
 )
 
 type importDryRunFixture struct {
 	after []string
 	page  app.ImportDryRunPage
+}
+
+type automaticImportControlFixture struct {
+	configured bool
+	enabled    bool
+}
+
+func (f *automaticImportControlFixture) AutomaticImportsConfigured() bool { return f.configured }
+
+func (f *automaticImportControlFixture) SetAutomaticImportMode(_ context.Context, enabled bool, _ domain.ActorID) error {
+	f.enabled = enabled
+	return nil
+}
+
+func TestAutomaticImportModeRequiresOwnerPOST(t *testing.T) {
+	opts := fixture()
+	opts.ManualReview = &manualReviewFixture{}
+	control := &automaticImportControlFixture{configured: true}
+	opts.AutomaticImport = control
+	handler := New(opts)
+	const action = "/automatic-import/mode"
+	form := url.Values{"csrf": {csrf}, "mode": {"automatic"}}
+	expect(t, request(handler, "GET", "/", "owner", "", nil), http.StatusOK, "Enable automatic Sonarr imports")
+	expect(t, request(handler, "POST", action, "", origin, form), http.StatusUnauthorized)
+	expect(t, request(handler, "POST", action, "other", origin, form), http.StatusForbidden)
+	if control.enabled {
+		t.Fatal("an unauthorised request activated automatic imports")
+	}
+	expect(t, request(handler, "POST", action, "owner", origin, form), http.StatusSeeOther)
+	if !control.enabled {
+		t.Fatal("the owner could not activate automatic imports")
+	}
 }
 
 func (f *importDryRunFixture) ImportDryRun(_ context.Context, after string) (app.ImportDryRunPage, error) {

@@ -12,6 +12,11 @@ type ManualReviewService interface {
 	DecideManualReview(context.Context, ManualDecision) error
 }
 
+type AutomaticImportControl interface {
+	AutomaticImportsConfigured() bool
+	SetAutomaticImportMode(context.Context, bool, domain.ActorID) error
+}
+
 type ManualReviewView struct {
 	Case              *domain.Case
 	Preview           ImportPreview

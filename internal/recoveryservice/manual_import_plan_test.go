@@ -266,6 +266,62 @@ func TestManualImportPlanBindsSourceProfileAndLanguagePolicy(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+
+	automaticRows := func() int {
+		t.Helper()
+		var count int
+		if err := local.Read(ctx, func(tx *sql.Tx) error {
+			return tx.QueryRowContext(ctx, `SELECT count(*) FROM manual_reviews WHERE actor = ?`, automaticSonarrActor).Scan(&count)
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return count
+	}
+	selectCase := func() {
+		t.Helper()
+		var after domain.CaseID
+		if err := reviews.queueAutomaticSonarr(ctx, &after); err != nil {
+			t.Fatal(err)
+		}
+	}
+	freeSpace = 2 << 30
+	selectCase()
+	if automaticRows() != 0 {
+		t.Fatal("Observe queued an automatic import")
+	}
+	if err := reviews.SetAutomaticImportMode(ctx, true, "owner"); err != nil {
+		t.Fatal(err)
+	}
+	reviews.SetSourceAudioTracks(func(context.Context, importflow.PathStyle, importflow.SonarrV5Source) ([]string, bool) {
+		return []string{"eng"}, false
+	})
+	selectCase()
+	if automaticRows() != 0 {
+		t.Fatal("Incomplete stream evidence entered the import slot")
+	}
+	reviews.SetSourceAudioTracks(func(context.Context, importflow.PathStyle, importflow.SonarrV5Source) ([]string, bool) {
+		return []string{"eng"}, true
+	})
+	selectCase()
+	if automaticRows() != 1 {
+		t.Fatal("The eligible case did not enter the automatic import slot")
+	}
+	if err := cases.SetEpisodeTitleRequired(ctx, item.ID, true, "owner"); err != nil {
+		t.Fatal(err)
+	}
+	if err := reviews.manualImportStep(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if automaticRows() != 0 {
+		t.Fatal("A late title requirement did not release the unsent automatic import")
+	}
+	selectCase()
+	if automaticRows() != 0 {
+		t.Fatal("The worker re-queued a number-only match with a title requirement")
+	}
+	if err := reviews.SetAutomaticImportMode(ctx, false, "owner"); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // Embedding the effect interface keeps the fixture read-only. Calling an
