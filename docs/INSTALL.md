@@ -109,6 +109,8 @@ To show audio track tags before approval, install FFmpeg with `ffprobe` on the R
 
 Open **Import dry run** and choose **Run dry run** to check a page of held downloads. It reads the Sonarr queue, exact episode and candidate file, tagged audio, library space and the pinned import profile. A candidate passed this read-only assessment. Sonarr still has to approve reprocessing the exact episode before it can be imported. Unverified audio is shown as needing review.
 
+If a series has different episode orders across sources, open one of its downloads in the Recovery Queue and choose **Require matching episode title** under **Episode order**. The setting applies to this series on this Sonarr connection. The dry run holds downloads unless their folder or filename confirms Sonarr’s episode title. Manual Review can still use a match on series and episode number for an owner to verify.
+
 ## Reverse proxy
 
 For LAN access, put an HTTPS proxy in front of Rescuarr and preserve the client-facing host and path. Set `RESCUARR_PUBLIC_URL` to the complete external URL, such as `https://rescuarr.example.net`. If using `https://example.net/rescuarr`, also set `RESCUARR_BASE_PATH=/rescuarr` and forward the path without stripping the prefix. Set `RESCUARR_TRUSTED_PROXIES` to the proxy ingress addresses as comma-separated CIDRs. Configure the proxy to replace incoming forwarded headers. For example, a proxy on the same host may use `127.0.0.1/32`. Point local liveness and readiness probes to the fixed `/healthz` and `/readyz` paths.

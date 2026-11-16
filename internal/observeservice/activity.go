@@ -91,6 +91,11 @@ func (s *Service) AutomaticImportCases(ctx context.Context, after domain.CaseID,
 			AND i.version = '5.0.0.2941' AND i.health = 'available' AND i.coverage = 'known'
 			AND i.generation = c.last_seen_generation AND i.epoch = c.epoch
 			AND i.checked_at > ? AND i.checked_at <= ? AND json_extract(c.payload, '$.Display.EpisodeCheck.Matched') = 1
+			AND (json_extract(c.payload, '$.Display.EpisodeCheck.TitleInNames') = 1 OR NOT EXISTS (
+				SELECT 1 FROM series_episode_title_requirements AS r
+				WHERE r.instance_id = c.instance_id AND r.epoch = c.epoch
+				AND r.series_id = json_extract(c.payload, '$.Targets[0].Ref.SeriesID')
+			))
 			ORDER BY c.id LIMIT ?`
 		now := s.clock.Now()
 		rows, err := tx.QueryContext(ctx, caseDisplayQuery+where, after, stamp(now.Add(-recoveryCaseAge)), stamp(now), limit)
