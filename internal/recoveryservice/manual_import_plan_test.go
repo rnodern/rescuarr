@@ -1,6 +1,7 @@
 package recoveryservice
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/rnodern/rescuarr/internal/app"
 	"github.com/rnodern/rescuarr/internal/domain"
+	"github.com/rnodern/rescuarr/internal/importflow"
 	"github.com/rnodern/rescuarr/internal/observeservice"
 	"github.com/rnodern/rescuarr/internal/store"
 )
@@ -87,7 +89,7 @@ func TestManualImportPlanBindsSourceProfileAndLanguagePolicy(t *testing.T) {
 	item := page.Cases[0]
 	read := func() manualImportPlan {
 		t.Helper()
-		p, err := prepareManualImport(ctx, cases, local, clock, transport, item.ID, item.Revision)
+		p, err := prepareManualImport(ctx, cases, local, clock, transport, item.ID, item.Revision, nil)
 		if err != nil || p.scopeHash == "" || p.release != folder || p.preview.Episode == nil ||
 			!p.preview.Episode.Matched || !p.preview.Episode.TitleInNames ||
 			p.preview.Episode.Filename != folder+".mkv" || len(p.preview.Audio) != 1 ||
@@ -118,7 +120,7 @@ func TestManualImportPlanBindsSourceProfileAndLanguagePolicy(t *testing.T) {
 	}
 	priorCandidateReads := candidateReads
 	episodeNumber++
-	changed, err := prepareManualImport(ctx, cases, local, clock, transport, item.ID, item.Revision)
+	changed, err := prepareManualImport(ctx, cases, local, clock, transport, item.ID, item.Revision, nil)
 	if !errors.Is(err, app.ErrHeld) || changed.scopeHash != "" || candidateReads != priorCandidateReads {
 		t.Fatalf("an episode renumbered after the queue snapshot reached candidate inspection: %v", err)
 	}
@@ -128,9 +130,30 @@ func TestManualImportPlanBindsSourceProfileAndLanguagePolicy(t *testing.T) {
 	if _, err := app.NewLanguageSettings(local, clock).SaveLanguageSettings(ctx, prefs, "owner"); err != nil {
 		t.Fatal(err)
 	}
-	rejected, err := prepareManualImport(ctx, cases, local, clock, transport, item.ID, item.Revision)
+	rejected, err := prepareManualImport(ctx, cases, local, clock, transport, item.ID, item.Revision, nil)
 	if !errors.Is(err, app.ErrHeld) || rejected.scopeHash != "" || rejected.preview.Hold == "" ||
 		rejected.preview.Episode == nil || len(rejected.preview.Audio) != 1 || rejected.preview.Audio[0].Decision != domain.AudioReject {
 		t.Fatalf("explicit audio rejection did not hold approval: %+v, %v", rejected.preview, err)
+	}
+
+	tagged, err := prepareManualImport(ctx, cases, local, clock, transport, item.ID, item.Revision,
+		func(_ context.Context, style importflow.PathStyle, source importflow.SonarrV5Source) ([]string, bool) {
+			if style != importflow.UnixPath || source.DownloadID != original || source.Path != output+"/"+folder+".mkv" || source.Size != int64(size) {
+				t.Fatalf("the audio reader did not receive the exact candidate: %+v", source)
+			}
+			return []string{"eng"}, true
+		})
+	if err != nil || tagged.scopeHash == "" || len(tagged.preview.Audio) != 1 ||
+		tagged.preview.Audio[0].Reason != "original_audio_present" {
+		t.Fatalf("tagged audio did not support an eligible approval: %+v, %v", tagged.preview, err)
+	}
+
+	wrongLanguage, err := prepareManualImport(ctx, cases, local, clock, transport, item.ID, item.Revision,
+		func(context.Context, importflow.PathStyle, importflow.SonarrV5Source) ([]string, bool) {
+			return []string{"heb"}, true
+		})
+	if !errors.Is(err, app.ErrHeld) || wrongLanguage.scopeHash != "" || len(wrongLanguage.preview.Audio) != 1 ||
+		wrongLanguage.preview.Audio[0].Reason != "original_audio_absent" {
+		t.Fatalf("wrong-language file was eligible: %+v, %v", wrongLanguage.preview, err)
 	}
 }

@@ -31,12 +31,17 @@ func (s *ManualReviews) SetManualImportQualification(qualify ManualImportQualifi
 	s.importQualified = qualify
 }
 
+// SetSourceAudioTracks configures the optional source-file track reader at startup.
+func (s *ManualReviews) SetSourceAudioTracks(read SourceAudioTracks) {
+	s.importAudio = read
+}
+
 func (s *ManualReviews) manualImportView(ctx context.Context, slot manualSlot, view app.ManualReviewView) app.ManualReviewView {
 	item := view.Case
 	view.Diagnosis = "Sonarr identified the series from the grab history. The episode needs review before import."
 	view.Hold = "Approval requires a verified Sonarr import connection."
 	if s.importQualified != nil {
-		plan, err := prepareManualImport(ctx, s.cases, s.local, s.clock, s.transport, item.ID, item.Revision)
+		plan, err := prepareManualImport(ctx, s.cases, s.local, s.clock, s.transport, item.ID, item.Revision, s.importAudio)
 		if plan.preview.Episode != nil || len(plan.preview.Audio) > 0 {
 			view.Preview = plan.preview
 		}
@@ -171,7 +176,7 @@ func (s *ManualReviews) manualImportStep(ctx context.Context) error {
 }
 
 func (s *ManualReviews) sendManualImport(ctx context.Context, approval manualImportApproval) error {
-	plan, err := prepareManualImport(ctx, s.cases, s.local, s.clock, s.transport, approval.id, approval.revision)
+	plan, err := prepareManualImport(ctx, s.cases, s.local, s.clock, s.transport, approval.id, approval.revision, s.importAudio)
 	if err != nil {
 		return err
 	}
@@ -204,7 +209,7 @@ func (s *ManualReviews) sendManualImport(ctx context.Context, approval manualImp
 	if err != nil {
 		return err
 	}
-	current, err := prepareManualImport(ctx, s.cases, s.local, s.clock, s.transport, approval.id, approval.revision)
+	current, err := prepareManualImport(ctx, s.cases, s.local, s.clock, s.transport, approval.id, approval.revision, s.importAudio)
 	if err != nil {
 		return err
 	}

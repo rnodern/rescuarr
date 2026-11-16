@@ -20,6 +20,8 @@ import (
 	"github.com/rnodern/rescuarr/internal/store"
 )
 
+type SourceAudioTracks func(context.Context, importflow.PathStyle, importflow.SonarrV5Source) ([]string, bool)
+
 type manualImportPlan struct {
 	instance         domain.Instance
 	source           importflow.SonarrV5Source
@@ -33,7 +35,7 @@ type manualImportPlan struct {
 // prepareManualImport builds a fresh single-file proposal using only reads.
 // The plan keeps full Arr paths out of browser views and Activity.
 func prepareManualImport(ctx context.Context, cases *observeservice.Service, local *store.Store, clock app.Clock,
-	transport http.RoundTripper, id domain.CaseID, revision domain.Revision) (manualImportPlan, error) {
+	transport http.RoundTripper, id domain.CaseID, revision domain.Revision, readAudio SourceAudioTracks) (manualImportPlan, error) {
 	ctx, cancel := context.WithTimeout(ctx, 25*time.Second)
 	defer cancel()
 	proof, err := cases.FreshRecoveryQueue(ctx, id, revision)
@@ -139,8 +141,13 @@ func prepareManualImport(ctx context.Context, cases *observeservice.Service, loc
 		}
 	}
 	slices.Sort(labels)
+	var tracks []string
+	var tracksComplete bool
+	if readAudio != nil {
+		tracks, tracksComplete = readAudio(ctx, style, selection.Source)
+	}
 	audio := reviewAudio(prefs, domain.ModeAssist, original.Name, "Download audio",
-		filenameLanguageHints(first.Release, selection.Episode.Folder, selection.Episode.Filename), labels, nil, false)
+		filenameLanguageHints(first.Release, selection.Episode.Folder, selection.Episode.Filename), labels, tracks, tracksComplete)
 	plan.preview.Audio = []app.AudioLanguageReview{audio}
 	plan.languageRevision = prefs.Revision
 	if audio.Decision == domain.AudioReject {

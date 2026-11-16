@@ -108,7 +108,7 @@ def capture_sonarr(stack, arr):
     return app_connection, snapshot
 
 
-def copy_review(browser, title, folder, source, *, approval_label="Approve Copy import", sonarr_cleanup=False):
+def copy_review(browser, title, folder, source, *, approval_label="Approve Copy import", sonarr_cleanup=False, tagged_audio=False):
     hold = "pending"
     notice = SONARR_CLEANUP_NOTICE if sonarr_cleanup else PRESERVATION_NOTICE
 
@@ -132,6 +132,9 @@ def copy_review(browser, title, folder, source, *, approval_label="Approve Copy 
                and approval_label in page
                and notice in " ".join(unescape(page).split()), "manualCopyReviewEvidenceIncomplete")
         verify(bool(decline.get("token")) and bool(approval.get("token")), "manualCopyReviewTokenMissing")
+        if tagged_audio:
+            verify("<dt>Audio tracks</dt><dd>English</dd>" in page and "original audio present" in page,
+                   "manualCopySourceAudioNotConfirmed")
         return decline, approval
     try:
         return poll(checked, "manualCopyReviewDeadline", timeout=60)
@@ -203,12 +206,18 @@ def run_copy_browser(lab, arr, download_id, title, folder, source, media, guard,
 
     lab.on_stage("manualCopyProfile")
     data = lab.root / "approve"
-    proc, browser, settings = lab.setup_manual_review(app_connection, data, operation="manual-import", allow_unknown=True)
-    decline, _ = copy_review(browser, title, folder, source, sonarr_cleanup=sonarr_cleanup)
+    audio_settings = ({
+        "RESCUARR_MANUAL_IMPORT_AUDIO_SONARR_ROOT": str(folder.parent),
+        "RESCUARR_MANUAL_IMPORT_AUDIO_LOCAL_ROOT": str(folder.parent),
+    } if sonarr_cleanup else None)
+    proc, browser, settings = lab.setup_manual_review(app_connection, data, operation="manual-import",
+                                                       allow_unknown=not sonarr_cleanup, extra_settings=audio_settings)
+    decline, _ = copy_review(browser, title, folder, source, sonarr_cleanup=sonarr_cleanup, tagged_audio=sonarr_cleanup)
     lab.stop(proc)
     proc, browser = lab.start(data, settings)
     browser.login()
-    restored, approval = copy_review(browser, title, folder, source, sonarr_cleanup=sonarr_cleanup)
+    restored, approval = copy_review(browser, title, folder, source, sonarr_cleanup=sonarr_cleanup,
+                                     tagged_audio=sonarr_cleanup)
     verify(restored["token"] == decline["token"], "manualCopyReviewDidNotSurviveRestart")
     time.sleep(6)
     verify(native_state() == before, "manualCopyChangedUpstreamBeforeApproval")
@@ -237,7 +246,8 @@ def run_copy_browser(lab, arr, download_id, title, folder, source, media, guard,
                                "apiWritesBeforeApproval": 0, "apiWritesAfterDecline": 0, "reprocessRequests": reprocess_count,
                                "copyCommandId": command_id, "importRecordedInActivity": True}
     if sonarr_cleanup:
-        report["manualBrowser"].update(cleanupNoticeShown=True, importActivitySurvivedRestart=True)
+        report["manualBrowser"].update(cleanupNoticeShown=True, importActivitySurvivedRestart=True,
+                                       taggedSourceAudioConfirmed=True)
     return command
 
 

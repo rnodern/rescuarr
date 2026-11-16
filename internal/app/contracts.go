@@ -91,12 +91,13 @@ type PackLanguageFile struct {
 }
 
 type AudioLanguageReview struct {
-	Label             string
-	OriginalLanguage  string
-	PreferredLanguage string
-	FilenameLanguages []string
-	ReleaseLanguages  []string
-	TrackLanguages    []string
+	Label                  string
+	OriginalLanguage       string
+	PreferredLanguage      string
+	FilenameLanguages      []string
+	ReleaseLanguages       []string
+	TrackLanguages         []string
+	TrackLanguagesComplete bool `json:",omitempty"`
 	domain.AudioAssessment
 }
 

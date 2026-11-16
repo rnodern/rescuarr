@@ -194,7 +194,7 @@ class PackagedManualLab:
         self.await_ready(proc, ready, "manualBrowser")
         return proc, browser
 
-    def setup_manual_review(self, arr, directory, *, operation="empty-pack", allow_unknown=False):
+    def setup_manual_review(self, arr, directory, *, operation="empty-pack", allow_unknown=False, extra_settings=None):
         proc, browser = self.start(directory)
         browser.setup(directory)
         connection_id = browser.connect(arr)
@@ -209,6 +209,7 @@ class PackagedManualLab:
             prefix + "_CONNECTION": connection_id,
             prefix + "_PROFILE": found[1],
             prefix + "_SAB_VERSION": SAB_VERSION,
+            **(extra_settings or {}),
         }
         proc, browser = self.start(directory, settings)
         browser.login()
