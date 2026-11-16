@@ -20,6 +20,7 @@ func TestAudioLanguagePolicy(t *testing.T) {
 		{name: "Korean original", original: "Korean", tracks: []string{"kor"}, complete: true, decision: domain.AudioAccept, preferred: true},
 		{name: "Korean with English", original: "Korean", tracks: []string{"kor", "eng"}, complete: true, decision: domain.AudioAccept, preferred: true},
 		{name: "English dub only", original: "Korean", tracks: []string{"eng"}, complete: true, decision: domain.AudioReject},
+		{name: "Hebrew original", original: "Hebrew", tracks: []string{"heb"}, complete: true, decision: domain.AudioAccept, preferred: true},
 		{name: "Hebrew dub of English original", original: "English", tracks: []string{"heb"}, complete: true, decision: domain.AudioReject},
 		{name: "English only", original: "English", tracks: []string{"eng", "en-GB"}, complete: true, decision: domain.AudioAccept, preferred: true},
 		{name: "English MULTi allowed", original: "English", tracks: []string{"eng", "heb"}, complete: true, decision: domain.AudioAccept},

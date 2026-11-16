@@ -194,7 +194,7 @@
   <dt>Preferred language</dt><dd>{{.PreferredLanguage}}</dd>
   {{if .FilenameLanguages}}<dt>Release, folder and file names</dt><dd>{{template "audio-language-list" .FilenameLanguages}}</dd>{{end}}
   {{if .ReleaseLanguages}}<dt>Release metadata</dt><dd>{{template "audio-language-list" .ReleaseLanguages}}</dd>{{end}}
-  <dt>Audio tracks</dt><dd>{{template "audio-language-list" .TrackLanguages}}</dd>
+  <dt>Audio tracks</dt><dd>{{template "audio-language-list" .TrackLanguages}}{{if and .TrackLanguages (not .TrackLanguagesComplete)}} (some tracks untagged){{end}}</dd>
   <dt>Audio decision</dt><dd>{{template "audio-language-decision" .}}</dd>
 </dl>
 {{end}}

@@ -18,6 +18,8 @@ import (
 	"github.com/rnodern/rescuarr/internal/access"
 	"github.com/rnodern/rescuarr/internal/app"
 	"github.com/rnodern/rescuarr/internal/config"
+	"github.com/rnodern/rescuarr/internal/domain"
+	"github.com/rnodern/rescuarr/internal/importflow"
 	"github.com/rnodern/rescuarr/internal/ledger"
 	"github.com/rnodern/rescuarr/internal/observepoll"
 	"github.com/rnodern/rescuarr/internal/observeservice"
@@ -147,6 +149,14 @@ func doctor(ctx context.Context, cfg config.Config) error {
 }
 
 func serve(ctx context.Context, cfg config.Config, local *store.Store, auth *access.Auth, logger *slog.Logger) error {
+	var audio *importflow.SourceAudioProbe
+	if cfg.ImportAudioSonarrRoot != "" {
+		var err error
+		audio, err = importflow.NewSourceAudioProbe(domain.InstanceID(cfg.ManualImportConnection), cfg.ImportAudioSonarrRoot, cfg.ImportAudioLocalRoot)
+		if err != nil {
+			return err
+		}
+	}
 	notifications := prowloutbox.New(local, nil, prowl.NewClient(nil), cfg.ProwlDelivery)
 	recoveryPause, err := ledger.NewJournal(local, holdUnqualifiedRecovery, notifications.Append)
 	if err != nil {
@@ -165,6 +175,9 @@ func serve(ctx context.Context, cfg config.Config, local *store.Store, auth *acc
 	manual := recoveryservice.NewManualReviews(local, observations, preview, transport, clock, qualified)
 	importQualification := manualImportQualification(cfg, local, transport, clock)
 	manual.SetManualImportQualification(importQualification)
+	if audio != nil {
+		manual.SetSourceAudioTracks(audio.AudioTracks)
+	}
 	server := &http.Server{
 		Handler:           browserHandler(cfg, auth, local, observations, notifications, recoveryPause, manual),
 		ReadHeaderTimeout: 5 * time.Second,

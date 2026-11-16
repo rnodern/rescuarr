@@ -34,6 +34,7 @@ type ManualReviews struct {
 	clock           app.Clock
 	qualified       ManualEmptyPackQualification
 	importQualified ManualImportQualification
+	importAudio     SourceAudioTracks
 	signingKey      [32]byte
 }
 
@@ -283,7 +284,7 @@ func (s *ManualReviews) DecideManualReview(ctx context.Context, choice app.Manua
 		}
 		revision = detail.Case.Revision
 		if detail.Case.Reason == domain.ReasonCode(observe.FindingSeriesIDOnly) {
-			plan, err := prepareManualImport(ctx, s.cases, s.local, s.clock, s.transport, id, revision)
+			plan, err := prepareManualImport(ctx, s.cases, s.local, s.clock, s.transport, id, revision, s.importAudio)
 			if err != nil {
 				return app.ErrConflict
 			}

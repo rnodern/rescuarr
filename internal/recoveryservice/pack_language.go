@@ -154,7 +154,13 @@ func languageHintMismatch(prefs app.LanguagePreferences, original string, names 
 
 func reviewAudio(prefs app.LanguagePreferences, mode domain.Mode, original, label string, filename, release, tracks []string,
 	complete bool) app.AudioLanguageReview {
+	labels := slices.Clone(tracks)
+	for index, tag := range labels {
+		if name := domain.AudioLanguageName(domain.AudioLanguageCode(tag)); name != "" {
+			labels[index] = name
+		}
+	}
 	return app.AudioLanguageReview{Label: label, OriginalLanguage: original, PreferredLanguage: domain.AudioLanguageName(prefs.PreferredLanguage),
-		FilenameLanguages: filename, ReleaseLanguages: release, TrackLanguages: tracks,
+		FilenameLanguages: filename, ReleaseLanguages: release, TrackLanguages: labels, TrackLanguagesComplete: complete,
 		AudioAssessment: policy.AssessAudio(prefs, mode, original, tracks, complete)}
 }

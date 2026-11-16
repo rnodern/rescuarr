@@ -24,7 +24,10 @@ func AudioLanguageCode(raw string) string {
 		return "tl"
 	}
 	if base, err := language.ParseBase(value); err == nil && !base.IsPrivateUse() && base.String() != "und" {
-		return base.String()
+		if canonical, err := language.Compose(base); err == nil {
+			code, _, _ := canonical.Raw()
+			return code.String()
+		}
 	}
 	if strings.Contains(value, "-") {
 		if tag, err := language.Parse(value); err == nil {
@@ -48,10 +51,17 @@ var languageNames = func() map[string]string {
 		if name == "" {
 			continue
 		}
-		if old, ok := out[name]; ok && old != base.String() {
+		// Several deprecated bases share an English name with their current
+		// equivalent. They should not make that display name ambiguous.
+		canonical, err := language.Compose(base)
+		if err != nil {
+			continue
+		}
+		code, _, _ := canonical.Raw()
+		if old, ok := out[name]; ok && old != code.String() {
 			out[name] = ""
 		} else {
-			out[name] = base.String()
+			out[name] = code.String()
 		}
 	}
 	return out

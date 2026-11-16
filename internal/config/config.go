@@ -33,6 +33,8 @@ type Config struct {
 	ManualPackProfile      [32]byte
 	ManualImportConnection string
 	ManualImportProfile    [32]byte
+	ImportAudioSonarrRoot  string
+	ImportAudioLocalRoot   string
 	Sources                map[string]string
 }
 
@@ -87,6 +89,13 @@ func Parse(args []string, getenv func(string) string) (Config, error) {
 	cfg.ManualImportConnection, cfg.ManualImportProfile, qualificationErr = manualRoutePin(getenv, "RESCUARR_MANUAL_IMPORT", "import")
 	if qualificationErr != nil {
 		return Config{}, qualificationErr
+	}
+
+	cfg.ImportAudioSonarrRoot = getenv("RESCUARR_MANUAL_IMPORT_AUDIO_SONARR_ROOT")
+	cfg.ImportAudioLocalRoot = getenv("RESCUARR_MANUAL_IMPORT_AUDIO_LOCAL_ROOT")
+	if (cfg.ImportAudioSonarrRoot != "" || cfg.ImportAudioLocalRoot != "") &&
+		(cfg.ManualImportConnection == "" || cfg.ImportAudioSonarrRoot == "" || !filepath.IsAbs(cfg.ImportAudioLocalRoot)) {
+		return Config{}, errors.New("download audio requires a qualified Sonarr import connection and both download roots, with an absolute local path")
 	}
 
 	if cfg.DataDir == "" && cfg.Sources["RESCUARR_DATA_DIR"] == "default" {
