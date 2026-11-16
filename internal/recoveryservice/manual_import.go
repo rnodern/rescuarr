@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/rnodern/rescuarr/internal/app"
@@ -118,13 +119,19 @@ func (s *ManualReviews) manualImportProcessing(ctx context.Context, slot manualS
 	return view, err
 }
 
-// RunManualImportRecovery processes only the currently approved Manual Review.
+// RunManualImportRecovery uses one durable slot for approved and automatic imports.
 // A committed send reservation can be read back after a restart, never sent again.
 func (s *ManualReviews) RunManualImportRecovery(ctx context.Context, onError func(error)) error {
 	if s.importQualified == nil {
 		return arradapter.ErrQualification
 	}
-	return runRecoveryPasses(ctx, s.manualImportStep, onError)
+	var after domain.CaseID
+	return runRecoveryPasses(ctx, func(pass context.Context) error {
+		if err := s.manualImportStep(pass); err != nil {
+			return err
+		}
+		return s.queueAutomaticSonarr(pass, &after)
+	}, onError)
 }
 
 type manualImportApproval struct {
@@ -138,13 +145,14 @@ func (s *ManualReviews) manualImportStep(ctx context.Context) error {
 	var approval manualImportApproval
 	var updated string
 	err := s.local.Read(ctx, func(tx *sql.Tx) error {
-		return tx.QueryRowContext(ctx, `SELECT m.case_id, m.token, m.case_revision, m.scope_hash, m.updated_at
+		return tx.QueryRowContext(ctx, `SELECT m.case_id, m.token, m.case_revision, m.scope_hash, m.updated_at, m.actor = ?
 			FROM manual_reviews AS m JOIN app_state AS s ON s.singleton = 1
 			JOIN action_pause AS p ON p.singleton = 1
 			WHERE m.state = 'approved' AND m.action = 'import' AND (
 				EXISTS (SELECT 1 FROM manual_import_attempts AS a WHERE a.token = m.token AND a.stage IN ('sending', 'uncertain'))
-				OR (s.mode = 'assist' AND NOT s.reconcile_required AND NOT p.paused))`).
-			Scan(&approval.id, &approval.token, &approval.revision, &approval.scope, &updated)
+				OR (s.mode = CASE WHEN m.actor = ? THEN 'autonomous' ELSE 'assist' END
+					AND NOT s.reconcile_required AND NOT p.paused))`, automaticSonarrActor, automaticSonarrActor).
+			Scan(&approval.id, &approval.token, &approval.revision, &approval.scope, &updated, &approval.automatic)
 	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil
@@ -164,13 +172,13 @@ func (s *ManualReviews) manualImportStep(ctx context.Context) error {
 	}
 	approval.approvedAt, err = time.Parse(time.RFC3339Nano, updated)
 	if err != nil || s.clock.Now().Sub(approval.approvedAt) >= manualApprovalWindow {
-		return resetManualReview(ctx, s.local, approval.id, approval.token, s.clock.Now())
+		return s.releaseUnsentImport(ctx, approval.manualSlot)
 	}
 	err = s.sendManualImport(ctx, approval)
 	if errors.Is(err, app.ErrConflict) || errors.Is(err, app.ErrHeld) || errors.Is(err, app.ErrNotFound) ||
 		errors.Is(err, arradapter.ErrQualification) || errors.Is(err, importflow.ErrSonarrV5Qualification) ||
 		errors.Is(err, importflow.ErrSonarrV5Candidate) || errors.Is(err, importflow.ErrStale) || errors.Is(err, importflow.ErrInvalid) {
-		return resetManualReview(ctx, s.local, approval.id, approval.token, s.clock.Now())
+		return s.releaseUnsentImport(ctx, approval.manualSlot)
 	}
 	return err
 }
@@ -185,7 +193,18 @@ func (s *ManualReviews) sendManualImport(ctx context.Context, approval manualImp
 		return err
 	}
 	defer release()
-	effects, err := s.qualifyImportApproval(ctx, plan)
+	var effects ManualImportEffects
+	if approval.automatic {
+		if err := s.validateAutomaticImport(ctx, approval, plan); err != nil {
+			return err
+		}
+		effects, err = s.importQualified(ctx, plan.instance, plan.source)
+		if err == nil && effects == nil {
+			err = arradapter.ErrQualification
+		}
+	} else {
+		effects, err = s.qualifyImportApproval(ctx, plan)
+	}
 	if err != nil {
 		return err
 	}
@@ -200,9 +219,12 @@ func (s *ManualReviews) sendManualImport(ctx context.Context, approval manualImp
 	if err != nil {
 		return err
 	}
-	prepared, err := client.ReprocessSonarrV5(ctx, plan.job, s.clock.Now(), func(_ context.Context, source importflow.SonarrV5Source) error {
+	prepared, err := client.ReprocessSonarrV5(ctx, plan.job, s.clock.Now(), func(ctx context.Context, source importflow.SonarrV5Source) error {
 		if source != plan.source {
 			return app.ErrConflict
+		}
+		if approval.automatic {
+			return s.validateAutomaticImport(ctx, approval, plan)
 		}
 		return nil
 	})
@@ -215,6 +237,11 @@ func (s *ManualReviews) sendManualImport(ctx context.Context, approval manualImp
 	}
 	if manualImportScopeHash(current, effects) != approval.scope || current.source != plan.source {
 		return app.ErrConflict
+	}
+	if approval.automatic {
+		if err := s.validateAutomaticImport(ctx, approval, current); err != nil {
+			return err
+		}
 	}
 	if s.clock.Now().Sub(approval.approvedAt) >= manualApprovalWindow {
 		return app.ErrConflict
@@ -304,14 +331,18 @@ func (s *ManualReviews) reserveManualImport(ctx context.Context, approval manual
 			WHERE m.case_id = ? AND m.token = ? AND m.state = 'approved' AND m.action = 'import' AND m.scope_hash = ?
 			AND c.state = 'held' AND c.reason = 'series_matched_by_id' AND NOT c.observation_only AND c.missing_complete_scans = 0
 			AND i.id = ? AND i.epoch = ? AND i.connection_revision = ? AND i.health = 'available'
-			AND s.mode = 'assist' AND NOT s.reconcile_required AND NOT p.paused
+			AND s.mode = CASE WHEN m.actor = ? THEN 'autonomous' ELSE 'assist' END AND NOT s.reconcile_required AND NOT p.paused
+			AND (m.actor <> ? OR ? OR NOT EXISTS (SELECT 1 FROM series_episode_title_requirements
+				WHERE instance_id = i.id AND epoch = i.epoch AND series_id = ?))
 			AND COALESCE((SELECT revision FROM language_preferences WHERE singleton = 1), 0) = ?
 			ON CONFLICT(case_id) DO NOTHING`, string(raw), approval.id, approval.token, approval.scope,
-			plan.instance.Ref.ID, plan.instance.Ref.Epoch, plan.instance.ConnectionRevision, plan.languageRevision)
+			plan.instance.Ref.ID, plan.instance.Ref.Epoch, plan.instance.ConnectionRevision, automaticSonarrActor,
+			automaticSonarrActor, plan.preview.Episode != nil && plan.preview.Episode.TitleInNames, plan.source.Target.SeriesID,
+			plan.languageRevision)
 		if err := requireManualImportRow(result, err); err != nil {
 			return err
 		}
-		return manualImportEvent(ctx, tx, approval.id, "recovery_manual_import_sending", record.Attempt.SentAt)
+		return manualImportEvent(ctx, tx, approval.manualSlot, "recovery_manual_import_sending", record.Attempt.SentAt)
 	})
 }
 
@@ -330,10 +361,14 @@ func (s *ManualReviews) allowManualImportSend(ctx context.Context, approval manu
 			AND a.stage = 'sending' AND json_extract(a.payload, '$.Attempt.ID') = ?
 			AND c.state = 'held' AND c.reason = 'series_matched_by_id' AND NOT c.observation_only AND c.missing_complete_scans = 0
 			AND i.id = ? AND i.epoch = ? AND i.connection_revision = ? AND i.health = 'available'
-			AND s.mode = 'assist' AND NOT s.reconcile_required AND NOT p.paused
+			AND s.mode = CASE WHEN m.actor = ? THEN 'autonomous' ELSE 'assist' END AND NOT s.reconcile_required AND NOT p.paused
+			AND (m.actor <> ? OR ? OR NOT EXISTS (SELECT 1 FROM series_episode_title_requirements
+				WHERE instance_id = i.id AND epoch = i.epoch AND series_id = ?))
 			AND COALESCE((SELECT revision FROM language_preferences WHERE singleton = 1), 0) = ?)`,
 			approval.id, approval.token, approval.scope, attempt, plan.instance.Ref.ID,
-			plan.instance.Ref.Epoch, plan.instance.ConnectionRevision, plan.languageRevision).Scan(&allowed)
+			plan.instance.Ref.Epoch, plan.instance.ConnectionRevision, automaticSonarrActor,
+			automaticSonarrActor, plan.preview.Episode != nil && plan.preview.Episode.TitleInNames, plan.source.Target.SeriesID,
+			plan.languageRevision).Scan(&allowed)
 	})
 	if err == nil && !allowed {
 		return app.ErrHeld
@@ -372,7 +407,7 @@ func (s *ManualReviews) recordManualImport(ctx context.Context, slot manualSlot,
 				}
 			}
 		}
-		return manualImportEvent(ctx, tx, slot.id, event, s.clock.Now(), evidence...)
+		return manualImportEvent(ctx, tx, slot, event, s.clock.Now(), evidence...)
 	})
 }
 
@@ -387,9 +422,14 @@ func requireManualImportRow(result sql.Result, err error) error {
 	return err
 }
 
-func manualImportEvent(ctx context.Context, tx *sql.Tx, id domain.CaseID, kind domain.EventKind, now time.Time, evidence ...domain.EvidenceID) error {
+func manualImportEvent(ctx context.Context, tx *sql.Tx, slot manualSlot, kind domain.EventKind, now time.Time, evidence ...domain.EvidenceID) error {
+	actor := domain.ActorID("manual-import-worker")
+	if slot.automatic {
+		actor = automaticSonarrActor
+		kind = domain.EventKind("recovery_automatic_import_" + strings.TrimPrefix(string(kind), "recovery_manual_import_"))
+	}
 	return store.AppendEvent(ctx, tx, domain.Event{ID: domain.EventID(store.NewID()), Kind: kind,
-		CaseID: id, Actor: "manual-import-worker", OccurredAt: now, Evidence: evidence})
+		CaseID: slot.id, Actor: actor, OccurredAt: now, Evidence: evidence})
 }
 
 func (s *ManualReviews) cancelUnsentManualImport(ctx context.Context, slot manualSlot, attempt domain.AttemptID) error {
@@ -401,13 +441,19 @@ func (s *ManualReviews) cancelUnsentManualImport(ctx context.Context, slot manua
 		if err := requireManualImportRow(result, err); err != nil {
 			return err
 		}
-		result, err = tx.ExecContext(ctx, `UPDATE manual_reviews SET state = 'pending', token = ?, scope_hash = '', updated_at = ?
-			WHERE case_id = ? AND token = ? AND state = 'approved' AND action = 'import'`,
-			store.NewID(), emptyPackStamp(now), slot.id, slot.token)
+		if slot.automatic {
+			result, err = tx.ExecContext(ctx, `DELETE FROM manual_reviews
+				WHERE case_id = ? AND token = ? AND state = 'approved' AND actor = ? AND action = 'import'`,
+				slot.id, slot.token, automaticSonarrActor)
+		} else {
+			result, err = tx.ExecContext(ctx, `UPDATE manual_reviews SET state = 'pending', token = ?, scope_hash = '', updated_at = ?
+				WHERE case_id = ? AND token = ? AND state = 'approved' AND action = 'import'`,
+				store.NewID(), emptyPackStamp(now), slot.id, slot.token)
+		}
 		if err := requireManualImportRow(result, err); err != nil {
 			return err
 		}
-		return manualImportEvent(ctx, tx, slot.id, "recovery_manual_import_cancelled", now)
+		return manualImportEvent(ctx, tx, slot, "recovery_manual_import_cancelled", now)
 	})
 }
 

@@ -7,6 +7,28 @@ import (
 	"github.com/rnodern/rescuarr/internal/app"
 )
 
+func (c console) setAutomaticImportMode(w http.ResponseWriter, r *http.Request) {
+	if !c.manualReviewForm(w, r, "overview", "mode") {
+		return
+	}
+	mode := r.PostForm.Get("mode")
+	if mode != "automatic" && mode != "manual" {
+		c.errorPage(w, r, http.StatusBadRequest, "overview", "Invalid recovery mode", "Return to Overview to change the mode.")
+		return
+	}
+	err := c.AutomaticImport.SetAutomaticImportMode(r.Context(), mode == "automatic", currentSession(r).Actor)
+	if errors.Is(err, app.ErrHeld) {
+		c.errorPage(w, r, http.StatusConflict, "overview", "Automatic imports are held",
+			"Check the Sonarr profile, download audio setup, pause state and any recovery in progress.")
+		return
+	}
+	if err != nil {
+		c.readError(w, r, err)
+		return
+	}
+	http.Redirect(w, r, c.BasePath+"/", http.StatusSeeOther)
+}
+
 type importDryRunView struct {
 	app.ImportDryRunPage
 	Ran   bool
