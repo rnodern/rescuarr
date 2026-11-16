@@ -45,7 +45,7 @@ The Windows workflow's `normal-settings-copy` job uses a disposable Sonarr and S
 
 The `sonarr-windows-v5-copy-normal-settings-evidence` artefact records the destination's file identity relative to the original, the exact source file and folder, and the SABnzbd job's disposition after import and two Sonarr refreshes. Both filesystem paths must be observed to identify a hardlink directly. The report covers the local-volume setup on the disposable runner.
 
-The `normal-settings-manual-copy` job runs the same fixture with the packaged Rescuarr executable. It checks the cleanup notice and the selected file's tagged English audio on the owner's review, verifies no upstream writes before approval, and checks for one exact Copy command and a verified Activity entry after restarting Rescuarr. It uploads `sonarr-windows-v5-manual-copy-normal-settings-evidence`.
+The `normal-settings-manual-copy` job runs the same fixture with the packaged Rescuarr executable. It checks the cleanup notice and tagged English audio on the owner's review, compares the dry run with and without tagged audio, verifies no upstream writes before approval, and checks for one exact Copy command and a verified Activity entry after restarting Rescuarr. It uploads `sonarr-windows-v5-manual-copy-normal-settings-evidence`.
 
 ### Sonarr 5 completed season pack with no eligible files
 

@@ -2,6 +2,7 @@ package recoveryservice
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/rnodern/rescuarr/internal/app"
+	"github.com/rnodern/rescuarr/internal/arradapter"
 	"github.com/rnodern/rescuarr/internal/domain"
 	"github.com/rnodern/rescuarr/internal/importflow"
 	"github.com/rnodern/rescuarr/internal/observeservice"
@@ -37,7 +39,7 @@ func TestManualImportPlanBindsSourceProfileAndLanguagePolicy(t *testing.T) {
 		`"trackedDownloadState":"importBlocked","title":"` + folder + `","outputPath":"` + output + `"}]}`
 	const episode = `{"id":41,"seriesId":12,"seasonNumber":2,"episodeNumber":%d,"episodeFileId":0,"hasFile":false,"monitored":true}`
 	const series = `{"id":12,"qualityProfileId":3,"monitored":true,"path":"/private/library/series","rootFolderPath":"/private/library","originalLanguage":{"id":1,"name":"English"}}`
-	size, profileScore, episodeNumber, candidateReads := 4096, 0, 11, 0
+	size, profileScore, episodeNumber, candidateReads, freeSpace := 4096, 0, 11, 0, 2<<30
 	transport := fixtureTransport(func(r *http.Request) (*http.Response, error) {
 		if r.Method != http.MethodGet || r.Header.Get("X-Api-Key") != "fixture-key" || r.Body != nil {
 			t.Fatalf("plan used a non-read-only request %s %s", r.Method, r.URL.Path)
@@ -55,7 +57,7 @@ func TestManualImportPlanBindsSourceProfileAndLanguagePolicy(t *testing.T) {
 		case "/api/v3/qualityprofile/3":
 			body = fmt.Sprintf(`{"id":3,"upgradeAllowed":false,"cutoff":5,"minFormatScore":%d,"cutoffFormatScore":0,"minUpgradeFormatScore":0,"items":[{"quality":{"id":5},"allowed":true,"items":[]}],"formatItems":[]}`, profileScore)
 		case "/api/v3/rootfolder":
-			body = `[{"id":1,"path":"/private/library"}]`
+			body = fmt.Sprintf(`[{"id":1,"path":"/private/library","accessible":true,"freeSpace":%d}]`, freeSpace)
 		case "/api/v3/history":
 			body = `{"page":1,"pageSize":100,"totalRecords":0,"records":[]}`
 		case "/api/v3/manualimport":
@@ -156,4 +158,64 @@ func TestManualImportPlanBindsSourceProfileAndLanguagePolicy(t *testing.T) {
 		wrongLanguage.preview.Audio[0].Reason != "original_audio_absent" {
 		t.Fatalf("wrong-language file was eligible: %+v, %v", wrongLanguage.preview, err)
 	}
+
+	reviews := NewManualReviews(local, cases, nil, transport, clock, nil)
+	reviews.SetManualImportQualification(func(_ context.Context, _ domain.Instance, source importflow.SonarrV5Source) (ManualImportEffects, error) {
+		if source.Path != output+"/"+folder+".mkv" {
+			t.Fatal("dry run qualified a different source")
+		}
+		return dryRunCopyFixture{}, nil
+	})
+	dryRun := func() app.ImportDryRunCase {
+		t.Helper()
+		out, err := reviews.ImportDryRun(ctx, "")
+		if err != nil || len(out.Cases) != 1 || out.Cases[0].Case.ID != item.ID {
+			t.Fatalf("dry run selection: %+v, %v", out, err)
+		}
+		return out.Cases[0]
+	}
+	languages := app.NewLanguageSettings(local, clock)
+	prefs, err = languages.LanguageSettings(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prefs.UnknownAudio = domain.UnknownAudioAccept
+	if _, err := languages.SaveLanguageSettings(ctx, prefs, "owner"); err != nil {
+		t.Fatal(err)
+	}
+	if row := dryRun(); row.Candidate || !strings.Contains(row.Reason, "Audio unverified") {
+		t.Fatalf("release metadata qualified without the source tracks: %+v", row)
+	}
+
+	reviews.SetSourceAudioTracks(func(context.Context, importflow.PathStyle, importflow.SonarrV5Source) ([]string, bool) {
+		return []string{"eng"}, true
+	})
+	if row := dryRun(); !row.Candidate {
+		t.Fatalf("scoped and qualified candidate was held: %s", row.Reason)
+	}
+	freeSpace = 1
+	if row := dryRun(); row.Candidate || !strings.Contains(row.Reason, "less free space") {
+		t.Fatalf("insufficient library storage qualified: %+v", row)
+	}
+	if err := local.Read(ctx, func(tx *sql.Tx) error {
+		var mode domain.Mode
+		var rows int
+		err := tx.QueryRowContext(ctx, `
+			SELECT mode, (SELECT count(*) FROM manual_reviews) + (SELECT count(*) FROM action_intents)
+			FROM app_state WHERE singleton = 1`).Scan(&mode, &rows)
+		if err == nil && (mode != domain.ModeObserve || rows != 0) {
+			t.Fatalf("dry run changed recovery state: %s %d", mode, rows)
+		}
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Embedding the effect interface keeps the fixture read-only. Calling an
+// effect from the dry run would fail the test.
+type dryRunCopyFixture struct{ ManualImportEffects }
+
+func (dryRunCopyFixture) AdapterRevision() string {
+	return arradapter.ManualSonarrV5CopyRevision
 }

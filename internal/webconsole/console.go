@@ -29,6 +29,7 @@ type Options struct {
 	Commands         app.ConsoleCommands
 	Connections      ConnectionService
 	ImportPreview    app.ImportPreviewReader
+	ImportDryRun     app.ImportDryRunReader
 	RecoveryActivity app.RecoveryActivityReader
 	Learning         LearningService
 	Notifications    NotificationService
@@ -70,6 +71,9 @@ func New(options Options) http.Handler {
 	mux.HandleFunc("GET "+base+"/cases/{caseID}", c.caseDetail)
 	if c.RecoveryActivity != nil {
 		mux.HandleFunc("GET "+base+"/activity", c.activity)
+	}
+	if c.ImportDryRun != nil {
+		mux.HandleFunc("GET "+base+"/automatic-import", c.importDryRun)
 	}
 	if c.ImportPreview != nil {
 		mux.HandleFunc("POST "+base+"/cases/{caseID}/import-preview", c.importPreview)
@@ -144,6 +148,7 @@ type page struct {
 	Status                    app.Overview
 	HasConnections            bool
 	HasImportPreview          bool
+	HasImportDryRun           bool
 	HasRecoveryActivity       bool
 	HasNotifications          bool
 	HasLearning               bool
@@ -157,6 +162,7 @@ func (c console) render(w http.ResponseWriter, r *http.Request, code int, name s
 	p.Base = c.BasePath
 	p.HasConnections = c.Connections != nil
 	p.HasImportPreview = c.ImportPreview != nil
+	p.HasImportDryRun = c.ImportDryRun != nil
 	p.HasRecoveryActivity = c.RecoveryActivity != nil
 	p.HasNotifications = c.Notifications != nil
 	p.HasLearning = c.Learning != nil
