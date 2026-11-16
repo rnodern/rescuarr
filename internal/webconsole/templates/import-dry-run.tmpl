@@ -1,0 +1,29 @@
+{{define "import-dry-run"}}
+{{template "start" .}}
+<h1>Automatic import dry run</h1>
+<p>Check held downloads against the Sonarr import requirements. A candidate has passed this read-only assessment and would still need Sonarr to reprocess it before import.</p>
+<form method="get" action="{{.Base}}/automatic-import">
+  <input type="hidden" name="run" value="1">
+  {{if .Body.After}}<input type="hidden" name="after" value="{{.Body.After}}">{{end}}
+  <button type="submit">{{if .Body.Ran}}Check again{{else}}Run dry run{{end}}</button>
+</form>
+{{if .Body.Ran}}
+  {{if .Body.Cases}}
+  <table>
+    <thead><tr><th scope="col">Download</th><th scope="col">Assessment</th><th scope="col">Reason</th></tr></thead>
+    <tbody>{{range .Body.Cases}}
+    <tr>
+      <th scope="row"><a href="{{$.Base}}/cases/{{.Case.ID}}">{{caseTitle .Case}}</a><span class="row-note">{{serviceLabel .Case.Display.Service .Case.Display.Product}}</span></th>
+      <td data-label="Assessment"><span class="chip{{if not .Candidate}} hold{{end}}">{{.Assessment}}</span></td>
+      <td data-label="Reason">{{.Reason}}{{if eq .Assessment "Outside scope"}}<span class="row-note">{{reason .Case.Reason}}</span>{{end}}</td>
+    </tr>
+    {{end}}</tbody>
+  </table>
+  {{else}}<p>No held downloads on this page.</p>{{end}}
+  {{if or .Body.After .Body.Next}}<div class="connection-actions section">
+    {{if .Body.After}}<a href="{{.Base}}/automatic-import?run=1">First page</a>{{end}}
+    {{if .Body.Next}}<a href="{{.Base}}/automatic-import?run=1&amp;after={{.Body.Next}}">Check next page</a>{{end}}
+  </div>{{end}}
+{{end}}
+{{template "end" .}}
+{{end}}

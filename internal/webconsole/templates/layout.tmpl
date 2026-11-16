@@ -27,6 +27,7 @@
       <a href="{{.Base}}/"{{if eq .Active "overview"}} aria-current="page"{{end}}>Overview</a>
       <a href="{{.Base}}/cases"{{if eq .Active "cases"}} aria-current="page"{{end}}>Recovery Queue</a>
       {{if and .HasManualReview (eq .Status.Mode "assist")}}<a href="{{.Base}}/manual-review"{{if eq .Active "manual-review"}} aria-current="page"{{end}}>Manual Review</a>{{end}}
+      {{if .HasImportDryRun}}<a href="{{.Base}}/automatic-import"{{if eq .Active "import-dry-run"}} aria-current="page"{{end}}>Import dry run</a>{{end}}
       {{if .HasRecoveryActivity}}<a href="{{.Base}}/activity"{{if eq .Active "activity"}} aria-current="page"{{end}}>Activity
         <span class="activity-spinner" id="episode-scanning" role="status"{{if not .Status.ScanningEpisodes}} hidden{{end}}><span class="sr-only">Checking episode filenames</span></span>
       </a>{{end}}

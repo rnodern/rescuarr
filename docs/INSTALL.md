@@ -105,6 +105,10 @@ For a verified route, add `_CONNECTION` with the connection ID, `_PROFILE` with 
 
 To show audio track tags before approval, install FFmpeg with `ffprobe` on the Rescuarr host. Set `RESCUARR_MANUAL_IMPORT_AUDIO_SONARR_ROOT` to the completed downloads directory as Sonarr sees it, and `RESCUARR_MANUAL_IMPORT_AUDIO_LOCAL_ROOT` to the absolute path to that same directory on the Rescuarr host. Use a read-only mount if the directory is on another machine. The probe applies to the pinned Sonarr connection and reads only the selected source file. When the file or its tags are unavailable, Manual Review applies the existing policy for unverified audio. Track tags are metadata, so a file can still be mistagged.
 
+## Automatic import dry run
+
+Open **Import dry run** and choose **Run dry run** to check a page of held downloads. It reads the Sonarr queue, exact episode and candidate file, tagged audio, library space and the pinned import profile. A candidate passed this read-only assessment. Sonarr still has to approve reprocessing the exact episode before it can be imported. Unverified audio is shown as needing review.
+
 ## Reverse proxy
 
 For LAN access, put an HTTPS proxy in front of Rescuarr and preserve the client-facing host and path. Set `RESCUARR_PUBLIC_URL` to the complete external URL, such as `https://rescuarr.example.net`. If using `https://example.net/rescuarr`, also set `RESCUARR_BASE_PATH=/rescuarr` and forward the path without stripping the prefix. Set `RESCUARR_TRUSTED_PROXIES` to the proxy ingress addresses as comma-separated CIDRs. Configure the proxy to replace incoming forwarded headers. For example, a proxy on the same host may use `127.0.0.1/32`. Point local liveness and readiness probes to the fixed `/healthz` and `/readyz` paths.

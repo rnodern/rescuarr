@@ -197,8 +197,16 @@ def run_copy_browser(lab, arr, download_id, title, folder, source, media, guard,
     proc, browser, _ = lab.setup_manual_review(app_connection, lab.root / "decline", operation="manual-import")
     decline, _ = copy_review(browser, title, folder, source, approval_label="I checked the video and audio. Approve",
                              sonarr_cleanup=sonarr_cleanup)
+    if sonarr_cleanup:
+        dry_run = browser.get("/automatic-import?run=1")
+        verify("S01E01" in dry_run and "Audio unverified. Listen to the download in Manual Review." in dry_run
+               and ">Candidate</span>" not in dry_run and not captured(), "dryRunUnverifiedAudioNotHeld")
     browser.post(REVIEW, REVIEW, decline)
     browser.activity("Manual recovery declined")
+    if sonarr_cleanup:
+        declined = browser.get("/automatic-import?run=1")
+        verify("You declined this download in Manual Review." in declined and not captured(),
+               "dryRunIgnoredManualDecline")
     verify(PostForms(browser.get(REVIEW)).form(REVIEW, decision="approve") is None, "manualCopyDeclinedCaseOfferedAgain")
     lab.stop(proc)
     verify(native_state() == before, "manualCopyDeclineChangedUpstream")
@@ -219,6 +227,11 @@ def run_copy_browser(lab, arr, download_id, title, folder, source, media, guard,
     restored, approval = copy_review(browser, title, folder, source, sonarr_cleanup=sonarr_cleanup,
                                      tagged_audio=sonarr_cleanup)
     verify(restored["token"] == decline["token"], "manualCopyReviewDidNotSurviveRestart")
+    if sonarr_cleanup:
+        dry_run = browser.get("/automatic-import?run=1")
+        verify("S01E01" in dry_run and ">Candidate</span>" in dry_run
+               and "Sonarr manages source cleanup after import." in dry_run
+               and str(folder.parent) not in dry_run and not captured(), "dryRunCandidateNotConfirmed")
     time.sleep(6)
     verify(native_state() == before, "manualCopyChangedUpstreamBeforeApproval")
     verify(not captured(), "manualCopySentBeforeApproval")
@@ -247,7 +260,8 @@ def run_copy_browser(lab, arr, download_id, title, folder, source, media, guard,
                                "copyCommandId": command_id, "importRecordedInActivity": True}
     if sonarr_cleanup:
         report["manualBrowser"].update(cleanupNoticeShown=True, importActivitySurvivedRestart=True,
-                                       taggedSourceAudioConfirmed=True)
+                                       taggedSourceAudioConfirmed=True, dryRunHeldUnverifiedAudio=True,
+                                       dryRunCandidateBeforeApproval=True, dryRunUpstreamWrites=0)
     return command
 
 

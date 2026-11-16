@@ -26,6 +26,7 @@ type manualImportPlan struct {
 	instance         domain.Instance
 	source           importflow.SonarrV5Source
 	job              importflow.Job
+	libraryRoot      observe.LibraryRoot
 	scopeHash        string
 	languageRevision domain.Revision
 	preview          app.ImportPreview
@@ -74,9 +75,13 @@ func prepareManualImport(ctx context.Context, cases *observeservice.Service, loc
 	if style != importflow.UnixPath && style != importflow.WindowsPath {
 		return plan.hold("Sonarr did not report a supported filesystem format.")
 	}
-	roots, err := arr.RootPaths(ctx)
+	libraryRoots, err := arr.LibraryRoots(ctx)
 	if err != nil {
 		return plan, err
+	}
+	roots := make([]string, 0, len(libraryRoots))
+	for _, root := range libraryRoots {
+		roots = append(roots, root.Path)
 	}
 	slices.Sort(roots)
 	target, err := arr.SonarrV5ImportTarget(ctx, first.Target, proof.Queue.Evidence.SnapshotGeneration, clock.Now())
@@ -87,9 +92,13 @@ func prepareManualImport(ctx context.Context, cases *observeservice.Service, loc
 		target.EpisodeCode != first.Episode {
 		return plan.hold("Sonarr must confirm the same monitored episode is still waiting for its first library file.")
 	}
-	if !slices.Contains(roots, target.RootPath) {
+	index := slices.IndexFunc(libraryRoots, func(root observe.LibraryRoot) bool {
+		return root.Path == target.RootPath
+	})
+	if index < 0 {
 		return plan.hold("Sonarr did not match the series to a configured library folder.")
 	}
+	plan.libraryRoot = libraryRoots[index]
 
 	prefs, err := app.NewLanguageSettings(local, clock).LanguageSettings(ctx)
 	if err != nil {

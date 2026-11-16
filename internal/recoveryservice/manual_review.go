@@ -35,6 +35,7 @@ type ManualReviews struct {
 	qualified       ManualEmptyPackQualification
 	importQualified ManualImportQualification
 	importAudio     SourceAudioTracks
+	dryRunSlot      chan struct{}
 	signingKey      [32]byte
 }
 
@@ -42,7 +43,7 @@ var _ app.ManualReviewService = (*ManualReviews)(nil)
 
 func NewManualReviews(local *store.Store, cases *observeservice.Service, preview *PreviewService, transport http.RoundTripper,
 	clock app.Clock, qualified ManualEmptyPackQualification) *ManualReviews {
-	s := &ManualReviews{local: local, cases: cases, preview: preview, transport: transport, clock: clock, qualified: qualified}
+	s := &ManualReviews{local: local, cases: cases, preview: preview, transport: transport, clock: clock, qualified: qualified, dryRunSlot: make(chan struct{}, 1)}
 	rand.Read(s.signingKey[:])
 	return s
 }
