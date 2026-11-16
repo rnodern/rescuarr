@@ -266,7 +266,8 @@ class Arr:
         ]
         self.configure(route, {**template, **settings, "name": name})
 
-    def setup(self, *, automatic_redownload=True, completed_handling=False):
+    def setup(self, *, automatic_redownload=True, completed_handling=False,
+              remove_completed=False, remove_failed=False):
         self.settings(completed_handling, automatic_redownload=automatic_redownload)
         self.configure("rootfolder", {"path": str(LIBRARY)})
         profiles = self.read("qualityprofile")
@@ -295,7 +296,7 @@ class Arr:
         self.provider("downloadclient", "Sabnzbd", CLIENT_NAME, {
             "host": sab_host, "port": int(sab_port), "apiKey": sab_key(), "useSsl": False,
             "tvCategory" if self.product == "sonarr" else "movieCategory": CATEGORY[self.product],
-        }, {"enable": True, "removeCompletedDownloads": False, "removeFailedDownloads": False})
+        }, {"enable": True, "removeCompletedDownloads": remove_completed, "removeFailedDownloads": remove_failed})
         self.provider("indexer", "Newznab", INDEXER_NAME, {
             "baseUrl": f"{SOURCE}/{self.product}", "apiPath": "/api",
             "categories": [5040 if self.product == "sonarr" else 2040],
@@ -549,7 +550,7 @@ def id_only_import_history(arr, download_id, episode_id, series_id, library, sou
     return row
 
 
-def id_only_import(arr, media, guard, report, *, manual_review=None):
+def id_only_import(arr, media, guard, report, *, manual_review=None, observe_cleanup=False):
     episode_id, series_id = media["id"], media["seriesId"]
     guard_id = guard["id"]
     verify(guard["seriesId"] == series_id and guard_id != episode_id
@@ -600,6 +601,7 @@ def id_only_import(arr, media, guard, report, *, manual_review=None):
     verify(candidate_series.get("id") in (None, series_id)
            and all(episode["id"] == episode_id for episode in (candidate.get("episodes") or [])),
            "conflictingIDOnlyCandidateIdentity")
+    original_stat = source.stat() if observe_cleanup else None
     if manual_review:
         report["preview"] = {"query": query, "candidateCount": 1, "rejectedBeforeReprocess": bool(candidate.get("rejections")),
                              "candidateHasMatchingDownloadID": candidate.get("downloadId") == download_id,
@@ -611,8 +613,12 @@ def id_only_import(arr, media, guard, report, *, manual_review=None):
     library = poll(lambda: arr.library_file(episode_id), "importFileLinkMissing")
     history = poll(lambda: id_only_import_history(arr, download_id, episode_id, series_id, library, source, previous_ids),
                    "importProvenanceMissing")
-    arr.refresh()
     linked = linked_library_path(library["path"], arr.library)
+    if observe_cleanup:
+        verify(report["response"].get("result") == "successful", "manualCopyCommandDidNotSucceed")
+        observe_id_only_cleanup(arr, download_id, source, output, linked, original_stat, report)
+    else:
+        arr.refresh()
     expected_source = [item for item in before["source"] if item["name"] == source.name]
     installed = inventory(linked)
     report["after"] = {"source": inventory(output, all_files=True), "library": inventory(arr.library, all_files=True),
@@ -622,8 +628,9 @@ def id_only_import(arr, media, guard, report, *, manual_review=None):
                        "arrQueue": [projection(row, SOURCE_KEYS) for row in arr.queue(download_id)]}
     after = report["after"]
     report["sourcePreserved"] = output.is_dir() and after["source"] == before["source"]
-    verify(report["sourcePreserved"], "IDOnlyImportChangedSource")
-    verify(after["client"] == before["client"], "IDOnlyImportChangedSABDisposition")
+    if not observe_cleanup:
+        verify(report["sourcePreserved"], "IDOnlyImportChangedSource")
+        verify(after["client"] == before["client"], "IDOnlyImportChangedSABDisposition")
     verify(after["guardFileId"] == before["guardFileId"] and after["guardHistory"] == before["guardHistory"]
            and arr.file_link(episode_id) == library["id"], "IDOnlyImportChangedGuardOrFileLink")
     verify(not after["arrQueue"], "IDOnlyImportStillQueued")
@@ -632,6 +639,70 @@ def id_only_import(arr, media, guard, report, *, manual_review=None):
     if manual_review:
         verify(not source.samefile(linked), "manualCopySharesOriginalFileIdentity")
         report["copyIsSeparateFile"] = True
+
+
+def file_identity(value):
+    return (value.st_dev, value.st_ino) if value.st_ino else None
+
+
+def observe_id_only_cleanup(arr, download_id, source, output, linked, original_stat, report):
+    started = time.monotonic()
+    original_identity = file_identity(original_stat)
+    linked_stat = linked.stat()
+    linked_identity = file_identity(linked_stat)
+    transfer = "unknown"
+    if original_identity and linked_identity:
+        transfer = "reusedOriginalIdentity" if original_identity == linked_identity else "separateFile"
+    cleanup = {"transfer": transfer, "sourcePath": str(source), "libraryPath": str(linked),
+               "sameVolume": bool(original_identity and linked_identity and original_stat.st_dev == linked_stat.st_dev),
+               "sourceLinkCountBeforeImport": original_stat.st_nlink, "observations": []}
+    report["cleanup"] = cleanup
+
+    def record(stage, command=None):
+        try:
+            source_stat = source.stat()
+        except FileNotFoundError:
+            source_stat = None
+        client = sab_job(download_id)
+        observation = {
+            "stage": stage,
+            "elapsedSeconds": round(time.monotonic() - started, 3),
+            "sourceFileExists": source_stat is not None,
+            "sourceFolderExists": output.is_dir(),
+            "sabJob": client,
+            "arrQueueCount": len(arr.queue(download_id)),
+            "libraryLinkCount": linked.stat().st_nlink,
+        }
+        source_identity = file_identity(source_stat) if source_stat else None
+        if source_identity and original_identity:
+            observation["originalSourceIdentity"] = source_identity == original_identity
+            if source_identity == original_identity == linked_identity and source_stat.st_nlink > 1:
+                cleanup["transfer"] = "hardlink"
+        if client["queue"]:
+            observation["sabDisposition"] = "queued"
+        elif any(job.get("archive") is True for job in client["history"] + client["archive"]):
+            observation["sabDisposition"] = "archived"
+        elif client["history"]:
+            observation["sabDisposition"] = "inHistory"
+        elif client["archive"]:
+            observation["sabDisposition"] = "archiveQueryOnly"
+        else:
+            observation["sabDisposition"] = "absent"
+        if command:
+            observation["command"] = command
+        cleanup["observations"].append(observation)
+
+    record("afterManualImport")
+    for tick in range(1, 3):
+        # Allow queued completion handlers to run between refresh commands. A job
+        # still present at the end is retained within this window, not proved permanent.
+        time.sleep(15)
+        command = arr.command_status("RefreshMonitoredDownloads")
+        verify(command.get("result") == "successful", "cleanupRefreshDidNotSucceed")
+        record(f"afterRefresh{tick}", command)
+    if linked_identity:
+        cleanup["libraryIdentityUnchanged"] = file_identity(linked.stat()) == linked_identity
+        verify(cleanup["libraryIdentityUnchanged"], "cleanupChangedLibraryFileIdentity")
 
 
 def native_id_only_copy(arr, media, guard, report, download_id, output, before, previous_ids, query, candidate):

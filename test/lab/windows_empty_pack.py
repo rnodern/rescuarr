@@ -31,6 +31,7 @@ CASE = "sonarr/windows-v5-adapter-pack"
 LANGUAGE_CASE = "sonarr/windows-v5-language-pack"
 MANUAL_CASE = "sonarr/windows-v5-manual-pack"
 MANUAL_COPY_CASE = "sonarr/windows-v5-manual-copy"
+NORMAL_SETTINGS_COPY_CASE = "sonarr/windows-v5-copy-normal-settings"
 
 
 def stage(result, name):
@@ -53,7 +54,7 @@ def sonarr_config(data, key):
 def exercise(args, result, source_sha):
     scenarios.verify(os.name == "nt" and os.environ.get("GITHUB_ACTIONS") == "true", "requiresDisposableWindowsRunner")
     result["binaries"] = {}
-    for name in ("sonarr", "sab", "adapter" if args.adapter else "manual_copy" if args.manual_copy else "rescuarr"):
+    for name in ("sonarr", "sab", "adapter", "manual_copy", "rescuarr"):
         executable = getattr(args, name)
         if executable is None:
             continue
@@ -108,16 +109,23 @@ def exercise(args, result, source_sha):
                             "docker": False, "emptyAtStartup": True}
 
         stage(result, "arrSetup")
-        completed_handling = bool(args.language_pack or args.manual_copy)
-        profile = arr.setup(completed_handling=completed_handling)
+        completed_handling = bool(args.language_pack or args.manual_copy or args.normal_settings_copy)
+        profile = arr.setup(completed_handling=completed_handling, remove_completed=args.normal_settings_copy,
+                            remove_failed=args.normal_settings_copy)
         result["settings"] = {"profileId": profile["id"], "cutoff": profile["cutoff"],
-                              "completedHandling": completed_handling, "removeCompletedDownloads": False,
-                              "removeFailedDownloads": False, "automaticRedownloadFailed": True}
+                              "completedHandling": completed_handling,
+                              "removeCompletedDownloads": args.normal_settings_copy,
+                              "removeFailedDownloads": args.normal_settings_copy,
+                              "automaticRedownloadFailed": True}
+        if args.normal_settings_copy:
+            enable_normal_copy_settings(arr, result)
         stage(result, "mediaSetup")
         episodes = arr.media(profile["id"])
         stage(result, "exercise")
         if args.language_pack:
             language_pack.language_pack_replacement(arr, episodes[0], episodes[1], result)
+        elif args.normal_settings_copy:
+            scenarios.id_only_import(arr, episodes[0], episodes[1], result, observe_cleanup=True)
         elif args.manual_copy:
             run_packaged_id_only_copy(arr, episodes[0], episodes[1], result, args.manual_copy, source_sha,
                                       partial(stage, result))
@@ -134,6 +142,22 @@ def exercise(args, result, source_sha):
     result.update(status="observed", stage="complete", qualification="awaitingIndependentReview")
 
 
+def enable_normal_copy_settings(arr, result):
+    clients = arr.read("downloadclient")
+    scenarios.verify(len(clients) == 1 and clients[0].get("implementation") == "Sabnzbd"
+                     and clients[0].get("enable") is True
+                     and clients[0].get("removeCompletedDownloads") is True
+                     and clients[0].get("removeFailedDownloads") is True,
+                     "normalCopyClientSettingsNotApplied")
+    config = arr.read("config/mediamanagement")
+    scenarios.verify(type(config.get("id")) is int and config["id"] > 0, "normalCopyMissingMediaManagement")
+    route = f"config/mediamanagement/{config['id']}"
+    arr.update(route, {**config, "copyUsingHardlinks": True})
+    saved = arr.read(route)
+    scenarios.verify(saved.get("copyUsingHardlinks") is True, "normalCopyHardlinksNotApplied")
+    result["settings"]["copyUsingHardlinks"] = saved["copyUsingHardlinks"]
+
+
 def main():
     if len(sys.argv) == 5 and sys.argv[1] == "--fixture":
         serve(Path(sys.argv[2]), sys.argv[3], sys.argv[4], bind="127.0.0.1", index_origin=SOURCE)
@@ -146,6 +170,7 @@ def main():
     mode.add_argument("--language-pack", action="store_true")
     mode.add_argument("--rescuarr", type=Path)
     mode.add_argument("--manual-copy", type=Path)
+    mode.add_argument("--normal-settings-copy", action="store_true")
     args = parser.parse_args()
     for attr, value in vars(args).items():
         if isinstance(value, Path):
@@ -153,8 +178,8 @@ def main():
 
     result = {"status": "failed", "evidenceClass": "labObservation", "protocol": "usenet", "stage": "startup"}
     source_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
-    scenario = (LANGUAGE_CASE if args.language_pack else MANUAL_COPY_CASE if args.manual_copy else
-                MANUAL_CASE if args.rescuarr else CASE)
+    scenario = (NORMAL_SETTINGS_COPY_CASE if args.normal_settings_copy else LANGUAGE_CASE if args.language_pack else
+                MANUAL_COPY_CASE if args.manual_copy else MANUAL_CASE if args.rescuarr else CASE)
     report = {"sourceSHA": source_sha,
               "measuredAt": datetime.now(timezone.utc).isoformat(), "fixtureSeed": SEED,
               "platform": {"system": platform.system(), "release": platform.release(), "arch": platform.machine()},
