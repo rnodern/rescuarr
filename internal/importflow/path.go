@@ -73,6 +73,11 @@ func samePath(style PathStyle, a, b string) bool {
 	return leftOK && rightOK && left.volume == right.volume && slices.Equal(left.parts, right.parts)
 }
 
+// DownloadPathsOverlap compares the reported paths in Arr's filesystem syntax.
+func DownloadPathsOverlap(style PathStyle, first, second string) bool {
+	return pathWithin(style, first, second, true) || pathWithin(style, second, first, true)
+}
+
 func isLetter(b byte) bool { return b >= 'A' && b <= 'Z' || b >= 'a' && b <= 'z' }
 
 func pathWithin(style PathStyle, parent, child string, allowEqual bool) bool {

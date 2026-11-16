@@ -9,6 +9,7 @@ import threading
 import time
 from contextlib import ExitStack
 from functools import partial
+from html import unescape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
@@ -19,6 +20,12 @@ from scenarios import LabFailure, id_only_import, inventory, poll, projection, s
 
 COMMAND = "/api/v3/command"
 REPROCESS = "/api/v3/manualimport"
+PRESERVATION_NOTICE = "Keep the source file and the download client job."
+SONARR_CLEANUP_NOTICE = ("Sonarr uses a hardlink when the storage supports it and copies otherwise. Its completed "
+                         "download handling can remove the entire download folder and the job from "
+                         "SABnzbd’s active history.")
+PRESERVATION_ACTIVITY = "Copy import verified. Sonarr linked the approved episode and kept the source file."
+SONARR_CLEANUP_ACTIVITY = "Import verified. Sonarr linked the approved episode. Sonarr manages download cleanup."
 
 
 def capture_sonarr(stack, arr):
@@ -101,8 +108,9 @@ def capture_sonarr(stack, arr):
     return app_connection, snapshot
 
 
-def copy_review(browser, title, folder, source, *, approval_label="Approve Copy import"):
+def copy_review(browser, title, folder, source, *, approval_label="Approve Copy import", sonarr_cleanup=False):
     hold = "pending"
+    notice = SONARR_CLEANUP_NOTICE if sonarr_cleanup else PRESERVATION_NOTICE
 
     def checked():
         nonlocal hold
@@ -122,7 +130,7 @@ def copy_review(browser, title, folder, source, *, approval_label="Approve Copy 
             return None
         verify(title in page and folder.name in page and source.name in page and "S01E01" in page
                and approval_label in page
-               and "Keep the source file and the download client job." in page, "manualCopyReviewEvidenceIncomplete")
+               and notice in " ".join(unescape(page).split()), "manualCopyReviewEvidenceIncomplete")
         verify(bool(decline.get("token")) and bool(approval.get("token")), "manualCopyReviewTokenMissing")
         return decline, approval
     try:
@@ -165,7 +173,7 @@ def prove_copy_command(writes, download_id, source, media):
     return command_id
 
 
-def run_copy_browser(lab, arr, download_id, title, folder, source, media, guard, report):
+def run_copy_browser(lab, arr, download_id, title, folder, source, media, guard, report, *, sonarr_cleanup=False):
     app_connection, captured = capture_sonarr(lab.stack, arr)
 
     def native_state():
@@ -184,7 +192,8 @@ def run_copy_browser(lab, arr, download_id, title, folder, source, media, guard,
     before = native_state()
     lab.on_stage("manualCopyDecline")
     proc, browser, _ = lab.setup_manual_review(app_connection, lab.root / "decline", operation="manual-import")
-    decline, _ = copy_review(browser, title, folder, source, approval_label="I checked the video and audio. Approve")
+    decline, _ = copy_review(browser, title, folder, source, approval_label="I checked the video and audio. Approve",
+                             sonarr_cleanup=sonarr_cleanup)
     browser.post(REVIEW, REVIEW, decline)
     browser.activity("Manual recovery declined")
     verify(PostForms(browser.get(REVIEW)).form(REVIEW, decision="approve") is None, "manualCopyDeclinedCaseOfferedAgain")
@@ -195,11 +204,11 @@ def run_copy_browser(lab, arr, download_id, title, folder, source, media, guard,
     lab.on_stage("manualCopyProfile")
     data = lab.root / "approve"
     proc, browser, settings = lab.setup_manual_review(app_connection, data, operation="manual-import", allow_unknown=True)
-    decline, _ = copy_review(browser, title, folder, source)
+    decline, _ = copy_review(browser, title, folder, source, sonarr_cleanup=sonarr_cleanup)
     lab.stop(proc)
     proc, browser = lab.start(data, settings)
     browser.login()
-    restored, approval = copy_review(browser, title, folder, source)
+    restored, approval = copy_review(browser, title, folder, source, sonarr_cleanup=sonarr_cleanup)
     verify(restored["token"] == decline["token"], "manualCopyReviewDidNotSurviveRestart")
     time.sleep(6)
     verify(native_state() == before, "manualCopyChangedUpstreamBeforeApproval")
@@ -207,8 +216,14 @@ def run_copy_browser(lab, arr, download_id, title, folder, source, media, guard,
 
     lab.on_stage("manualCopyApprove")
     browser.post(REVIEW, REVIEW, approval)
-    browser.activity("Copy import verified. Sonarr linked the approved episode and kept the source file.", timeout=90)
+    activity = SONARR_CLEANUP_ACTIVITY if sonarr_cleanup else PRESERVATION_ACTIVITY
+    browser.activity(activity, timeout=90)
     lab.stop(proc)
+    if sonarr_cleanup:
+        proc, browser = lab.start(data, settings)
+        browser.login()
+        browser.activity(activity)
+        lab.stop(proc)
     writes = captured()
     reprocess_count = prove_reprocess([record for record in writes if record["route"] == REPROCESS], download_id, source, media)
     verify(reprocess_count == 1, "manualCopyUnexpectedReprocessCount")
@@ -221,17 +236,20 @@ def run_copy_browser(lab, arr, download_id, title, folder, source, media, guard,
                                "reviewSurvivedRestart": True, "noChangesBeforeApproval": True,
                                "apiWritesBeforeApproval": 0, "apiWritesAfterDecline": 0, "reprocessRequests": reprocess_count,
                                "copyCommandId": command_id, "importRecordedInActivity": True}
+    if sonarr_cleanup:
+        report["manualBrowser"].update(cleanupNoticeShown=True, importActivitySurvivedRestart=True)
     return command
 
 
-def run_packaged_id_only_copy(arr, media, guard, report, executable, source_sha, on_stage):
+def run_packaged_id_only_copy(arr, media, guard, report, executable, source_sha, on_stage, *, sonarr_cleanup=False):
     report["packagedRuntime"] = {"system": platform.system(), "release": platform.release(), "arch": platform.machine()}
     with executable.open("rb") as binary:
         report["packagedBinary"] = {"name": executable.name, "sha256": hashlib.file_digest(binary, "sha256").hexdigest()}
     config = arr.read("config/mediamanagement")
     verify(type(config.get("id")) is int and config["id"] > 0, "manualCopyMissingMediaManagement")
     route = f"config/mediamanagement/{config['id']}"
-    expected = {"copyUsingHardlinks": False, "importExtraFiles": False, "useScriptImport": False, "enableMediaInfo": True}
+    expected = {"copyUsingHardlinks": sonarr_cleanup, "importExtraFiles": False,
+                "useScriptImport": False, "enableMediaInfo": True}
     arr.update(route, {**config, **expected})
     saved = arr.read(route)
     verify(projection(saved, expected) == expected, "manualCopyMediaManagementNotApplied")
@@ -241,4 +259,5 @@ def run_packaged_id_only_copy(arr, media, guard, report, executable, source_sha,
         root = Path(stack.enter_context(tempfile.TemporaryDirectory(prefix="rescuarr-manual-copy-"))).resolve()
         lab = PackagedManualLab(executable, root, stack, start_process, require_ready, stop_process, on_stage,
                                 None, source_sha)
-        id_only_import(arr, media, guard, report, manual_review=partial(run_copy_browser, lab, arr))
+        id_only_import(arr, media, guard, report, observe_cleanup=sonarr_cleanup,
+                       manual_review=partial(run_copy_browser, lab, arr, sonarr_cleanup=sonarr_cleanup))

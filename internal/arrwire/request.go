@@ -18,6 +18,10 @@ const (
 	SonarrVersion             = "4.0.20.3014"
 	SonarrIDOnlyImportVersion = "5.0.0.2941"
 	RadarrVersion             = "6.4.4.10685"
+
+	// SonarrV5CleanupCopyRevision permits Sonarr's own completed-download cleanup
+	// after the native Copy command for an approved singleton episode.
+	SonarrV5CleanupCopyRevision = "sonarr-v5-manual-copy-cleanup-1"
 )
 
 var (
@@ -81,6 +85,10 @@ func Encode(instance domain.Instance, adapterRevision string, op domain.Operatio
 
 	switch op.Action {
 	case domain.ActionImport:
+		if prepared.Import.SonarrCleanup != (adapterRevision == SonarrV5CleanupCopyRevision) ||
+			(prepared.Import.SonarrCleanup && instance.UpstreamVersion != SonarrIDOnlyImportVersion) {
+			return Request{}, ErrBinding
+		}
 		if instance.UpstreamVersion == SonarrIDOnlyImportVersion {
 			file := prepared.Import.Files[0]
 			if file.ReleaseType != "singleEpisode" && file.ReleaseType != "unknown" {

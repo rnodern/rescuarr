@@ -11,6 +11,7 @@ import (
 
 	"github.com/rnodern/rescuarr/internal/app"
 	"github.com/rnodern/rescuarr/internal/arradapter"
+	"github.com/rnodern/rescuarr/internal/arrwire"
 	"github.com/rnodern/rescuarr/internal/config"
 	"github.com/rnodern/rescuarr/internal/domain"
 	"github.com/rnodern/rescuarr/internal/importflow"
@@ -34,7 +35,12 @@ func checkManualImportProfile(ctx context.Context, local *store.Store, selected 
 
 func writeManualImportProfile(out io.Writer, instance domain.Instance, profile arradapter.ManualImportProfile) error {
 	assessment := "Sonarr settings match the Copy profile. Verify the installed package, SABnzbd version and shared storage before using the profile."
-	if differences := manualImportProfileDifferences(profile); len(differences) != 0 {
+	revision, _ := manualImportContract(profile)
+	switch revision {
+	case arrwire.SonarrV5CleanupCopyRevision:
+		assessment = "Sonarr settings match the Copy profile with Sonarr-managed download cleanup. Verify the installed package, SABnzbd version and shared storage before using the profile."
+	case "":
+		differences := manualImportProfileDifferences(profile, false)
 		assessment = "Sonarr settings differ from the tested Copy profile.\n- " + strings.Join(differences, "\n- ")
 	}
 	_, err := fmt.Fprintf(out, "Sonarr %s (%s, %s) · %q\n%s\nConnection ID: %s\nProfile SHA-256: %x\nThis check sends only GET requests and preserves the current mode.\n",
@@ -42,30 +48,34 @@ func writeManualImportProfile(out io.Writer, instance domain.Instance, profile a
 	return err
 }
 
-func matchesManualImportProfile(profile arradapter.ManualImportProfile) bool {
-	return len(manualImportProfileDifferences(profile)) == 0
-}
-
-func manualImportProfileDifferences(profile arradapter.ManualImportProfile) []string {
-	return profileSwitchDifferences(manualPackProfileDifferences(profile.EmptyPackProfile),
-		manualProfileSwitch{"Use Hardlinks instead of Copy", profile.CopyUsingHardlinks, false},
+func manualImportProfileDifferences(profile arradapter.ManualImportProfile, sonarrCleanup bool) []string {
+	differences := manualPackProfileDifferences(profile.EmptyPackProfile, sonarrCleanup)
+	if sonarrCleanup && profile.OSFamily != "windows" {
+		differences = append(differences, "Sonarr-managed cleanup was tested on native Windows.")
+	}
+	return profileSwitchDifferences(differences,
+		manualProfileSwitch{"Use Hardlinks instead of Copy", profile.CopyUsingHardlinks, sonarrCleanup},
 		manualProfileSwitch{"Import Extra Files", profile.ImportExtraFiles, false},
 		manualProfileSwitch{"Import Using Script", profile.UseScriptImport, false},
 		manualProfileSwitch{"Analyse video files", profile.EnableMediaInfo, true},
 	)
 }
 
-func manualImportEvidence(profile arradapter.ManualImportProfile, source importflow.SonarrV5Source) domain.EvidenceID {
-	if !matchesManualImportProfile(profile) || profile.ClientName != source.Client {
-		return ""
+func manualImportContract(profile arradapter.ManualImportProfile) (string, domain.EvidenceID) {
+	if len(manualImportProfileDifferences(profile, true)) == 0 {
+		return arrwire.SonarrV5CleanupCopyRevision, "sonarr-v5-windows-copy-normal-settings-14187931949"
 	}
-	if profile.OSFamily == "linux" {
-		return "sonarr-v5-linux-copy-14135739679"
+	if len(manualImportProfileDifferences(profile, false)) != 0 {
+		return "", ""
 	}
-	if profile.OSFamily == "windows" {
-		return "sonarr-v5-windows-copy-14136849233"
+	switch profile.OSFamily {
+	case "linux":
+		return arradapter.ManualSonarrV5CopyRevision, "sonarr-v5-linux-copy-14135739679"
+	case "windows":
+		return arradapter.ManualSonarrV5CopyRevision, "sonarr-v5-windows-copy-14136849233"
+	default:
+		return "", ""
 	}
-	return ""
 }
 
 func manualImportQualification(cfg config.Config, local *store.Store, transport http.RoundTripper, clock app.Clock) recoveryservice.ManualImportQualification {
@@ -80,34 +90,35 @@ func manualImportQualification(cfg config.Config, local *store.Store, transport 
 		if err != nil {
 			return nil, err
 		}
-		profileEvidence := func(ctx context.Context) (domain.EvidenceID, error) {
+		readProfile := func(ctx context.Context) (string, domain.EvidenceID, error) {
 			profile, err := arradapter.ProbeManualImportProfile(ctx, instance, key, transport.RoundTrip)
-			if err != nil || profile.Fingerprint != cfg.ManualImportProfile {
-				return "", arradapter.ErrQualification
+			if err != nil || profile.Fingerprint != cfg.ManualImportProfile || profile.ClientName != source.Client {
+				return "", "", arradapter.ErrQualification
 			}
-			evidence := manualImportEvidence(profile, source)
+			revision, evidence := manualImportContract(profile)
 			if evidence == "" {
-				return "", arradapter.ErrQualification
+				return "", "", arradapter.ErrQualification
 			}
-			return evidence, nil
+			return revision, evidence, nil
 		}
-		if _, err := profileEvidence(ctx); err != nil {
+		revision, _, err := readProfile(ctx)
+		if err != nil {
 			return nil, err
 		}
 		qualify := func(ctx context.Context, binding arradapter.Binding) (arradapter.Qualification, error) {
 			if binding.Route != arradapter.RouteCopyImport {
 				return arradapter.Qualification{}, arradapter.ErrQualification
 			}
-			evidence, err := profileEvidence(ctx)
-			if err != nil {
-				return arradapter.Qualification{}, err
+			current, evidence, err := readProfile(ctx)
+			if err != nil || current != revision {
+				return arradapter.Qualification{}, arradapter.ErrQualification
 			}
 			now := clock.Now()
 			return arradapter.Qualification{Binding: binding, Verified: true, Evidence: evidence,
 				ObservedAt: now, ExpiresAt: now.Add(time.Minute)}, nil
 		}
 		return arradapter.NewManualSonarrV5Copy(arradapter.Config{
-			Instance: instance, AdapterRevision: arradapter.ManualSonarrV5CopyRevision,
+			Instance: instance, AdapterRevision: revision,
 			SettingsFingerprint: cfg.ManualImportProfile, APIKey: key,
 		}, source, transport, qualify, clock.Now)
 	}

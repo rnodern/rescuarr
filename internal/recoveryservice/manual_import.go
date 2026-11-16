@@ -10,6 +10,7 @@ import (
 
 	"github.com/rnodern/rescuarr/internal/app"
 	"github.com/rnodern/rescuarr/internal/arradapter"
+	"github.com/rnodern/rescuarr/internal/arrwire"
 	"github.com/rnodern/rescuarr/internal/domain"
 	"github.com/rnodern/rescuarr/internal/importflow"
 	"github.com/rnodern/rescuarr/internal/observe"
@@ -48,9 +49,10 @@ func (s *ManualReviews) manualImportView(ctx context.Context, slot manualSlot, v
 				view.Hold = "The audio policy rejected this file. Review the language evidence before importing."
 				return view
 			}
-			if _, err := s.qualifyImportApproval(ctx, plan); err == nil {
+			if effects, err := s.qualifyImportApproval(ctx, plan); err == nil {
 				view.Hold, view.CanApprove, view.ImportAction = "", true, true
-				view.ApprovalToken = s.approvalToken(slot.token, plan.scopeHash)
+				view.SonarrCleanup = effects.AdapterRevision() == arrwire.SonarrV5CleanupCopyRevision
+				view.ApprovalToken = s.approvalToken(slot.token, manualImportScopeHash(plan, effects))
 			}
 			return view
 		}
@@ -65,6 +67,15 @@ func (s *ManualReviews) manualImportView(ctx context.Context, slot manualSlot, v
 		view.Preview.Episode = &item.Display.EpisodeCheck.EpisodeNameReview
 	}
 	return view
+}
+
+// A preservation-profile approval issued before the upgrade still binds to the
+// same effect. Only a proposal showing Sonarr cleanup can approve that profile.
+func manualImportScopeHash(plan manualImportPlan, effects ManualImportEffects) string {
+	if effects.AdapterRevision() == arrwire.SonarrV5CleanupCopyRevision {
+		return plan.scopeHash + ":" + arrwire.SonarrV5CleanupCopyRevision
+	}
+	return plan.scopeHash
 }
 
 func importAudioRejected(preview app.ImportPreview) bool {
@@ -164,9 +175,6 @@ func (s *ManualReviews) sendManualImport(ctx context.Context, approval manualImp
 	if err != nil {
 		return err
 	}
-	if plan.scopeHash != approval.scope {
-		return app.ErrConflict
-	}
 	release, err := s.cases.HoldRecoveryConnection(ctx, plan.instance)
 	if err != nil {
 		return err
@@ -175,6 +183,9 @@ func (s *ManualReviews) sendManualImport(ctx context.Context, approval manualImp
 	effects, err := s.qualifyImportApproval(ctx, plan)
 	if err != nil {
 		return err
+	}
+	if manualImportScopeHash(plan, effects) != approval.scope {
+		return app.ErrConflict
 	}
 	key, err := s.local.ReadSecret(plan.instance.SecretRef)
 	if err != nil {
@@ -197,7 +208,7 @@ func (s *ManualReviews) sendManualImport(ctx context.Context, approval manualImp
 	if err != nil {
 		return err
 	}
-	if current.scopeHash != approval.scope || current.source != plan.source {
+	if manualImportScopeHash(current, effects) != approval.scope || current.source != plan.source {
 		return app.ErrConflict
 	}
 	if s.clock.Now().Sub(approval.approvedAt) >= manualApprovalWindow {
@@ -237,7 +248,11 @@ func newManualImportCheckpoint(plan manualImportPlan, prepared domain.PreparedIm
 	target := plan.source.Target
 	operation := domain.Operation{
 		Key: domain.OperationKey(store.NewID()), Job: plan.source.Job, Targets: []domain.TargetRef{target},
-		Action: domain.ActionImport, Effects: []domain.Effect{{Kind: domain.EffectLibraryImport, Target: target}, {Kind: domain.EffectSourceRetained}},
+		Action: domain.ActionImport, Effects: []domain.Effect{{Kind: domain.EffectLibraryImport, Target: target}},
+	}
+	prepared.SonarrCleanup = adapter == arrwire.SonarrV5CleanupCopyRevision
+	if !prepared.SonarrCleanup {
+		operation.Effects = append(operation.Effects, domain.Effect{Kind: domain.EffectSourceRetained})
 	}
 	return manualImportCheckpoint{stage: "sending",
 		Attempt: domain.Attempt{ID: domain.AttemptID(store.NewID()), Operation: operation, SentAt: now},
@@ -452,7 +467,11 @@ func (s *ManualReviews) reconcileManualImport(ctx context.Context, slot manualSl
 	}
 	if verifiedManualImport(outcome, attempt) {
 		record.Outcome = &outcome
-		return s.recordManualImport(ctx, slot, record, "verified", "recovery_manual_import_verified")
+		event := domain.EventKind("recovery_manual_import_verified")
+		if record.Prepared.Import.SonarrCleanup {
+			event = "recovery_manual_import_cleanup_profile_verified"
+		}
+		return s.recordManualImport(ctx, slot, record, "verified", event)
 	}
 	if outcome.Verification == domain.VerificationNoEffect {
 		record.Outcome = &outcome

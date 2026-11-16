@@ -207,6 +207,14 @@ func TestManualReviewCopyImportShowsFileAndRequiresAudioConfirmation(t *testing.
 	service.view.Preview.Audio[0].Decision = domain.AudioAccept
 	expect(t, request(h, "GET", "/manual-review", "owner", "", nil), 200, ">Approve Copy import<")
 
+	service.view.SonarrCleanup = true
+	cleanup := request(h, "GET", "/manual-review", "owner", "", nil)
+	expect(t, cleanup, 200, "Sonarr uses a hardlink when the storage supports it and copies otherwise.",
+		"remove the entire download folder and the job from SABnzbd", ">Approve Copy import<")
+	if strings.Contains(cleanup.Body.String(), "Keep the source file") {
+		t.Fatal("cleanup review promised source retention")
+	}
+
 	item.Display.EpisodeCheck = &domain.CaseEpisodeCheck{EpisodeNameReview: *service.view.Preview.Episode}
 	service.view.Preview.Episode = nil
 	held := request(h, "GET", "/manual-review", "owner", "", nil)

@@ -636,7 +636,7 @@ def id_only_import(arr, media, guard, report, *, manual_review=None, observe_cle
     verify(not after["arrQueue"], "IDOnlyImportStillQueued")
     verify(len(installed) == len(expected_source) == len(after["library"]) == 1 and installed[0]["sha256"] == expected_source[0]["sha256"]
            and installed[0]["bytes"] == expected_source[0]["bytes"], "libraryFileContentMismatch")
-    if manual_review:
+    if manual_review and not observe_cleanup:
         verify(not source.samefile(linked), "manualCopySharesOriginalFileIdentity")
         report["copyIsSeparateFile"] = True
 

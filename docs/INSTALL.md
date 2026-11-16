@@ -90,7 +90,9 @@ Open Overview and choose **Switch to Manual**. Manual Review shows one download 
 
 For a completed season pack with no eligible files, approval removes it from Sonarr, blocklists the exact release and searches only the reviewed episodes that are still missing. It retains the SABnzbd job.
 
-For a completed Usenet download that Sonarr matched by series ID, Manual Review can approve one exact video file for one monitored episode that still needs its first library file. Copy import preserves the source. When the audio decision is **Review**, confirm the video and audio before approving. Activity records the result after Rescuarr checks the Sonarr command, the new episode file and the retained source.
+For a completed Usenet download that Sonarr matched by series ID, Manual Review can approve one exact video file for one monitored episode that still needs its first library file. When the audio decision is **Review**, confirm the video and audio before approving.
+
+The Copy profile with hardlinks and SABnzbd removal disabled verifies that the source is still present. Native Windows Sonarr also supports the profile with **Use Hardlinks instead of Copy**, **Remove Completed** and **Remove Failed** enabled. Manual Review shows that Sonarr can remove the source folder and the job from active SABnzbd history in this profile. Activity verifies the approved episode and its library file. Sonarr manages the download cleanup.
 
 Each approval route requires a locally verified connection. Check its queue in Rescuarr, stop the app, and run the diagnostic for the route you want to enable. Supply the same data directory that Rescuarr normally uses.
 

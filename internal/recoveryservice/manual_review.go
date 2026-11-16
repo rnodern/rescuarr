@@ -284,13 +284,18 @@ func (s *ManualReviews) DecideManualReview(ctx context.Context, choice app.Manua
 		revision = detail.Case.Revision
 		if detail.Case.Reason == domain.ReasonCode(observe.FindingSeriesIDOnly) {
 			plan, err := prepareManualImport(ctx, s.cases, s.local, s.clock, s.transport, id, revision)
-			if err != nil || !hmac.Equal([]byte(sig), []byte(s.sign(token, until, plan.scopeHash))) {
+			if err != nil {
 				return app.ErrConflict
 			}
-			if _, err := s.qualifyImportApproval(ctx, plan); err != nil {
+			effects, err := s.qualifyImportApproval(ctx, plan)
+			if err != nil {
 				return app.ErrHeld
 			}
-			hash, action = plan.scopeHash, "import"
+			scope := manualImportScopeHash(plan, effects)
+			if !hmac.Equal([]byte(sig), []byte(s.sign(token, until, scope))) {
+				return app.ErrConflict
+			}
+			hash, action = scope, "import"
 		} else {
 			plan, err := prepareManualEmptyPack(ctx, s.cases, s.local, s.clock, s.transport, id, revision)
 			if err != nil || !hmac.Equal([]byte(sig), []byte(s.sign(token, until, plan.scopeHash))) {

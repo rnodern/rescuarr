@@ -22,6 +22,7 @@ type ManualReviewView struct {
 	CanApprove        bool
 	Processing        bool
 	ImportAction      bool
+	SonarrCleanup     bool
 	CanCloseUncertain bool
 	Folder            string
 	SearchLabels      []string

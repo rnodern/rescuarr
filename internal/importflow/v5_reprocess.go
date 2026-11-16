@@ -105,7 +105,7 @@ func (c *Client) InspectSonarrV5Import(ctx context.Context, job Job, now time.Ti
 }
 
 // ReprocessSonarrV5 binds a verified ID-only queue item to one file. The caller
-// must independently qualify source preservation and the precise route before
+// must independently qualify the settings profile and the precise route before
 // the POST. Its response prepares a Copy selector for the action journal. It
 // never queues an import command.
 func (c *Client) ReprocessSonarrV5(ctx context.Context, job Job, now time.Time, qualify QualifySonarrV5Source) (domain.PreparedImport, error) {
@@ -244,8 +244,7 @@ func v5IDOnlyQueue(instance domain.Instance, job Job, now time.Time) (observe.Qu
 	result := empty
 	for _, row := range job.Queue.Records {
 		if row.DownloadID != job.DownloadID {
-			if row.Target == target.Ref || pathWithin(job.PathStyle, job.OutputPath, row.OutputPath, true) ||
-				pathWithin(job.PathStyle, row.OutputPath, job.OutputPath, true) {
+			if row.Target == target.Ref || DownloadPathsOverlap(job.PathStyle, job.OutputPath, row.OutputPath) {
 				return empty, ErrStale
 			}
 			continue

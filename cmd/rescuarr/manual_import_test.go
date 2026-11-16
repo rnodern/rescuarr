@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/rnodern/rescuarr/internal/arradapter"
+	"github.com/rnodern/rescuarr/internal/arrwire"
 	"github.com/rnodern/rescuarr/internal/domain"
 )
 
@@ -18,7 +19,7 @@ func TestManualImportProfileReportsSettingsDifferences(t *testing.T) {
 		},
 		EnableMediaInfo: true,
 	}
-	if !matchesManualImportProfile(profile) {
+	if revision, _ := manualImportContract(profile); revision != arradapter.ManualSonarrV5CopyRevision {
 		t.Fatal("tested Windows profile is held")
 	}
 	profile.CopyUsingHardlinks = true
@@ -43,8 +44,11 @@ func TestManualImportProfileReportsSettingsDifferences(t *testing.T) {
 		"Import Using Script is on. Tested setting is off.",
 		"Analyse video files is off. Tested setting is on.",
 	}
-	if got := manualImportProfileDifferences(profile); !slices.Equal(got, want) || matchesManualImportProfile(profile) {
-		t.Fatalf("unexpected qualification or differences: %v", got)
+	if got := manualImportProfileDifferences(profile, false); !slices.Equal(got, want) {
+		t.Fatalf("unexpected differences: %v", got)
+	}
+	if revision, _ := manualImportContract(profile); revision != "" {
+		t.Fatalf("unsupported profile qualified with %q", revision)
 	}
 	var output bytes.Buffer
 	instance := domain.Instance{Ref: domain.InstanceRef{ID: "fixture-id"}, DisplayName: "Sonarr",
@@ -59,5 +63,36 @@ func TestManualImportProfileReportsSettingsDifferences(t *testing.T) {
 	}
 	if strings.Contains(output.String(), instance.SecretRef) || strings.Contains(output.String(), instance.BaseURL) {
 		t.Fatal("diagnostic exposed private connection settings")
+	}
+}
+
+func TestManualImportCleanupRequiresTheTestedNativeWindowsProfile(t *testing.T) {
+	profile := arradapter.ManualImportProfile{
+		EmptyPackProfile: arradapter.EmptyPackProfile{
+			Version: arrwire.SonarrIDOnlyImportVersion, Branch: "develop", OSFamily: "windows",
+			CompletedHandling: true, AutoRedownloadFailed: true, AutoRedownloadInteractive: true,
+			RemoveCompleted: true, RemoveFailed: true,
+		},
+		CopyUsingHardlinks: true, EnableMediaInfo: true,
+	}
+	if revision, evidence := manualImportContract(profile); revision != arrwire.SonarrV5CleanupCopyRevision || evidence == "" {
+		t.Fatalf("tested cleanup profile is held: %q, %q", revision, evidence)
+	}
+	var output bytes.Buffer
+	if err := writeManualImportProfile(&output, domain.Instance{}, profile); err != nil ||
+		!strings.Contains(output.String(), "match the Copy profile with Sonarr-managed download cleanup") {
+		t.Fatalf("cleanup diagnostic: %s, %v", &output, err)
+	}
+
+	partial := profile
+	partial.RemoveFailed = false
+	if revision, _ := manualImportContract(partial); revision != "" {
+		t.Fatalf("mixed settings qualified with %q", revision)
+	}
+
+	linux := profile
+	linux.OSFamily, linux.Docker, linux.Package, linux.PackageAuthor = "linux", true, "5.0.0.2941-ls208", "linuxserver.io"
+	if revision, _ := manualImportContract(linux); revision != "" {
+		t.Fatalf("Linux cleanup setting qualified with %q", revision)
 	}
 }
