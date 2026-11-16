@@ -23,6 +23,7 @@ func browserHandler(cfg config.Config, auth *access.Auth, local *store.Store, ob
 		Connections:      observations,
 		RecoveryActivity: observations,
 		ImportDryRun:     dryRun,
+		EpisodeOrder:     observations,
 		ImportPreview:    recoveryservice.NewPreviewService(observations, local, nil, app.SystemClock{}, languages),
 		LanguageSettings: languages,
 		Authorize:        app.CurrentBrowserSession,

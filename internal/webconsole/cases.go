@@ -25,6 +25,7 @@ type caseView struct {
 	PreviewHold       string
 	ReviewNames       bool
 	ReviewReplacement bool
+	EpisodeOrder      observeservice.EpisodeOrder
 }
 
 var caseStates = []domain.CaseState{
@@ -128,6 +129,13 @@ func (c console) caseDetail(w http.ResponseWriter, r *http.Request) {
 			body.PreviewHold = ""
 		} else {
 			body.PreviewHold = "Open Manual Import in Sonarr to review this download."
+		}
+	}
+	if c.EpisodeOrder != nil {
+		body.EpisodeOrder, err = c.EpisodeOrder.EpisodeOrder(r.Context(), detail.Case)
+		if err != nil {
+			c.readError(w, r, err)
+			return
 		}
 	}
 	c.render(w, r, http.StatusOK, "case", page{Title: caseTitle(detail.Case), Active: "cases", Status: status, Body: body})

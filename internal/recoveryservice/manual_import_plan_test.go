@@ -29,14 +29,14 @@ func TestManualImportPlanBindsSourceProfileAndLanguagePolicy(t *testing.T) {
 	}
 	defer local.Close()
 
-	const folder = "Captain.Wattle.Animated.S02E11.Signal.Lost.720p.WEB-DL-Lab"
-	const output = "/private/downloads/" + folder
+	folder := "Captain.Wattle.Animated.S02E11.Signal.Lost.720p.WEB-DL-Lab"
+	output := "/private/downloads/" + folder
 	const original = "fixture-download-id"
 	const queue = `{"page":1,"pageSize":100,"totalRecords":1,"records":[{"id":4,"seriesId":12,"episodeId":41,` +
 		`"series":{"id":12,"title":"Captain Wattle: The Animated Series"},"episode":{"id":41,"seriesId":12,"seasonNumber":2,"episodeNumber":11,"title":"Signal Lost"},` +
 		`"statusMessages":[{"title":"Fixture","messages":["Found matching series via grab history, but release was matched to series by ID. Automatic import is not possible. See the FAQ for details."]}],` +
 		`"downloadId":"` + original + `","downloadClient":"fixture-sab","protocol":"usenet","status":"completed",` +
-		`"trackedDownloadState":"importBlocked","title":"` + folder + `","outputPath":"` + output + `"}]}`
+		`"trackedDownloadState":"importBlocked","title":%q,"outputPath":%q}]}`
 	const episode = `{"id":41,"seriesId":12,"seasonNumber":2,"episodeNumber":%d,"episodeFileId":0,"hasFile":false,"monitored":true}`
 	const series = `{"id":12,"qualityProfileId":3,"monitored":true,"path":"/private/library/series","rootFolderPath":"/private/library","originalLanguage":{"id":1,"name":"English"}}`
 	size, profileScore, episodeNumber, candidateReads, freeSpace := 4096, 0, 11, 0, 2<<30
@@ -49,7 +49,7 @@ func TestManualImportPlanBindsSourceProfileAndLanguagePolicy(t *testing.T) {
 		case "/api/v3/system/status":
 			body = `{"appName":"Sonarr","version":"5.0.0.2941","isLinux":true}`
 		case "/api/v3/queue":
-			body = queue
+			body = fmt.Sprintf(queue, folder, output)
 		case "/api/v3/episode/41":
 			body = fmt.Sprintf(episode, episodeNumber)
 		case "/api/v3/series/12":
@@ -192,6 +192,62 @@ func TestManualImportPlanBindsSourceProfileAndLanguagePolicy(t *testing.T) {
 	})
 	if row := dryRun(); !row.Candidate {
 		t.Fatalf("scoped and qualified candidate was held: %s", row.Reason)
+	}
+	if err := cases.SetEpisodeTitleRequired(ctx, item.ID, true, "owner"); err != nil {
+		t.Fatal(err)
+	}
+	otherSeries := item
+	otherTarget := item.Targets[0]
+	otherTarget.Ref.SeriesID++
+	otherSeries.Targets = []domain.Target{otherTarget}
+	if order, err := cases.EpisodeOrder(ctx, otherSeries); err != nil || !order.Available || order.RequireTitle {
+		t.Fatalf("the setting affected a different series: %+v, %v", order, err)
+	}
+	otherSonarr, err := cases.AddInstance(ctx, observeservice.InstanceInput{
+		Product: domain.ProductSonarr, DisplayName: "Other Sonarr",
+		BaseURL: "http://other-sonarr.invalid", APIKey: "fixture-key", Actor: "owner",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherSeries.Job.Ref.Instance = otherSonarr.Ref
+	otherSeries.Targets[0] = item.Targets[0]
+	otherSeries.Targets[0].Ref.Instance = otherSonarr.Ref
+	if order, err := cases.EpisodeOrder(ctx, otherSeries); err != nil || !order.Available || order.RequireTitle {
+		t.Fatalf("the setting affected the same numeric series ID on a different Sonarr: %+v, %v", order, err)
+	}
+	if row := dryRun(); !row.Candidate {
+		t.Fatalf("episode title corroboration did not satisfy the new requirement: %s", row.Reason)
+	}
+	folder = "Captain.Wattle.Animated.S02E11.720p.WEB-DL-Lab"
+	output = "/private/downloads/" + folder
+	if err := cases.Collect(ctx, instance.Ref.ID); err != nil {
+		t.Fatal(err)
+	}
+	page, err = cases.Cases(ctx, app.CaseQuery{Instance: instance.Ref.ID})
+	if err != nil || len(page.Cases) != 1 {
+		t.Fatalf("expected one saved case without an episode title in the name: %v", err)
+	}
+	item = page.Cases[0]
+	if row := dryRun(); row.Candidate || !strings.Contains(row.Reason, "This series requires a matching episode title") {
+		t.Fatalf("number-only match qualified under the episode order requirement: %+v", row)
+	}
+	if selected, err := cases.AutomaticImportCases(ctx, "", 5); err != nil || len(selected) != 0 {
+		t.Fatalf("number-only match entered the automatic import shortlist: %+v, %v", selected, err)
+	}
+	manual, err := prepareManualImport(ctx, cases, local, clock, transport, item.ID, item.Revision, reviews.importAudio)
+	if err != nil || manual.preview.Episode == nil || !manual.preview.Episode.Matched ||
+		manual.preview.Episode.TitleInNames || manual.preview.Eligible != 1 {
+		t.Fatalf("number-only match became ineligible for Manual Review: %+v, %v", manual.preview, err)
+	}
+	if err := cases.SetEpisodeTitleRequired(ctx, item.ID, false, "owner"); err != nil {
+		t.Fatal(err)
+	}
+	if row := dryRun(); !row.Candidate {
+		t.Fatalf("standard matching held the number-only match: %s", row.Reason)
+	}
+	if selected, err := cases.AutomaticImportCases(ctx, "", 5); err != nil || len(selected) != 1 || selected[0].ID != item.ID {
+		t.Fatalf("standard matching excluded the number-only match from the shortlist: %+v, %v", selected, err)
 	}
 	freeSpace = 1
 	if row := dryRun(); row.Candidate || !strings.Contains(row.Reason, "less free space") {

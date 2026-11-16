@@ -30,6 +30,7 @@ type Options struct {
 	Connections      ConnectionService
 	ImportPreview    app.ImportPreviewReader
 	ImportDryRun     app.ImportDryRunReader
+	EpisodeOrder     EpisodeOrderService
 	RecoveryActivity app.RecoveryActivityReader
 	Learning         LearningService
 	Notifications    NotificationService
@@ -77,6 +78,9 @@ func New(options Options) http.Handler {
 	}
 	if c.ImportPreview != nil {
 		mux.HandleFunc("POST "+base+"/cases/{caseID}/import-preview", c.importPreview)
+	}
+	if c.EpisodeOrder != nil {
+		mux.HandleFunc("POST "+base+"/cases/{caseID}/episode-order", c.saveEpisodeOrder)
 	}
 	mux.HandleFunc("GET "+base+"/cases/{caseID}/review/{proposalID}", c.review)
 	mux.HandleFunc("POST "+base+"/cases/{caseID}/actions", c.approve)

@@ -80,6 +80,20 @@
       <button type="submit">{{if .Body.ReviewNames}}{{if .Body.Case.Display.EpisodeCheck}}Recheck episode filename{{else}}Check episode filename{{end}}{{else if .Body.ReviewReplacement}}Check which episodes still need a search{{else}}Check Arr import candidates{{end}}</button>
     </form>
     {{end}}
+    {{if .Body.EpisodeOrder.Available}}
+    <div class="section">
+      <h3>Episode order</h3>
+      {{if .Body.EpisodeOrder.RequireTitle}}
+      <p>The import dry run requires a matching episode title for this series.</p>
+      {{else}}
+      <p>If releases use different episode orders for this series, require the episode title to match in the folder or filename.</p>
+      {{end}}
+      <form method="post" action="{{$base}}/cases/{{.Body.Case.ID}}/episode-order">
+        <input type="hidden" name="csrf" value="{{.CSRF}}">
+        <button type="submit" class="secondary" name="require_title" value="{{if .Body.EpisodeOrder.RequireTitle}}false{{else}}true{{end}}">{{if .Body.EpisodeOrder.RequireTitle}}Use standard matching{{else}}Require matching episode title{{end}}</button>
+      </form>
+    </div>
+    {{end}}
     {{end}}
   </section>
 </div>

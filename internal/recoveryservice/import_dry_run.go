@@ -96,7 +96,16 @@ func (s *ManualReviews) checkDryRunCase(ctx context.Context, item domain.Case) (
 	}
 
 	plan, err := prepareManualImport(ctx, s.cases, s.local, s.clock, s.transport, item.ID, item.Revision, s.importAudio)
-	result.Reason = dryRunEvidenceHold(plan, err)
+	var requireTitle bool
+	if episode := plan.preview.Episode; episode != nil && episode.Matched && !episode.TitleInNames {
+		order, orderErr := s.cases.EpisodeOrder(ctx, item)
+		if orderErr != nil || !order.Available {
+			result.Reason = "Rescuarr could not confirm the episode order setting for this series."
+			return result, nil
+		}
+		requireTitle = order.RequireTitle
+	}
+	result.Reason = dryRunEvidenceHold(plan, err, requireTitle)
 	if result.Reason != "" {
 		return result, nil
 	}
@@ -133,9 +142,14 @@ func (s *ManualReviews) checkDryRunCase(ctx context.Context, item domain.Case) (
 	return result, nil
 }
 
-func dryRunEvidenceHold(plan manualImportPlan, err error) string {
-	if episode := plan.preview.Episode; episode != nil && !episode.Matched && episode.Reason != "" {
-		return episode.Reason
+func dryRunEvidenceHold(plan manualImportPlan, err error, requireTitle bool) string {
+	if episode := plan.preview.Episode; episode != nil {
+		if !episode.Matched && episode.Reason != "" {
+			return episode.Reason
+		}
+		if requireTitle && !episode.TitleInNames {
+			return "This series requires a matching episode title. Confirm which episode order the release uses."
+		}
 	}
 	if len(plan.preview.Audio) == 1 {
 		audio := plan.preview.Audio[0]
