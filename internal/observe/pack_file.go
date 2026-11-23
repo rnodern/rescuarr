@@ -37,7 +37,7 @@ func (a *Arr) SonarrPackEpisodeFile(ctx context.Context, target domain.TargetRef
 		downloadID == "" || exactToken(downloadID, 256) != downloadID {
 		return unknown, ErrConfiguration
 	}
-	if a.upstreamVersion != sonarrV5Needs {
+	if !sonarrV5(a.upstreamVersion) {
 		return unknown, ErrTargetVersion
 	}
 	ctx, cancel := context.WithTimeout(ctx, scanTimeout)

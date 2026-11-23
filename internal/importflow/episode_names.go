@@ -9,6 +9,7 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/rnodern/rescuarr/internal/arrwire"
 	"github.com/rnodern/rescuarr/internal/domain"
 	"github.com/rnodern/rescuarr/internal/observe"
 )
@@ -19,8 +20,11 @@ func SupportsEpisodeNameReview(product domain.Product, version string) bool {
 	if product != domain.ProductSonarr {
 		return false
 	}
-	switch version {
-	case "4.0.20.3012", SonarrVersion, "5.0.0.2941":
+	if version == "4.0.20.3012" { // Read-only review was also verified on this earlier v4 build.
+		return true
+	}
+	switch arrwire.ContractFor(product, version) {
+	case arrwire.ContractSonarrV4, arrwire.ContractSonarrV5:
 		return true
 	default:
 		return false

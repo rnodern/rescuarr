@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/rnodern/rescuarr/internal/arrwire"
 	"github.com/rnodern/rescuarr/internal/domain"
 )
 
@@ -37,18 +38,18 @@ func TestSonarrPackEpisodeFile(t *testing.T) {
 		wantErr    error
 		wantTracks []string
 	}{
-		{"linked", sonarrV5Needs, current, current, []string{imported, older}, file, PackFileLinked, nil, []string{"heb", "eng"}},
-		{"missing", sonarrV5Needs, absent, "", nil, "", PackFileMissing, nil, nil},
-		{"other download", sonarrV5Needs, current, "", []string{replacement, older}, "", PackFileDifferentDownload, nil, nil},
-		{"metadata missing a track", sonarrV5Needs, current, current, []string{imported},
+		{"linked", arrwire.SonarrIDOnlyImportVersion, current, current, []string{imported, older}, file, PackFileLinked, nil, []string{"heb", "eng"}},
+		{"missing", arrwire.SonarrIDOnlyImportVersion, absent, "", nil, "", PackFileMissing, nil, nil},
+		{"other download", arrwire.SonarrIDOnlyImportVersion, current, "", []string{replacement, older}, "", PackFileDifferentDownload, nil, nil},
+		{"metadata missing a track", arrwire.SonarrIDOnlyImportVersion, current, current, []string{imported},
 			strings.Replace(file, "heb/eng", "eng", 1), PackFileLinked, nil, []string{"eng"}},
-		{"unknown import", sonarrV5Needs, current, "", []string{older}, "", PackFileUnverified, nil, nil},
-		{"ambiguous current import", sonarrV5Needs, current, "", []string{replacement, imported}, "", PackFileUnverified, nil, nil},
-		{"wrong series in history", sonarrV5Needs, current, "", []string{strings.Replace(imported, `"seriesId":12`, `"seriesId":13`, 1)},
+		{"unknown import", arrwire.SonarrIDOnlyImportVersion, current, "", []string{older}, "", PackFileUnverified, nil, nil},
+		{"ambiguous current import", arrwire.SonarrIDOnlyImportVersion, current, "", []string{replacement, imported}, "", PackFileUnverified, nil, nil},
+		{"wrong series in history", arrwire.SonarrIDOnlyImportVersion, current, "", []string{strings.Replace(imported, `"seriesId":12`, `"seriesId":13`, 1)},
 			"", PackFileUnverified, ErrPartial, nil},
-		{"wrong series in file", sonarrV5Needs, current, "", []string{imported},
+		{"wrong series in file", arrwire.SonarrIDOnlyImportVersion, current, "", []string{imported},
 			strings.Replace(file, `"seriesId":12`, `"seriesId":13`, 1), PackFileUnverified, ErrResponse, nil},
-		{"link changed during read", sonarrV5Needs, current, swapped, []string{imported}, file, PackFileUnverified, ErrPartial, nil},
+		{"link changed during read", arrwire.SonarrIDOnlyImportVersion, current, swapped, []string{imported}, file, PackFileUnverified, ErrPartial, nil},
 		{"uncertified version", SonarrTargetVersion, "", "", nil, "", PackFileUnverified, ErrTargetVersion, nil},
 	} {
 		t.Run(fixture.name, func(t *testing.T) {

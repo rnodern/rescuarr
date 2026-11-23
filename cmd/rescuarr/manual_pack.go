@@ -10,6 +10,7 @@ import (
 
 	"github.com/rnodern/rescuarr/internal/app"
 	"github.com/rnodern/rescuarr/internal/arradapter"
+	"github.com/rnodern/rescuarr/internal/arrwire"
 	"github.com/rnodern/rescuarr/internal/config"
 	"github.com/rnodern/rescuarr/internal/domain"
 	"github.com/rnodern/rescuarr/internal/observeservice"
@@ -96,11 +97,17 @@ func manualPackProfileDifferences(profile arradapter.EmptyPackProfile, removeCom
 	if !manualPackPlatform(profile) {
 		differences = append(differences, "Installation differs from native Windows or Docker on Linux.")
 	}
-	if profile.OSFamily == "linux" && (profile.Package != "5.0.0.2941-ls208" || profile.PackageAuthor != "linuxserver.io") {
-		differences = append(differences, "Linux Sonarr package differs from the tested LinuxServer build 5.0.0.2941-ls208.")
+	if profile.Contract != arrwire.ContractSonarrV5 {
+		differences = append(differences, "Sonarr version is outside the tested "+arrwire.ContractSonarrV5.Describe()+" contract.")
 	}
-	if profile.Branch != "develop" {
-		differences = append(differences, fmt.Sprintf("Sonarr branch is %q. Tested branch is develop.", profile.Branch))
+	// LinuxServer rebuilds its image for every Sonarr update, so the package
+	// version changes routinely. The publisher identifies the tested image family.
+	if profile.OSFamily == "linux" && profile.PackageAuthor != "linuxserver.io" {
+		differences = append(differences, "Linux Sonarr package differs from the tested LinuxServer image.")
+	}
+	// Sonarr v5 was tested on develop. It moves to main when it becomes stable.
+	if profile.Branch != "develop" && profile.Branch != "main" {
+		differences = append(differences, fmt.Sprintf("Sonarr branch is %q. Tested branches are develop and main.", profile.Branch))
 	}
 	if profile.RemoteMappingCount != 0 {
 		differences = append(differences, fmt.Sprintf("Sonarr has %d remote path mappings. The tested setup used storage visible directly to Sonarr.", profile.RemoteMappingCount))

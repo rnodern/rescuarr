@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/rnodern/rescuarr/internal/app"
+	"github.com/rnodern/rescuarr/internal/arrwire"
 	"github.com/rnodern/rescuarr/internal/domain"
 	"github.com/rnodern/rescuarr/internal/importflow"
 	"github.com/rnodern/rescuarr/internal/observe"
@@ -142,17 +143,16 @@ func (c console) caseDetail(w http.ResponseWriter, r *http.Request) {
 }
 
 func previewVersionHold(display domain.CaseDisplay) string {
+	if display.Version == "" || importflow.PreviewContract(display.Product, display.Version) {
+		return ""
+	}
 	switch display.Product {
 	case domain.ProductSonarr:
-		if display.Version != "" && display.Version != importflow.SonarrVersion {
-			return "This build can read the queue on Sonarr " + display.Version +
-				". Import preview is currently supported on Sonarr " + importflow.SonarrVersion + "."
-		}
+		return "This build can read the queue on Sonarr " + display.Version +
+			". Import preview is currently supported on " + arrwire.ContractSonarrV4.Describe() + "."
 	case domain.ProductRadarr:
-		if display.Version != "" && display.Version != importflow.RadarrVersion {
-			return "This build can read the queue on Radarr " + display.Version +
-				". Import preview is currently supported on Radarr " + importflow.RadarrVersion + "."
-		}
+		return "This build can read the queue on Radarr " + display.Version +
+			". Import preview is currently supported on " + arrwire.ContractRadarr.Describe() + "."
 	}
 	return ""
 }

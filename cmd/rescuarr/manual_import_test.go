@@ -14,7 +14,7 @@ import (
 func TestManualImportProfileReportsSettingsDifferences(t *testing.T) {
 	profile := arradapter.ManualImportProfile{
 		EmptyPackProfile: arradapter.EmptyPackProfile{
-			Version: "5.0.0.2941", Branch: "develop", OSFamily: "windows",
+			Contract: arrwire.ContractSonarrV5, Version: "5.0.0.2941", Branch: "develop", OSFamily: "windows",
 			CompletedHandling: true, AutoRedownloadFailed: true, AutoRedownloadInteractive: true,
 		},
 		EnableMediaInfo: true,
@@ -69,7 +69,7 @@ func TestManualImportProfileReportsSettingsDifferences(t *testing.T) {
 func TestManualImportCleanupRequiresTheTestedNativeWindowsProfile(t *testing.T) {
 	profile := arradapter.ManualImportProfile{
 		EmptyPackProfile: arradapter.EmptyPackProfile{
-			Version: arrwire.SonarrIDOnlyImportVersion, Branch: "develop", OSFamily: "windows",
+			Contract: arrwire.ContractSonarrV5, Version: arrwire.SonarrIDOnlyImportVersion, Branch: "develop", OSFamily: "windows",
 			CompletedHandling: true, AutoRedownloadFailed: true, AutoRedownloadInteractive: true,
 			RemoveCompleted: true, RemoveFailed: true,
 		},

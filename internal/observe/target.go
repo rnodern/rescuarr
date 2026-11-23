@@ -13,8 +13,9 @@ import (
 )
 
 const (
-	SonarrTargetVersion = "4.0.20.3014"
-	RadarrTargetVersion = "6.4.4.10685"
+	// Baseline builds for the v4 and Radarr target contracts.
+	SonarrTargetVersion = arrwire.SonarrVersion
+	RadarrTargetVersion = arrwire.RadarrVersion
 
 	TargetProfileEvidence domain.ObservationKind = "import_target_profile"
 )
@@ -70,24 +71,24 @@ type currentTarget struct {
 // Target reads one exact target, its selected quality profile and, when the
 // target links it, one exact file. It rechecks the target and profile for drift.
 func (a *Arr) Target(ctx context.Context, ref domain.TargetRef, generation domain.Revision, observedAt time.Time) (TargetSnapshot, error) {
-	wantVersion := SonarrTargetVersion
+	want := arrwire.ContractSonarrV4
 	if a.reader.product == domain.ProductRadarr {
-		wantVersion = RadarrTargetVersion
+		want = arrwire.ContractRadarr
 	}
-	return a.targetSnapshot(ctx, ref, generation, observedAt, wantVersion)
+	return a.targetSnapshot(ctx, ref, generation, observedAt, want)
 }
 
-// SonarrV5ImportTarget reads an exact episode and profile in the pinned v5
-// manual import workflow.
+// SonarrV5ImportTarget reads an exact episode and profile in the Sonarr v5
+// contract's manual import workflow.
 func (a *Arr) SonarrV5ImportTarget(ctx context.Context, ref domain.TargetRef, generation domain.Revision, observedAt time.Time) (TargetSnapshot, error) {
 	if a.reader.product != domain.ProductSonarr {
 		return TargetSnapshot{}, ErrConfiguration
 	}
-	return a.targetSnapshot(ctx, ref, generation, observedAt, arrwire.SonarrIDOnlyImportVersion)
+	return a.targetSnapshot(ctx, ref, generation, observedAt, arrwire.ContractSonarrV5)
 }
 
 func (a *Arr) targetSnapshot(ctx context.Context, ref domain.TargetRef, generation domain.Revision, observedAt time.Time,
-	wantVersion string) (TargetSnapshot, error) {
+	want arrwire.Contract) (TargetSnapshot, error) {
 	if !ref.Valid() || ref.Instance != a.reader.instance || ref.ID > math.MaxInt32 || ref.SeriesID > math.MaxInt32 ||
 		(a.reader.product == domain.ProductSonarr) != (ref.Kind == domain.TargetEpisode) ||
 		generation == 0 || observedAt.IsZero() {
@@ -97,7 +98,7 @@ func (a *Arr) targetSnapshot(ctx context.Context, ref domain.TargetRef, generati
 	defer cancel()
 
 	out := TargetSnapshot{Ref: ref, ConnectionRevision: a.connectionRevision}
-	availability, err := a.readTarget(ctx, &out, wantVersion)
+	availability, err := a.readTarget(ctx, &out, want)
 	state, fileState := domain.ObservationKnown, domain.ObservationKnown
 	var monitored bool
 	var fileID int64
@@ -163,13 +164,14 @@ func (a *Arr) targetSnapshot(ctx context.Context, ref domain.TargetRef, generati
 	return out, err
 }
 
-func (a *Arr) readTarget(ctx context.Context, out *TargetSnapshot, wantVersion string) (*bool, error) {
+func (a *Arr) readTarget(ctx context.Context, out *TargetSnapshot, want arrwire.Contract) (*bool, error) {
 	status, err := a.Status(ctx)
 	if err != nil {
 		return nil, err
 	}
 	out.Version = status.Version
-	if status.Version != wantVersion || (a.upstreamVersion != "" && status.Version != a.upstreamVersion) {
+	if arrwire.ContractFor(a.reader.product, status.Version) != want ||
+		(a.upstreamVersion != "" && status.Version != a.upstreamVersion) {
 		return nil, ErrTargetVersion
 	}
 	first, err := a.currentTarget(ctx, out.Ref)
@@ -204,7 +206,7 @@ func (a *Arr) readTarget(ctx context.Context, out *TargetSnapshot, wantVersion s
 	if currentProfile.Digest != profile.Digest {
 		return nil, ErrPartial
 	}
-	if wantVersion == arrwire.SonarrIDOnlyImportVersion {
+	if want == arrwire.ContractSonarrV5 {
 		if first.SeasonNumber == nil || first.EpisodeNumber == nil || *first.EpisodeNumber <= 0 {
 			return nil, ErrResponse
 		}

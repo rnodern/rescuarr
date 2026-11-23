@@ -366,7 +366,7 @@ func summarise(rows []observe.QueueRecord) (domain.CaseState, domain.ReasonCode)
 	active, failed, noEligible, seriesIDOnly, warning, complete := false, false, false, false, false, false
 	for _, row := range rows {
 		active = active || row.Status == "downloading" || row.Status == "queued" || row.TrackedState == "importing"
-		failed = failed || row.Status == "failed" || row.TrackedState == "downloadFailed"
+		failed = failed || row.Status == "failed" || row.TrackedFailure()
 		noEligible = noEligible || slices.Contains(row.Findings, observe.FindingNoEligibleFiles)
 		seriesIDOnly = seriesIDOnly || slices.Contains(row.Findings, observe.FindingSeriesIDOnly)
 		warning = warning || len(row.Findings) > 0 || row.TrackedStatus == "warning" || row.TrackedStatus == "error"

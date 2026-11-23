@@ -11,11 +11,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rnodern/rescuarr/internal/arrwire"
 	"github.com/rnodern/rescuarr/internal/domain"
 )
 
 func TestSonarrEpisodeNeedsUsesExactBatchAndSeriesMonitoring(t *testing.T) {
-	for _, version := range []string{SonarrTargetVersion, sonarrV5Needs} {
+	for _, version := range []string{SonarrTargetVersion, arrwire.SonarrIDOnlyImportVersion} {
 		t.Run(version, func(t *testing.T) {
 			now := time.Date(2026, 11, 14, 9, 0, 0, 0, time.UTC)
 			ids := make([]int64, 26)
@@ -99,9 +100,9 @@ func TestSonarrEpisodeNeedsRejectsAmbiguousReadback(t *testing.T) {
 			a := arrFor(t, domain.ProductSonarr, func(r *http.Request) (*http.Response, error) {
 				switch r.URL.Path {
 				case "/namespace/api/v3/system/status":
-					version := sonarrV5Needs
+					version := arrwire.SonarrIDOnlyImportVersion
 					if tc.name == "unknown version" {
-						version = "5.0.0.2942"
+						version = "6.0.0.1" // A future major version has no qualified contract.
 					}
 					return response(http.StatusOK, fmt.Sprintf(`{"appName":"Sonarr","version":%q}`, version)), nil
 				case "/namespace/api/v3/series/12":

@@ -23,6 +23,16 @@ import (
 )
 
 func TestRunEmptyPackRecoveryDispatchesThroughQualifiedAdapter(t *testing.T) {
+	runEmptyPackRecoveryOn(t, arrwire.SonarrIDOnlyImportVersion)
+}
+
+// A routine Sonarr update keeps automatic recovery running end to end.
+func TestRunEmptyPackRecoveryAfterRoutineSonarrUpdate(t *testing.T) {
+	runEmptyPackRecoveryOn(t, "5.0.0.2997")
+}
+
+func runEmptyPackRecoveryOn(t *testing.T, version string) {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
 	defer cancel()
 	local, err := store.Open(ctx, filepath.Join(t.TempDir(), "data"))
@@ -38,7 +48,7 @@ func TestRunEmptyPackRecoveryDispatchesThroughQualifiedAdapter(t *testing.T) {
 	}
 
 	clock := app.FixedClock{At: time.Date(2026, 11, 14, 0, 0, 0, 0, time.UTC)}
-	fixture := &emptyPackRuntimeFixture{now: clock.At}
+	fixture := &emptyPackRuntimeFixture{now: clock.At, version: version}
 	transport := fixtureTransport(fixture.roundTrip)
 	observations := observeservice.New(local, clock, transport)
 	instance, err := observations.AddInstance(ctx, observeservice.InstanceInput{Product: domain.ProductSonarr,
@@ -53,6 +63,14 @@ func TestRunEmptyPackRecoveryDispatchesThroughQualifiedAdapter(t *testing.T) {
 	if err != nil || len(cases) != 1 {
 		t.Fatalf("eligible case: got %d, error %v", len(cases), err)
 	}
+	// Eligibility follows the Sonarr v5 contract rather than one exact build.
+	for version, want := range map[string]int{"5.0.0.2997": 1, "5.0.0.2940": 0, "6.0.0.1": 0} {
+		writeEmptyPackFixture(t, local, "UPDATE observe_instances SET version = ?", version)
+		if got, err := observations.AutomaticEmptyPackCasesFor(ctx, instance.Ref.ID, "", 1); err != nil || len(got) != want {
+			t.Fatalf("Sonarr %s: %d eligible cases, want %d: %v", version, len(got), want, err)
+		}
+	}
+	writeEmptyPackFixture(t, local, "UPDATE observe_instances SET version = ?", version)
 	key := EmptyPackKey{CaseID: cases[0].ID, Job: cases[0].Job.Ref}
 	journal := NewEmptyPackJournal(local)
 	factory := func(current domain.Instance) (*arradapter.EmptyPackAdapter, error) {
@@ -129,6 +147,7 @@ func TestRunEmptyPackRecoveryDispatchesThroughQualifiedAdapter(t *testing.T) {
 // scoped request. The test reads the resulting durable checkpoint independently.
 type emptyPackRuntimeFixture struct {
 	now                time.Time
+	version            string
 	removals, searches int
 }
 
@@ -143,7 +162,11 @@ func (f *emptyPackRuntimeFixture) roundTrip(req *http.Request) (*http.Response, 
 	status, payload := http.StatusOK, any(nil)
 	switch method + " " + path {
 	case "GET /api/v3/system/status":
-		payload = map[string]any{"appName": "Sonarr", "version": arrwire.SonarrIDOnlyImportVersion, "isWindows": true}
+		version := f.version
+		if version == "" {
+			version = arrwire.SonarrIDOnlyImportVersion
+		}
+		payload = map[string]any{"appName": "Sonarr", "version": version, "isWindows": true}
 	case "GET /api/v3/queue":
 		rows := []map[string]any{}
 		if f.removals == 0 {

@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/rnodern/rescuarr/internal/arrwire"
 	"github.com/rnodern/rescuarr/internal/domain"
 )
 
@@ -21,7 +22,6 @@ const (
 	EpisodeUnaired     EpisodeNeed = "unaired"
 
 	maxEpisodeNeeds = 128
-	sonarrV5Needs   = "5.0.0.2941"
 )
 
 type episodeNeedWire struct {
@@ -53,8 +53,7 @@ func (a *Arr) SonarrEpisodeNeeds(ctx context.Context, seriesID int64, ids []int6
 	if err != nil {
 		return nil, err
 	}
-	if (status.Version != SonarrTargetVersion && status.Version != sonarrV5Needs) ||
-		(a.upstreamVersion != "" && a.upstreamVersion != status.Version) {
+	if !sonarrContract(status.Version) || (a.upstreamVersion != "" && a.upstreamVersion != status.Version) {
 		return nil, ErrTargetVersion
 	}
 	var series struct {
@@ -97,4 +96,19 @@ func (a *Arr) SonarrEpisodeNeeds(ctx context.Context, seriesID int64, ids []int6
 		}
 	}
 	return needs, nil
+}
+
+// sonarrContract reports whether a Sonarr build belongs to a qualified v4 or v5 contract.
+func sonarrContract(version string) bool {
+	switch arrwire.ContractFor(domain.ProductSonarr, version) {
+	case arrwire.ContractSonarrV4, arrwire.ContractSonarrV5:
+		return true
+	default:
+		return false
+	}
+}
+
+// sonarrV5 reports whether a Sonarr build belongs to the v5 contract.
+func sonarrV5(version string) bool {
+	return arrwire.ContractFor(domain.ProductSonarr, version) == arrwire.ContractSonarrV5
 }

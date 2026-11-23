@@ -54,7 +54,8 @@ func filenameLanguageHints(names ...string) []string {
 
 func reviewPackLanguage(ctx context.Context, arr *observe.Arr, proof observeservice.RecoveryQueue,
 	plan *app.ReplacementPreview, now time.Time, prefs app.LanguagePreferences, mode domain.Mode) *app.PackLanguageReview {
-	if proof.Instance.UpstreamVersion != arrwire.SonarrIDOnlyImportVersion || len(proof.Members) == 0 || len(plan.Episodes) < 2 {
+	if arrwire.ContractFor(proof.Instance.Product, proof.Instance.UpstreamVersion) != arrwire.ContractSonarrV5 ||
+		len(proof.Members) == 0 || len(plan.Episodes) < 2 {
 		return nil
 	}
 	first := proof.Members[0]

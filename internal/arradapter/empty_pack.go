@@ -55,7 +55,7 @@ func NewEmptyPackAdapter(config Config, exchange FixtureTransport, qualify Quali
 	instance := config.Instance
 	base, ok := parseBase(instance.BaseURL)
 	if !ok || !instance.Ref.Valid() || instance.Product != domain.ProductSonarr ||
-		instance.UpstreamVersion != arrwire.SonarrIDOnlyImportVersion || instance.ConnectionRevision == 0 ||
+		arrwire.ContractFor(instance.Product, instance.UpstreamVersion) != arrwire.ContractSonarrV5 || instance.ConnectionRevision == 0 ||
 		config.AdapterRevision == "" || config.SettingsFingerprint == ([sha256.Size]byte{}) ||
 		!validAPIKey(config.APIKey) || exchange == nil || qualify == nil || now == nil {
 		return nil, ErrConfiguration
@@ -259,7 +259,7 @@ func (a *EmptyPackAdapter) Search(ctx context.Context, scope EmptyPackScope, epi
 
 func searchClear(series int64, ids []int64, queue []observe.QueueRecord) bool {
 	for _, row := range queue {
-		if row.Status == "failed" || row.TrackedState == "downloadFailed" || completedPackWithoutFiles(row) {
+		if row.Status == "failed" || row.TrackedFailure() || completedPackWithoutFiles(row) {
 			continue
 		}
 		if row.Target.Valid() {

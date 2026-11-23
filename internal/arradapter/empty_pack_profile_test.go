@@ -70,7 +70,7 @@ func TestProbeEmptyPackProfilePinsObservedSettings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if profile.Version != instance.UpstreamVersion || profile.Branch != "develop" ||
+	if profile.Contract != arrwire.ContractSonarrV5 || profile.Version != instance.UpstreamVersion || profile.Branch != "develop" ||
 		profile.Package != "5.0.0.2941-ls208" || profile.PackageAuthor != "linuxserver.io" ||
 		profile.OSFamily != "linux" || profile.PathOS != "unix" || !profile.Docker ||
 		profile.ClientID != 1 || profile.ClientName != "Rescuarr Fixture SABnzbd" || profile.ClientType != "Sabnzbd" ||
@@ -104,7 +104,11 @@ func TestProbeEmptyPackProfilePinsObservedSettings(t *testing.T) {
 		{"client endpoint drift", map[string]string{packClientsRoute: "[" + strings.Replace(packClientResponse, "private.sab.invalid", "another.sab.invalid", 1) + "]"}, true},
 		{"unset url base", map[string]string{packClientsRoute: "[" + strings.Replace(packClientResponse, `"name":"urlBase"`, `"name":"urlBase","value":null`, 1) + "]"}, false},
 		{"configured url base", map[string]string{packClientsRoute: "[" + strings.Replace(packClientResponse, `"name":"urlBase"`, `"name":"urlBase","value":"/sab"`, 1) + "]"}, true},
-		{"package drift", map[string]string{packStatusRoute: strings.Replace(packStatusResponse, "ls208", "ls209", 1)}, true},
+		// LinuxServer rebuilds its image for every Sonarr update. The publisher, not
+		// the image revision, identifies the tested package family.
+		{"package rebuild", map[string]string{packStatusRoute: strings.Replace(packStatusResponse, "ls208", "ls209", 1)}, false},
+		{"package publisher drift", map[string]string{packStatusRoute: strings.Replace(packStatusResponse,
+			`"packageAuthor":"linuxserver.io"`, `"packageAuthor":"hotio"`, 1)}, true},
 		{"mapping drift", map[string]string{packMappingRoute: `[{"id":1,"host":"private.host","localPath":"/private/from","remotePath":"/private/to"}]`}, true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -118,6 +122,42 @@ func TestProbeEmptyPackProfilePinsObservedSettings(t *testing.T) {
 				t.Fatal("profile exposed provider or mapping fields")
 			}
 		})
+	}
+}
+
+// A routine Sonarr update keeps a pinned profile valid, so recovery continues
+// without the owner pinning a new fingerprint after every upstream release.
+func TestProbeEmptyPackProfileSurvivesRoutineUpdates(t *testing.T) {
+	instance := probeFixtureInstance()
+	exchange, _ := packProfileFixture(t, nil)
+	pinned, err := ProbeEmptyPackProfile(t.Context(), instance, "private-sonarr-key", exchange)
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated := strings.NewReplacer(`"version":"5.0.0.2941"`, `"version":"5.0.0.2997"`,
+		`"packageVersion":"5.0.0.2941-ls208"`, `"packageVersion":"5.0.0.2997-ls215"`).Replace(packStatusResponse)
+	exchange, _ = packProfileFixture(t, map[string]string{packStatusRoute: updated})
+
+	observed := instance
+	observed.UpstreamVersion = "5.0.0.2997"
+	got, err := ProbeEmptyPackProfile(t.Context(), observed, "private-sonarr-key", exchange)
+	if err != nil || got.Fingerprint != pinned.Fingerprint || got.Version != "5.0.0.2997" || got.Contract != arrwire.ContractSonarrV5 {
+		t.Fatalf("routine update changed the pinned profile: %+v, %v", got, err)
+	}
+
+	// Until the observer records the new build, the probe holds rather than
+	// qualifying a build it has not seen.
+	if _, err := ProbeEmptyPackProfile(t.Context(), instance, "private-sonarr-key", exchange); !errors.Is(err, ErrQualification) {
+		t.Fatalf("unobserved upgrade qualified: %v", err)
+	}
+
+	// A build outside the v5 contract is never probed.
+	for _, version := range []string{"5.0.0.2940", "6.0.0.1", "4.0.20.3014"} {
+		outside := instance
+		outside.UpstreamVersion = version
+		if _, err := ProbeEmptyPackProfile(t.Context(), outside, "private-sonarr-key", exchange); !errors.Is(err, ErrConfiguration) {
+			t.Fatalf("Sonarr %s probed outside the v5 contract: %v", version, err)
+		}
 	}
 }
 

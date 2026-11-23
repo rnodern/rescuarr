@@ -33,7 +33,8 @@ type manualImportProbe struct {
 }
 
 func NewManualSonarrV5Copy(cfg Config, source importflow.SonarrV5Source, transport http.RoundTripper, qualify Qualify, now func() time.Time) (*ManualSonarrV5Copy, error) {
-	if cfg.Instance.Product != domain.ProductSonarr || cfg.Instance.UpstreamVersion != arrwire.SonarrIDOnlyImportVersion ||
+	if cfg.Instance.Product != domain.ProductSonarr ||
+		arrwire.ContractFor(cfg.Instance.Product, cfg.Instance.UpstreamVersion) != arrwire.ContractSonarrV5 ||
 		(cfg.AdapterRevision != ManualSonarrV5CopyRevision && cfg.AdapterRevision != arrwire.SonarrV5CleanupCopyRevision) ||
 		source.Job.Instance != cfg.Instance.Ref || source.Job.ID == "" ||
 		source.Job.Generation != 1 || source.Target.Instance != cfg.Instance.Ref || source.Target.Kind != domain.TargetEpisode ||

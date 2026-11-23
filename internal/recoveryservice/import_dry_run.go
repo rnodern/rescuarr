@@ -50,8 +50,9 @@ func (s *ManualReviews) ImportDryRun(ctx context.Context, after string) (app.Imp
 
 func (s *ManualReviews) checkDryRunCase(ctx context.Context, item domain.Case) (app.ImportDryRunCase, error) {
 	result := app.ImportDryRunCase{Case: item, Assessment: "Needs review"}
-	if item.Display.Product != domain.ProductSonarr || item.Display.Version != arrwire.SonarrIDOnlyImportVersion {
-		result.Assessment, result.Reason = "Outside scope", "This check covers the tested Sonarr 5.0.0.2941 import."
+	if item.Display.Product != domain.ProductSonarr ||
+		arrwire.ContractFor(item.Display.Product, item.Display.Version) != arrwire.ContractSonarrV5 {
+		result.Assessment, result.Reason = "Outside scope", "This check covers the "+arrwire.ContractSonarrV5.Describe()+" import."
 		return result, nil
 	}
 	if item.Reason != domain.ReasonCode(observe.FindingSeriesIDOnly) {

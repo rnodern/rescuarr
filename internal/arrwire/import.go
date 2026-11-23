@@ -101,7 +101,7 @@ func nativeImportFile(product domain.Product, version, downloadID string, select
 	}
 
 	// ManualImportResource and ManualImportFile use the same quality and
-	// language objects and integer flags on both pinned versions.
+	// language objects and integer flags on every qualified contract.
 	return importFile{
 		Path: selected.Path, FolderName: selected.FolderName, DownloadID: downloadID,
 		Quality: qualityModel{
@@ -121,7 +121,7 @@ func nativeImportEnums(product domain.Product, version string, file domain.Prepa
 	// Sonarr v5 adds the Subtitles flag. Older contracts retain their caps.
 	if product == domain.ProductSonarr {
 		limit := uint64(0xff)
-		if version == SonarrIDOnlyImportVersion {
+		if ContractFor(product, version) == ContractSonarrV5 {
 			limit = 0x1ff
 		}
 		if file.QualityModifier != "" || *file.IndexerFlags > limit {

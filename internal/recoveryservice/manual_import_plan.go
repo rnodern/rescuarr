@@ -194,7 +194,8 @@ func (p manualImportPlan) hold(reason string) (manualImportPlan, error) {
 }
 
 func manualImportScope(proof observeservice.RecoveryQueue) bool {
-	return proof.Instance.Product == domain.ProductSonarr && proof.Instance.UpstreamVersion == arrwire.SonarrIDOnlyImportVersion &&
+	return proof.Instance.Product == domain.ProductSonarr &&
+		arrwire.ContractFor(proof.Instance.Product, proof.Instance.UpstreamVersion) == arrwire.ContractSonarrV5 &&
 		proof.Case.State == domain.CaseHeld && proof.Case.Reason == domain.ReasonCode(observe.FindingSeriesIDOnly) &&
 		proof.Case.Job.Protocol == domain.ProtocolUsenet && !proof.Case.Job.Shared &&
 		len(proof.Case.Incidents) == 0 && len(proof.Case.Targets) == 1 && len(proof.Members) == 1 &&

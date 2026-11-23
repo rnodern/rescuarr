@@ -362,3 +362,37 @@ func TestSABQueueUsesCategoryAndLeavesExactSizeUnknown(t *testing.T) {
 		t.Fatalf("queue %+v: %v", jobs, err)
 	}
 }
+
+// Sonarr and Radarr serialize TrackedDownloadState in camelCase. A download Arr
+// has failed itself, such as one holding an executable, keeps the client status
+// "completed", so only the tracked state shows the failure.
+func TestQueueReadsArrTrackedFailureStates(t *testing.T) {
+	for _, tc := range []struct {
+		state   string
+		want    string
+		failure bool
+	}{
+		{"failedPending", TrackedFailedPending, true},
+		{"failed", TrackedFailed, true},
+		{"FailedPending", TrackedFailedPending, true},
+		{"importBlocked", "importBlocked", false},
+		{"downloadFailed", "unknown", false},        // never sent by Sonarr or Radarr
+		{"downloadFailedPending", "unknown", false}, // never sent by Sonarr or Radarr
+	} {
+		t.Run(tc.state, func(t *testing.T) {
+			a := arrFor(t, domain.ProductSonarr, func(r *http.Request) (*http.Response, error) {
+				body := fmt.Sprintf(`{"page":1,"pageSize":100,"totalRecords":1,"records":[
+					{"id":1001,"seriesId":12,"episodeId":41,"downloadId":"SABnzbd_nzo_x","status":"completed","trackedDownloadState":%q}]}`, tc.state)
+				return response(http.StatusOK, body), nil
+			})
+			q, err := a.Queue(t.Context(), 4, observedAt)
+			if err != nil || len(q.Records) != 1 {
+				t.Fatalf("queue %+v: %v", q, err)
+			}
+			row := q.Records[0]
+			if row.TrackedState != tc.want || row.TrackedFailure() != tc.failure || row.Status != "completed" {
+				t.Fatalf("state %q read as %q (failure %v)", tc.state, row.TrackedState, row.TrackedFailure())
+			}
+		})
+	}
+}

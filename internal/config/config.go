@@ -161,14 +161,35 @@ func manualRoutePin(getenv func(string) string, prefix, route string) (string, [
 		return "", fingerprint, nil
 	}
 	decoded, err := hex.DecodeString(digest)
-	if !validManualConnectionID(connection) || err != nil || len(decoded) != len(fingerprint) || sab != "5.1.3" {
-		return "", fingerprint, fmt.Errorf("manual %s recovery requires a connection ID, profile SHA-256 and verified SABnzbd 5.1.3", route)
+	if !validManualConnectionID(connection) || err != nil || len(decoded) != len(fingerprint) || !testedSABVersion(sab) {
+		return "", fingerprint, fmt.Errorf("manual %s recovery requires a connection ID, profile SHA-256 and verified SABnzbd %s or a later 5.x release", route, testedSAB)
 	}
 	copy(fingerprint[:], decoded)
 	if fingerprint == ([32]byte{}) {
 		return "", fingerprint, fmt.Errorf("manual %s profile SHA-256 is empty", route)
 	}
 	return connection, fingerprint, nil
+}
+
+// testedSAB is the SABnzbd release used by the route evidence. SABnzbd keeps
+// its job and history API stable within a major version, so later 5.x releases
+// are accepted and an upgrade does not stop Rescuarr from starting.
+const testedSAB = "5.1.3"
+
+func testedSABVersion(value string) bool {
+	parts := strings.Split(value, ".")
+	if len(value) > 32 || len(parts) != 3 {
+		return false
+	}
+	var v [3]int
+	for i, part := range parts {
+		n, err := strconv.Atoi(part)
+		if err != nil || n < 0 || part != strconv.Itoa(n) {
+			return false
+		}
+		v[i] = n
+	}
+	return v[0] == 5 && (v[1] > 1 || v[1] == 1 && v[2] >= 3)
 }
 
 func validManualConnectionID(value string) bool {
