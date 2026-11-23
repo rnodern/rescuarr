@@ -30,6 +30,13 @@ type HistorySnapshot struct {
 	Records  []HistoryRecord
 }
 
+// historyEvents are the EpisodeHistoryEventType and MovieHistoryEventType
+// values Sonarr and Radarr send. Folder imports are manual imports of files
+// already on disk; renames keep the file and change its path.
+var historyEvents = []string{"grabbed", "downloadFolderImported", "downloadFailed", "downloadIgnored",
+	"seriesFolderImported", "movieFolderImported", "episodeFileDeleted", "movieFileDeleted",
+	"episodeFileRenamed", "movieFileRenamed"}
+
 // History requires the exact queue-observed download token. Provider URLs and
 // all other flexible response data are discarded by the typed JSON decoder.
 func (a *Arr) History(ctx context.Context, downloadID string, generation domain.Revision, observedAt time.Time) (HistorySnapshot, error) {
@@ -67,7 +74,7 @@ func (a *Arr) History(ctx context.Context, downloadID string, generation domain.
 		}
 		out.Records = append(out.Records, HistoryRecord{
 			ID: row.ID, Target: a.target(row.SeriesID, row.EpisodeID, row.MovieID), DownloadID: downloadID,
-			Event: state(row.Event, "grabbed", "downloadFolderImported", "downloadFailed", "downloadIgnored", "downloadImported", "episodeFileDeleted", "movieFileDeleted"), At: row.At,
+			Event: state(row.Event, historyEvents...), At: row.At,
 			IndexerLabel: boundedText(row.Data.Indexer, 128), ClientLabel: boundedText(row.Data.Client, 128),
 			SourceTitle: exactToken(title, 512), Languages: nativeFileLanguages(languages),
 		})

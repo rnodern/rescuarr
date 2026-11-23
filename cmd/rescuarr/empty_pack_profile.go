@@ -82,8 +82,9 @@ func sonarrRecoveryCheckConnection(ctx context.Context, local *store.Store, sele
 	if err != nil || instance.Product != domain.ProductSonarr {
 		return domain.Instance{}, "", errors.New("select the Sonarr connection and run Check queue in the console first")
 	}
-	if instance.UpstreamVersion != arrwire.SonarrIDOnlyImportVersion {
-		return domain.Instance{}, "", errors.New("the observed Sonarr version differs from the tested 5.0.0.2941 build")
+	if arrwire.ContractFor(instance.Product, instance.UpstreamVersion) != arrwire.ContractSonarrV5 {
+		return domain.Instance{}, "", fmt.Errorf("the observed Sonarr version %s is outside the tested %s contract",
+			instance.UpstreamVersion, arrwire.ContractSonarrV5.Describe())
 	}
 	key, err := local.ReadSecret(instance.SecretRef)
 	if err != nil {

@@ -1,5 +1,5 @@
-// Package arrwire encodes fixture-tested request shapes for pinned Arr versions.
-// It has no transport or capability qualification.
+// Package arrwire encodes fixture-tested request shapes for qualified Arr
+// contracts (see Contract). It has no transport or capability qualification.
 package arrwire
 
 import (
@@ -14,6 +14,8 @@ import (
 	"github.com/rnodern/rescuarr/internal/domain"
 )
 
+// Baseline builds used by the lab evidence. ContractFor accepts these builds
+// and later builds of the same major version.
 const (
 	SonarrVersion             = "4.0.20.3014"
 	SonarrIDOnlyImportVersion = "5.0.0.2941"
@@ -53,19 +55,11 @@ func (r Request) GoString() string { return r.String() }
 // instance and adapter revision. The caller supplies authoritative preflight,
 // policy and qualification before handing a request to any future transport.
 func Encode(instance domain.Instance, adapterRevision string, op domain.Operation, prepared domain.PreparedAction) (Request, error) {
-	switch instance.Product {
-	case domain.ProductSonarr:
-		switch instance.UpstreamVersion {
-		case SonarrVersion:
-		case SonarrIDOnlyImportVersion:
-			if op.Action != domain.ActionImport || len(op.Targets) != 1 {
-				return Request{}, ErrUnsupported
-			}
-		default:
-			return Request{}, ErrUnsupported
-		}
-	case domain.ProductRadarr:
-		if instance.UpstreamVersion != RadarrVersion {
+	contract := ContractFor(instance.Product, instance.UpstreamVersion)
+	switch contract {
+	case ContractSonarrV4, ContractRadarr:
+	case ContractSonarrV5:
+		if op.Action != domain.ActionImport || len(op.Targets) != 1 {
 			return Request{}, ErrUnsupported
 		}
 	default:
@@ -86,10 +80,10 @@ func Encode(instance domain.Instance, adapterRevision string, op domain.Operatio
 	switch op.Action {
 	case domain.ActionImport:
 		if prepared.Import.SonarrCleanup != (adapterRevision == SonarrV5CleanupCopyRevision) ||
-			(prepared.Import.SonarrCleanup && instance.UpstreamVersion != SonarrIDOnlyImportVersion) {
+			(prepared.Import.SonarrCleanup && contract != ContractSonarrV5) {
 			return Request{}, ErrBinding
 		}
-		if instance.UpstreamVersion == SonarrIDOnlyImportVersion {
+		if contract == ContractSonarrV5 {
 			file := prepared.Import.Files[0]
 			if file.ReleaseType != "singleEpisode" && file.ReleaseType != "unknown" {
 				return Request{}, ErrNativeShape

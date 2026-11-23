@@ -96,8 +96,16 @@ func TestEncodeHoldsChangedBindings(t *testing.T) {
 		err    error
 	}{
 		{"unsupported current version", func(i *domain.Instance, _ *string, _ *domain.Operation, _ *domain.PreparedAction) {
-			i.UpstreamVersion = "4.0.20.3015"
+			i.UpstreamVersion = "6.0.0.1"
 		}, arrwire.ErrUnsupported},
+		{"older than contract baseline", func(i *domain.Instance, _ *string, _ *domain.Operation, _ *domain.PreparedAction) {
+			i.UpstreamVersion = "4.0.20.3013"
+		}, arrwire.ErrUnsupported},
+		// A routine update stays inside the contract, but an action prepared on
+		// the previous build must be planned again before it can be sent.
+		{"upgraded since preparation", func(i *domain.Instance, _ *string, _ *domain.Operation, _ *domain.PreparedAction) {
+			i.UpstreamVersion = "4.0.20.3015"
+		}, arrwire.ErrBinding},
 		{"unsupported current product", func(i *domain.Instance, _ *string, _ *domain.Operation, _ *domain.PreparedAction) {
 			i.Product = domain.ProductSAB
 		}, arrwire.ErrUnsupported},

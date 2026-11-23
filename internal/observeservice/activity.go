@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/rnodern/rescuarr/internal/app"
+	"github.com/rnodern/rescuarr/internal/arrwire"
 	"github.com/rnodern/rescuarr/internal/domain"
 	"github.com/rnodern/rescuarr/internal/store"
 )
@@ -86,9 +87,13 @@ func (s *Service) AutomaticImportCases(ctx context.Context, after domain.CaseID,
 	}
 	var cases []domain.Case
 	err := s.store.Read(ctx, func(tx *sql.Tx) error {
-		const where = ` WHERE c.id > ? AND c.state = 'held' AND c.reason = 'series_matched_by_id'
+		instances, err := contractInstances(ctx, tx, domain.ProductSonarr, arrwire.ContractSonarrV5)
+		if err != nil || len(instances) == 0 {
+			return err
+		}
+		where := ` WHERE c.id > ? AND c.state = 'held' AND c.reason = 'series_matched_by_id'
 			AND c.observation_only = 0 AND c.missing_complete_scans = 0 AND i.product = 'sonarr'
-			AND i.version = '5.0.0.2941' AND i.health = 'available' AND i.coverage = 'known'
+			AND i.id IN (` + placeholders(len(instances)) + `) AND i.health = 'available' AND i.coverage = 'known'
 			AND i.generation = c.last_seen_generation AND i.epoch = c.epoch
 			AND i.checked_at > ? AND i.checked_at <= ? AND json_extract(c.payload, '$.Display.EpisodeCheck.Matched') = 1
 			AND (json_extract(c.payload, '$.Display.EpisodeCheck.TitleInNames') = 1 OR NOT EXISTS (
@@ -98,7 +103,9 @@ func (s *Service) AutomaticImportCases(ctx context.Context, after domain.CaseID,
 			))
 			ORDER BY c.id LIMIT ?`
 		now := s.clock.Now()
-		rows, err := tx.QueryContext(ctx, caseDisplayQuery+where, after, stamp(now.Add(-recoveryCaseAge)), stamp(now), limit)
+		args := append([]any{after}, instances...)
+		args = append(args, stamp(now.Add(-recoveryCaseAge)), stamp(now), limit)
+		rows, err := tx.QueryContext(ctx, caseDisplayQuery+where, args...)
 		if err != nil {
 			return err
 		}

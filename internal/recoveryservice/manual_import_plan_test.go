@@ -15,6 +15,7 @@ import (
 
 	"github.com/rnodern/rescuarr/internal/app"
 	"github.com/rnodern/rescuarr/internal/arradapter"
+	"github.com/rnodern/rescuarr/internal/arrwire"
 	"github.com/rnodern/rescuarr/internal/domain"
 	"github.com/rnodern/rescuarr/internal/importflow"
 	"github.com/rnodern/rescuarr/internal/observeservice"
@@ -249,6 +250,14 @@ func TestManualImportPlanBindsSourceProfileAndLanguagePolicy(t *testing.T) {
 	if selected, err := cases.AutomaticImportCases(ctx, "", 5); err != nil || len(selected) != 1 || selected[0].ID != item.ID {
 		t.Fatalf("standard matching excluded the number-only match from the shortlist: %+v, %v", selected, err)
 	}
+	// The shortlist follows the Sonarr v5 contract rather than one exact build.
+	for version, want := range map[string]int{"5.0.0.2997": 1, "5.1.0.3100": 1, "5.0.0.2940": 0, "6.0.0.1": 0, "4.0.20.3014": 0} {
+		writeEmptyPackFixture(t, local, "UPDATE observe_instances SET version = ?", version)
+		if selected, err := cases.AutomaticImportCases(ctx, "", 5); err != nil || len(selected) != want {
+			t.Fatalf("Sonarr %s: shortlist %d cases, want %d: %v", version, len(selected), want, err)
+		}
+	}
+	writeEmptyPackFixture(t, local, "UPDATE observe_instances SET version = ?", arrwire.SonarrIDOnlyImportVersion)
 	freeSpace = 1
 	if row := dryRun(); row.Candidate || !strings.Contains(row.Reason, "less free space") {
 		t.Fatalf("insufficient library storage qualified: %+v", row)

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/rnodern/rescuarr/internal/arrwire"
 	"github.com/rnodern/rescuarr/internal/domain"
 	"github.com/rnodern/rescuarr/internal/observe"
 )
@@ -19,7 +20,8 @@ const (
 // download that just disappeared. It correlates native history to the stored
 // job and verifies that the episode still links the imported file.
 func (s *Service) verifyMissingEpisodeImports(ctx context.Context, instance domain.Instance, arr *observe.Arr, snapshot observe.QueueSnapshot, now time.Time) map[domain.CaseID]domain.EvidenceID {
-	if instance.Product != domain.ProductSonarr || instance.UpstreamVersion != "5.0.0.2941" || !snapshot.Evidence.Fresh(now) {
+	if instance.Product != domain.ProductSonarr ||
+		arrwire.ContractFor(instance.Product, instance.UpstreamVersion) != arrwire.ContractSonarrV5 || !snapshot.Evidence.Fresh(now) {
 		return nil
 	}
 	ctx, cancel := context.WithTimeout(ctx, importReadbackBudget)

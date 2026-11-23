@@ -112,7 +112,7 @@ func planReplacement(item domain.Case, queue observe.QueueSnapshot, downloadID s
 	otherDownloads := make(map[domain.TargetRef]bool)
 	unclear := false
 	for _, row := range queue.Records {
-		if row.DownloadID == downloadID || row.Status == "failed" || row.TrackedState == "downloadFailed" ||
+		if row.DownloadID == downloadID || row.Status == "failed" || row.TrackedFailure() ||
 			completedWithoutEligibleFiles(row) {
 			continue
 		}

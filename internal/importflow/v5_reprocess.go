@@ -150,7 +150,8 @@ func (c *Client) ReprocessSonarrV5(ctx context.Context, job Job, now time.Time, 
 }
 
 func (c *Client) supportsSonarrV5Import() bool {
-	return c.instance.Product == domain.ProductSonarr && c.instance.UpstreamVersion == arrwire.SonarrIDOnlyImportVersion
+	return c.instance.Product == domain.ProductSonarr &&
+		arrwire.ContractFor(c.instance.Product, c.instance.UpstreamVersion) == arrwire.ContractSonarrV5
 }
 
 func (c *Client) selectSonarrV5Candidate(ctx context.Context, job Job, now, started time.Time) (sonarrV5Selection, error) {

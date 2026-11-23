@@ -214,6 +214,27 @@ func (a *Arr) QueueDetails(ctx context.Context, target domain.TargetRef) ([]Queu
 	return out, nil
 }
 
+// trackedStates are the TrackedDownloadState values Sonarr and Radarr send.
+// Both serialize the enum in camelCase: FailedPending and Failed arrive as
+// "failedPending" and "failed".
+var trackedStates = []string{"downloading", "importBlocked", "importPending", "importing", "imported",
+	TrackedFailedPending, TrackedFailed, "ignored"}
+
+const (
+	// TrackedFailedPending marks a download Arr has failed but not yet processed,
+	// including one it failed itself for a dangerous or executable file while the
+	// client still reports it completed.
+	TrackedFailedPending = "failedPending"
+	// TrackedFailed marks a download whose failure Arr has processed.
+	TrackedFailed = "failed"
+)
+
+// TrackedFailure reports whether Arr has failed the download, whatever the
+// download client reports.
+func (r QueueRecord) TrackedFailure() bool {
+	return r.TrackedState == TrackedFailedPending || r.TrackedState == TrackedFailed
+}
+
 func (a *Arr) queueRecord(row queueWire) QueueRecord {
 	var findings []QueueFinding
 	seen := make(map[QueueFinding]bool)
@@ -231,7 +252,7 @@ func (a *Arr) queueRecord(row queueWire) QueueRecord {
 		DownloadID: exactToken(row.DownloadID, 256), Protocol: protocol(row.Protocol),
 		ClientLabel: boundedText(row.Client, 128), IndexerLabel: boundedText(row.Indexer, 128),
 		Status:        state(row.Status, "queued", "paused", "downloading", "completed", "failed", "warning", "delay", "downloadClientUnavailable", "fallback"),
-		TrackedState:  state(row.State, "downloading", "downloadFailed", "downloadFailedPending", "importBlocked", "importPending", "importing", "imported", "ignored"),
+		TrackedState:  state(row.State, trackedStates...),
 		TrackedStatus: state(row.Tracked, "ok", "warning", "error"),
 		SizeBytes:     nonnegative(row.Size), AddedAt: row.AddedAt, Findings: findings,
 		OutputPath: exactToken(row.OutputPath, 4096),

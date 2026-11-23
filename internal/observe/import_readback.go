@@ -11,7 +11,7 @@ import (
 // import event. The expected source and library paths must agree independently.
 func (a *Arr) SonarrV5ImportProof(ctx context.Context, target domain.TargetRef, download, source string,
 	size int64, sentAt, now time.Time) (HistoryRecord, error) {
-	if a.upstreamVersion != sonarrV5Needs || download == "" || source == "" || size <= 0 ||
+	if !sonarrV5(a.upstreamVersion) || download == "" || source == "" || size <= 0 ||
 		sentAt.IsZero() || now.Before(sentAt) {
 		return HistoryRecord{}, ErrConfiguration
 	}

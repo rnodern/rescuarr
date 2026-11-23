@@ -15,14 +15,16 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/rnodern/rescuarr/internal/arrwire"
 	"github.com/rnodern/rescuarr/internal/domain"
 	"github.com/rnodern/rescuarr/internal/observe"
 	"github.com/rnodern/rescuarr/internal/policy"
 )
 
 const (
-	SonarrVersion = "4.0.20.3014"
-	RadarrVersion = "6.4.4.10685"
+	// Baseline builds for the contracts that support the import preview.
+	SonarrVersion = arrwire.SonarrVersion
+	RadarrVersion = arrwire.RadarrVersion
 	adapter       = "manual-import-preview-1"
 	maxBody       = 2 << 20
 	maxCandidates = 128
@@ -150,9 +152,21 @@ func (c *Client) Discover(ctx context.Context, job Job, now time.Time) (Preview,
 	return result, nil
 }
 
+// PreviewContract reports whether the import preview covers an Arr build. The
+// preview uses the Sonarr v4 and Radarr contracts. Sonarr v5 uses Manual Review.
+func PreviewContract(product domain.Product, version string) bool {
+	switch arrwire.ContractFor(product, version) {
+	case arrwire.ContractSonarrV4:
+		return product == domain.ProductSonarr
+	case arrwire.ContractRadarr:
+		return product == domain.ProductRadarr
+	default:
+		return false
+	}
+}
+
 func versionSupported(i domain.Instance) bool {
-	return (i.Product == domain.ProductSonarr && i.UpstreamVersion == SonarrVersion) ||
-		(i.Product == domain.ProductRadarr && i.UpstreamVersion == RadarrVersion)
+	return PreviewContract(i.Product, i.UpstreamVersion)
 }
 
 func validateJob(i domain.Instance, job Job, now time.Time) error {

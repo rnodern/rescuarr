@@ -104,14 +104,10 @@ func newAdapter(cfg Config, exchange FixtureTransport, qualify Qualify, readback
 		!validAPIKey(cfg.APIKey) || exchange == nil || qualify == nil || readback == nil || now == nil {
 		return nil, ErrConfiguration
 	}
-	switch instance.Product {
-	case domain.ProductSonarr:
-		if instance.UpstreamVersion != arrwire.SonarrVersion &&
-			(instance.UpstreamVersion != arrwire.SonarrIDOnlyImportVersion || route != RouteCopyImport) {
-			return nil, ErrConfiguration
-		}
-	case domain.ProductRadarr:
-		if instance.UpstreamVersion != arrwire.RadarrVersion {
+	switch arrwire.ContractFor(instance.Product, instance.UpstreamVersion) {
+	case arrwire.ContractSonarrV4, arrwire.ContractRadarr:
+	case arrwire.ContractSonarrV5:
+		if route != RouteCopyImport {
 			return nil, ErrConfiguration
 		}
 	default:

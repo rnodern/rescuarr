@@ -14,10 +14,15 @@ import (
 
 // EmptyPackProfile records the current Sonarr settings used to compare a local
 // connection with effect evidence. It carries no client credentials, paths or URLs.
+//
+// The fingerprint covers the contract rather than the exact build and package
+// version, so a routine Sonarr update keeps a pinned profile valid. Settings
+// that change recovery behaviour remain part of it.
 type EmptyPackProfile struct {
-	Version                   string
+	Contract                  arrwire.Contract
+	Version                   string `json:"-"`
 	Branch                    string
-	Package                   string
+	Package                   string `json:"-"`
 	PackageAuthor             string
 	OSFamily                  string
 	PathOS                    string
@@ -35,13 +40,14 @@ type EmptyPackProfile struct {
 	clientSettings            [sha256.Size]byte
 }
 
-// ProbeEmptyPackProfile reads the pinned Sonarr API on an existing connection.
+// ProbeEmptyPackProfile reads the Sonarr v5 contract's API on an existing connection.
 // The fingerprint covers this projection only. It does not certify a write or
 // assert downloader version, path accessibility or storage ownership.
 func ProbeEmptyPackProfile(ctx context.Context, instance domain.Instance, apiKey string, exchange FixtureTransport) (EmptyPackProfile, error) {
 	base, ok := parseBase(instance.BaseURL)
 	if !ok || !instance.Ref.Valid() || instance.ConnectionRevision == 0 ||
-		instance.Product != domain.ProductSonarr || instance.UpstreamVersion != arrwire.SonarrIDOnlyImportVersion ||
+		instance.Product != domain.ProductSonarr ||
+		arrwire.ContractFor(instance.Product, instance.UpstreamVersion) != arrwire.ContractSonarrV5 ||
 		!validAPIKey(apiKey) || exchange == nil {
 		return EmptyPackProfile{}, ErrConfiguration
 	}
@@ -49,7 +55,7 @@ func ProbeEmptyPackProfile(ctx context.Context, instance domain.Instance, apiKey
 	defer cancel()
 	probe := EmptyPackAdapter{base: base, key: apiKey, exchange: exchange}
 
-	profile, err := probe.packSystemProfile(ctx)
+	profile, err := probe.packSystemProfile(ctx, instance.UpstreamVersion)
 	if err != nil {
 		return EmptyPackProfile{}, fmt.Errorf("Sonarr system status: %w", err)
 	}
@@ -79,7 +85,9 @@ func ProbeEmptyPackProfile(ctx context.Context, instance domain.Instance, apiKey
 	return profile, nil
 }
 
-func (a *EmptyPackAdapter) packSystemProfile(ctx context.Context) (EmptyPackProfile, error) {
+// packSystemProfile rejects a build that differs from the one the observer
+// recorded, so an upgrade during a probe waits for the next observation.
+func (a *EmptyPackAdapter) packSystemProfile(ctx context.Context, observedVersion string) (EmptyPackProfile, error) {
 	var status struct {
 		AppName       string `json:"appName"`
 		Version       string `json:"version"`
@@ -94,7 +102,9 @@ func (a *EmptyPackAdapter) packSystemProfile(ctx context.Context) (EmptyPackProf
 	if err := a.readPackJSON(ctx, "/api/v3/system/status", nil, &status); err != nil {
 		return EmptyPackProfile{}, err
 	}
-	if !strings.EqualFold(status.AppName, string(domain.ProductSonarr)) || status.Version != arrwire.SonarrIDOnlyImportVersion {
+	contract := arrwire.ContractFor(domain.ProductSonarr, status.Version)
+	if !strings.EqualFold(status.AppName, string(domain.ProductSonarr)) || contract != arrwire.ContractSonarrV5 ||
+		status.Version != observedVersion {
 		return EmptyPackProfile{}, ErrQualification
 	}
 	// LinuxServer publishes this exact linked author in its Sonarr package metadata.
@@ -107,7 +117,7 @@ func (a *EmptyPackAdapter) packSystemProfile(ctx context.Context) (EmptyPackProf
 		return EmptyPackProfile{}, ErrReadback
 	}
 	profile := EmptyPackProfile{
-		Version: status.Version, Branch: status.Branch, Package: status.Package, PackageAuthor: status.PackageAuthor,
+		Contract: contract, Version: status.Version, Branch: status.Branch, Package: status.Package, PackageAuthor: status.PackageAuthor,
 		Docker: *status.Docker,
 	}
 	switch {

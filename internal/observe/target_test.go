@@ -80,8 +80,16 @@ func fixtureTarget(product domain.Product) domain.TargetRef {
 
 func readTargetFixture(t *testing.T, product domain.Product, requests []targetRequest) (TargetSnapshot, error) {
 	t.Helper()
+	return readTargetFixtureAt(t, product, "", requests)
+}
+
+// readTargetFixtureAt reads a target on a connection whose build the observer
+// has already recorded.
+func readTargetFixtureAt(t *testing.T, product domain.Product, recorded string, requests []targetRequest) (TargetSnapshot, error) {
+	t.Helper()
 	requestCount := 0
 	cfg := configuration(product)
+	cfg.Instance.UpstreamVersion = recorded
 	cfg.Instance.ConnectionRevision = 9
 	arr, err := NewArr(cfg, roundTrip(func(r *http.Request) (*http.Response, error) {
 		if requestCount == len(requests) {
@@ -197,7 +205,8 @@ func TestTargetKeepsUncertainReadsUnknown(t *testing.T) {
 		status  int
 		want    error
 	}{
-		{"version drift", domain.ProductSonarr, 0, "4.0.20.3014", "4.0.20.3015", http.StatusOK, ErrTargetVersion},
+		{"unqualified version", domain.ProductSonarr, 0, "4.0.20.3014", "6.0.0.1", http.StatusOK, ErrTargetVersion},
+		{"older than contract baseline", domain.ProductRadarr, 0, "6.4.4.10685", "6.4.4.10684", http.StatusOK, ErrTargetVersion},
 		{"file link omitted", domain.ProductRadarr, 1, `"movieFileId":62,`, "", http.StatusOK, ErrResponse},
 		{"file link null", domain.ProductSonarr, 1, `"episodeFileId":62`, `"episodeFileId":null`, http.StatusOK, ErrResponse},
 		{"file flag contradicts link", domain.ProductRadarr, 1, `"hasFile":true`, `"hasFile":false`, http.StatusOK, ErrResponse},
@@ -246,5 +255,38 @@ func TestTargetRefMustBindToConfiguredInstanceAndProduct(t *testing.T) {
 		if _, err := a.Target(t.Context(), ref, 4, observedAt); !errors.Is(err, ErrConfiguration) {
 			t.Fatalf("invalid reference had error %v", err)
 		}
+	}
+}
+
+// A routine update within a contract keeps target reads working once the
+// observer has recorded the new build. A build that differs from the recorded
+// one is held, so a read never mixes evidence from before and after an update.
+func TestTargetFollowsRoutineUpdates(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		product  domain.Product
+		from, to string
+		recorded string
+		want     error
+	}{
+		{"recorded Sonarr update", domain.ProductSonarr, "4.0.20.3014", "4.0.20.3020", "4.0.20.3020", nil},
+		{"recorded Radarr v7", domain.ProductRadarr, "6.4.4.10685", "7.0.3.10918", "7.0.3.10918", nil},
+		{"unrecorded Sonarr update", domain.ProductSonarr, "4.0.20.3014", "4.0.20.3020", "4.0.20.3014", ErrTargetVersion},
+		{"unrecorded Radarr update", domain.ProductRadarr, "6.4.4.10685", "7.0.3.10918", "6.4.4.10685", ErrTargetVersion},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			requests := targetFixture(tc.product, true)
+			requests[0].body = strings.ReplaceAll(requests[0].body, tc.from, tc.to)
+			if tc.want != nil {
+				requests = requests[:1] // Nothing beyond the status read may be requested.
+			}
+			got, err := readTargetFixtureAt(t, tc.product, tc.recorded, requests)
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("wanted %v, got %v", tc.want, err)
+			}
+			if tc.want == nil && (got.Version != tc.to || got.Profile == nil || got.File == nil) {
+				t.Fatalf("incomplete target after update: %+v", got)
+			}
+		})
 	}
 }

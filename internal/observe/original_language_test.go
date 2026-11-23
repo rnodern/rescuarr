@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/rnodern/rescuarr/internal/arrwire"
 	"github.com/rnodern/rescuarr/internal/domain"
 )
 
@@ -19,13 +20,13 @@ func TestOriginalAudioLanguage(t *testing.T) {
 		wantErr                       error
 	}{
 		{"Sonarr stable", SonarrTargetVersion, "series/12", `{"id":12,"originalLanguage":{"id":2,"name":"French"}}`, domain.ProductSonarr, domain.ImportLanguage{ID: 2, Name: "French"}, nil},
-		{"Sonarr develop", sonarrV5Needs, "series/12", `{"id":12,"originalLanguage":{"id":1,"name":"English"}}`, domain.ProductSonarr, domain.ImportLanguage{ID: 1, Name: "English"}, nil},
+		{"Sonarr develop", arrwire.SonarrIDOnlyImportVersion, "series/12", `{"id":12,"originalLanguage":{"id":1,"name":"English"}}`, domain.ProductSonarr, domain.ImportLanguage{ID: 1, Name: "English"}, nil},
 		{"Radarr", RadarrTargetVersion, "movie/41", `{"id":41,"originalLanguage":{"id":21,"name":"Korean"}}`, domain.ProductRadarr, domain.ImportLanguage{ID: 21, Name: "Korean"}, nil},
-		{"metadata omitted", sonarrV5Needs, "series/12", `{"id":12,"title":"Obviously French"}`, domain.ProductSonarr, domain.ImportLanguage{}, nil},
+		{"metadata omitted", arrwire.SonarrIDOnlyImportVersion, "series/12", `{"id":12,"title":"Obviously French"}`, domain.ProductSonarr, domain.ImportLanguage{}, nil},
 		{"metadata unknown", RadarrTargetVersion, "movie/41", `{"id":41,"originalLanguage":{"id":0,"name":"Unknown"}}`, domain.ProductRadarr, domain.ImportLanguage{}, nil},
 		{"invalid language shape", RadarrTargetVersion, "movie/41", `{"id":41,"originalLanguage":"Korean"}`, domain.ProductRadarr, domain.ImportLanguage{}, nil},
-		{"mismatched series", sonarrV5Needs, "series/12", `{"id":42,"originalLanguage":{"id":21,"name":"Korean"}}`, domain.ProductSonarr, domain.ImportLanguage{}, ErrResponse},
-		{"unqualified version", "5.0.0.9999", "", "", domain.ProductSonarr, domain.ImportLanguage{}, ErrTargetVersion},
+		{"mismatched series", arrwire.SonarrIDOnlyImportVersion, "series/12", `{"id":42,"originalLanguage":{"id":21,"name":"Korean"}}`, domain.ProductSonarr, domain.ImportLanguage{}, ErrResponse},
+		{"unqualified version", "6.0.0.1", "", "", domain.ProductSonarr, domain.ImportLanguage{}, ErrTargetVersion},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			reads := []string{"system/status"}

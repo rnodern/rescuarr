@@ -6,6 +6,7 @@ import (
 	"math"
 	"strings"
 
+	"github.com/rnodern/rescuarr/internal/arrwire"
 	"github.com/rnodern/rescuarr/internal/domain"
 )
 
@@ -28,11 +29,11 @@ func (a *Arr) OriginalAudioLanguage(ctx context.Context, ref domain.TargetRef) (
 	}
 	resource, id := "movie", ref.ID
 	if a.reader.product == domain.ProductSonarr {
-		if status.Version != SonarrTargetVersion && status.Version != sonarrV5Needs {
+		if !sonarrContract(status.Version) {
 			return domain.ImportLanguage{}, ErrTargetVersion
 		}
 		resource, id = "series", ref.SeriesID
-	} else if status.Version != RadarrTargetVersion {
+	} else if arrwire.ContractFor(domain.ProductRadarr, status.Version) != arrwire.ContractRadarr {
 		return domain.ImportLanguage{}, ErrTargetVersion
 	}
 	var media struct {
