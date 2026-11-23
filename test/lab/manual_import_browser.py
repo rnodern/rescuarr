@@ -20,12 +20,14 @@ from scenarios import LabFailure, id_only_import, inventory, poll, projection, s
 
 COMMAND = "/api/v3/command"
 REPROCESS = "/api/v3/manualimport"
+AUTOMATIC_MODE = "/automatic-import/mode"
 PRESERVATION_NOTICE = "Keep the source file and the download client job."
 SONARR_CLEANUP_NOTICE = ("Sonarr uses a hardlink when the storage supports it and copies otherwise. Its completed "
                          "download handling can remove the entire download folder and the job from "
                          "SABnzbd’s active history.")
 PRESERVATION_ACTIVITY = "Copy import verified. Sonarr linked the approved episode and kept the source file."
 SONARR_CLEANUP_ACTIVITY = "Import verified. Sonarr linked the approved episode. Sonarr manages download cleanup."
+AUTOMATIC_ACTIVITY = "Automatic import verified. Sonarr linked the episode. Sonarr manages download cleanup."
 
 
 def capture_sonarr(stack, arr):
@@ -176,7 +178,8 @@ def prove_copy_command(writes, download_id, source, media):
     return command_id
 
 
-def run_copy_browser(lab, arr, download_id, title, folder, source, media, guard, report, *, sonarr_cleanup=False):
+def run_copy_browser(lab, arr, download_id, title, folder, source, media, guard, report, *, sonarr_cleanup=False,
+                     automatic=False):
     app_connection, captured = capture_sonarr(lab.stack, arr)
 
     def native_state():
@@ -195,6 +198,9 @@ def run_copy_browser(lab, arr, download_id, title, folder, source, media, guard,
     before = native_state()
     lab.on_stage("manualCopyDecline")
     proc, browser, _ = lab.setup_manual_review(app_connection, lab.root / "decline", operation="manual-import")
+    if automatic:
+        verify(PostForms(browser.get("/")).form(AUTOMATIC_MODE, mode="automatic") is None,
+               "automaticCopyOfferedWithoutAudioSetup")
     decline, _ = copy_review(browser, title, folder, source, approval_label="I checked the video and audio. Approve",
                              sonarr_cleanup=sonarr_cleanup)
     if sonarr_cleanup:
@@ -236,15 +242,27 @@ def run_copy_browser(lab, arr, download_id, title, folder, source, media, guard,
     verify(native_state() == before, "manualCopyChangedUpstreamBeforeApproval")
     verify(not captured(), "manualCopySentBeforeApproval")
 
-    lab.on_stage("manualCopyApprove")
-    browser.post(REVIEW, REVIEW, approval)
-    activity = SONARR_CLEANUP_ACTIVITY if sonarr_cleanup else PRESERVATION_ACTIVITY
+    if automatic:
+        lab.on_stage("automaticCopyEnable")
+        enable = browser.form("/", AUTOMATIC_MODE, mode="automatic")
+        browser.post(AUTOMATIC_MODE, "/", enable)
+        activity = AUTOMATIC_ACTIVITY
+    else:
+        lab.on_stage("manualCopyApprove")
+        browser.post(REVIEW, REVIEW, approval)
+        activity = SONARR_CLEANUP_ACTIVITY if sonarr_cleanup else PRESERVATION_ACTIVITY
     browser.activity(activity, timeout=90)
     lab.stop(proc)
     if sonarr_cleanup:
         proc, browser = lab.start(data, settings)
         browser.login()
         browser.activity(activity)
+        if automatic:
+            manual = browser.form("/", AUTOMATIC_MODE, mode="manual")
+            browser.post(AUTOMATIC_MODE, "/", manual)
+            verify(browser.form("/", AUTOMATIC_MODE, mode="automatic") is not None,
+                   "automaticCopyManualModeNotRestored")
+            browser.activity("Switched to Manual mode")
         lab.stop(proc)
     writes = captured()
     reprocess_count = prove_reprocess([record for record in writes if record["route"] == REPROCESS], download_id, source, media)
@@ -254,6 +272,12 @@ def run_copy_browser(lab, arr, download_id, title, folder, source, media, guard,
     verify(search_events() == before["searches"], "manualCopyTriggeredSearch")
     report["operation"] = {"method": "POST", "path": COMMAND, "name": "ManualImport", "importMode": "copy",
                            "fileCount": 1, "downloadId": download_id, "seriesId": media["seriesId"], "episodeIds": [media["id"]]}
+    if automatic:
+        report["automaticBrowser"] = {
+            "packagedVersion": lab.version, "apiWritesBeforeEnable": 0, "reprocessRequests": reprocess_count,
+            "copyCommandId": command_id, "importActivitySurvivedRestart": True, "manualModeRestored": True,
+        }
+        return command
     report["manualBrowser"] = {"packagedVersion": lab.version, "declineRecorded": True, "declineMadeNoChanges": True,
                                "reviewSurvivedRestart": True, "noChangesBeforeApproval": True,
                                "apiWritesBeforeApproval": 0, "apiWritesAfterDecline": 0, "reprocessRequests": reprocess_count,
@@ -265,7 +289,8 @@ def run_copy_browser(lab, arr, download_id, title, folder, source, media, guard,
     return command
 
 
-def run_packaged_id_only_copy(arr, media, guard, report, executable, source_sha, on_stage, *, sonarr_cleanup=False):
+def run_packaged_id_only_copy(arr, media, guard, report, executable, source_sha, on_stage, *, sonarr_cleanup=False,
+                              automatic=False):
     report["packagedRuntime"] = {"system": platform.system(), "release": platform.release(), "arch": platform.machine()}
     with executable.open("rb") as binary:
         report["packagedBinary"] = {"name": executable.name, "sha256": hashlib.file_digest(binary, "sha256").hexdigest()}
@@ -284,4 +309,4 @@ def run_packaged_id_only_copy(arr, media, guard, report, executable, source_sha,
         lab = PackagedManualLab(executable, root, stack, start_process, require_ready, stop_process, on_stage,
                                 None, source_sha)
         id_only_import(arr, media, guard, report, observe_cleanup=sonarr_cleanup,
-                       manual_review=partial(run_copy_browser, lab, arr, sonarr_cleanup=sonarr_cleanup))
+                       manual_review=partial(run_copy_browser, lab, arr, sonarr_cleanup=sonarr_cleanup, automatic=automatic))

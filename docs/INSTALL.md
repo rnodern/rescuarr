@@ -115,6 +115,25 @@ Open **Import dry run** and choose **Run dry run** to check a page of held downl
 
 If a series has different episode orders across sources, open one of its downloads in the Recovery Queue and choose **Require matching episode title** under **Episode order**. The setting applies to this series on this Sonarr connection. The dry run holds downloads unless their folder or filename confirms Sonarr’s episode title. Manual Review can still use a match on series and episode number for an owner to verify.
 
+## Automatic Sonarr imports
+
+Set up the verified Sonarr Copy profile and source audio reader described under Manual Review. On Windows, Rescuarr can run alongside Sonarr and SABnzbd with both audio roots set to the same local completed-downloads directory. Install FFmpeg with `ffprobe` on the Rescuarr process’s PATH. Use the actual completed-downloads path from this Sonarr instance.
+
+When moving an installation, stop Rescuarr and transfer its private data directory, including the database and secrets, to an account-owned directory on the Windows host. This carries over Manual Review decisions and per-series episode-order settings. Save the active data path as `$RescuarrData` in PowerShell, then run `check-manual-import` with that path while the service is stopped. Use its reported connection ID and profile SHA-256 and the SABnzbd version verified on this host.
+
+```powershell
+$env:RESCUARR_MANUAL_IMPORT_CONNECTION = "<reported connection ID>"
+$env:RESCUARR_MANUAL_IMPORT_PROFILE = "<reported profile SHA-256>"
+$env:RESCUARR_MANUAL_IMPORT_SAB_VERSION = "5.1.3"
+$env:RESCUARR_MANUAL_IMPORT_AUDIO_SONARR_ROOT = "C:\path\to\completed-downloads"
+$env:RESCUARR_MANUAL_IMPORT_AUDIO_LOCAL_ROOT = $env:RESCUARR_MANUAL_IMPORT_AUDIO_SONARR_ROOT
+.\rescuarr.exe serve --data-dir $RescuarrData --listen 127.0.0.1:18788
+```
+
+Run **Import dry run** to check candidate eligibility. From Overview, choose **Enable automatic Sonarr imports**. Rescuarr checks and imports one verified single-episode Usenet download at a time on the pinned Sonarr connection. It uses Sonarr’s configured cleanup behaviour and records the import result in Activity. A download with incomplete audio evidence, an unresolved identity, or insufficient space stays held.
+
+Choose **Switch to Manual** on Overview to review held downloads or **Pause all recovery actions** to stop new sends. An unresolved send occupies the import slot while Rescuarr reads back Sonarr’s result, including after restart. If confirmation stays unavailable, check Sonarr and close the unresolved review from Manual Review.
+
 ## Reverse proxy
 
 For LAN access, put an HTTPS proxy in front of Rescuarr and preserve the client-facing host and path. Set `RESCUARR_PUBLIC_URL` to the complete external URL, such as `https://rescuarr.example.net`. If using `https://example.net/rescuarr`, also set `RESCUARR_BASE_PATH=/rescuarr` and forward the path without stripping the prefix. Set `RESCUARR_TRUSTED_PROXIES` to the proxy ingress addresses as comma-separated CIDRs. Configure the proxy to replace incoming forwarded headers. For example, a proxy on the same host may use `127.0.0.1/32`. Point local liveness and readiness probes to the fixed `/healthz` and `/readyz` paths.

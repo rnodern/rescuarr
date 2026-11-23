@@ -49,10 +49,11 @@ func NewManualReviews(local *store.Store, cases *observeservice.Service, preview
 }
 
 type manualSlot struct {
-	id     domain.CaseID
-	token  string
-	state  string
-	action string
+	id        domain.CaseID
+	token     string
+	state     string
+	action    string
+	automatic bool
 }
 
 func (s *ManualReviews) SetManualMode(ctx context.Context, enabled bool, actor domain.ActorID) error {

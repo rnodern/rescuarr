@@ -11,9 +11,18 @@
 {{if .HasConnections}}<p><a href="{{.Base}}/connections">Manage connections and check queues</a></p>{{end}}
 {{if .Status.Paused}}<p class="notice">New recovery actions are paused.</p>
 {{else if .Status.ReconcileRequired}}<p class="notice">Recovery is held pending reconciliation.</p>{{end}}
-{{if and .HasManualReview (or (eq .Status.Mode "observe") (eq .Status.Mode "assist"))}}
+{{if or .HasManualReview .HasAutomaticImport}}
 <section class="panel section">
   <h2>Recovery mode</h2>
+  {{if and .HasAutomaticImport (eq .Status.Mode "autonomous")}}
+  {{if .AutomaticImportConfigured}}<p>Rescuarr imports one verified Sonarr episode at a time and checks the result in Sonarr.</p>
+  {{else}}<p class="notice">New automatic imports are held. Configure the Sonarr import profile and local access to download audio.</p>{{end}}
+  <form method="post" action="{{.Base}}/automatic-import/mode">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <input type="hidden" name="mode" value="manual">
+    <button class="button-quiet" type="submit">Switch to Manual</button>
+  </form>
+  {{else if and .HasManualReview (or (eq .Status.Mode "observe") (eq .Status.Mode "assist"))}}
   {{if eq .Status.Mode "assist"}}<p>Review and decide on one download at a time.</p>{{else}}<p>Rescuarr monitors downloads and checks for recovery options.</p>{{end}}
   <div class="connection-actions">
     {{if eq .Status.Mode "assist"}}<a class="button" href="{{.Base}}/manual-review">Open Manual Review</a>{{end}}
@@ -28,6 +37,17 @@
       {{end}}
     </form>
   </div>
+  {{if .AutomaticImportConfigured}}
+  <div class="section">
+    <p>Automatically import verified single episodes on the configured Sonarr connection. Sonarr may clean up the download folder and SABnzbd job according to its settings.</p>
+    <form method="post" action="{{.Base}}/automatic-import/mode">
+      <input type="hidden" name="csrf" value="{{.CSRF}}">
+      <input type="hidden" name="mode" value="automatic">
+      <button type="submit"{{if or .Status.Paused .Status.ReconcileRequired}} disabled{{end}}>Enable automatic Sonarr imports</button>
+    </form>
+  </div>
+  {{end}}
+  {{end}}
 </section>
 {{end}}
 {{if .Body}}<form method="post" action="{{.Base}}/controls/{{if .Status.Paused}}resume{{else}}pause{{end}}">

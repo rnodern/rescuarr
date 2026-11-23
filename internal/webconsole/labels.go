@@ -15,7 +15,7 @@ func modeLabel(mode domain.Mode) string {
 	case domain.ModeAssist:
 		return "Manual"
 	case domain.ModeAutonomous:
-		return "Autonomous"
+		return "Automatic"
 	default:
 		return "Mode unknown"
 	}

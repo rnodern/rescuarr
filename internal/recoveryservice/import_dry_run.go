@@ -97,16 +97,7 @@ func (s *ManualReviews) checkDryRunCase(ctx context.Context, item domain.Case) (
 	}
 
 	plan, err := prepareManualImport(ctx, s.cases, s.local, s.clock, s.transport, item.ID, item.Revision, s.importAudio)
-	var requireTitle bool
-	if episode := plan.preview.Episode; episode != nil && episode.Matched && !episode.TitleInNames {
-		order, orderErr := s.cases.EpisodeOrder(ctx, item)
-		if orderErr != nil || !order.Available {
-			result.Reason = "Rescuarr could not confirm the episode order setting for this series."
-			return result, nil
-		}
-		requireTitle = order.RequireTitle
-	}
-	result.Reason = dryRunEvidenceHold(plan, err, requireTitle)
+	result.Reason = s.automaticEvidenceHold(ctx, item, plan, err)
 	if result.Reason != "" {
 		return result, nil
 	}
@@ -143,13 +134,19 @@ func (s *ManualReviews) checkDryRunCase(ctx context.Context, item domain.Case) (
 	return result, nil
 }
 
-func dryRunEvidenceHold(plan manualImportPlan, err error, requireTitle bool) string {
+func (s *ManualReviews) automaticEvidenceHold(ctx context.Context, item domain.Case, plan manualImportPlan, err error) string {
 	if episode := plan.preview.Episode; episode != nil {
 		if !episode.Matched && episode.Reason != "" {
 			return episode.Reason
 		}
-		if requireTitle && !episode.TitleInNames {
-			return "This series requires a matching episode title. Confirm which episode order the release uses."
+		if episode.Matched && !episode.TitleInNames {
+			order, orderErr := s.cases.EpisodeOrder(ctx, item)
+			if orderErr != nil || !order.Available {
+				return "Rescuarr could not confirm the episode order setting for this series."
+			}
+			if order.RequireTitle {
+				return "This series requires a matching episode title. Confirm which episode order the release uses."
+			}
 		}
 	}
 	if len(plan.preview.Audio) == 1 {
@@ -170,7 +167,8 @@ func dryRunEvidenceHold(plan manualImportPlan, err error, requireTitle bool) str
 	if errors.Is(err, app.ErrHeld) {
 		return "A recent complete queue is required. Check the Sonarr connection, then run the dry run again."
 	}
-	if err != nil || len(plan.preview.Audio) != 1 || plan.preview.Audio[0].Decision != domain.AudioAccept {
+	if err != nil || plan.preview.Episode == nil || !plan.preview.Episode.Matched || len(plan.preview.Audio) != 1 ||
+		!plan.preview.Audio[0].TrackLanguagesComplete || plan.preview.Audio[0].Decision != domain.AudioAccept {
 		return "Rescuarr could not confirm the current download and episode in Sonarr."
 	}
 	root := plan.libraryRoot
